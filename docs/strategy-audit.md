@@ -37,8 +37,11 @@ deterministic preflight + budget/deadline controller
   [CTFTiny/CTF agent tuning](https://ojs.aaai.org/index.php/AAAI/article/view/40210).
 
 Не выполнено: Harbor/Docker/LLM baseline. На этой машине нет `docker` и `uv`,
-локальный Python 3.13.6 не является целевой средой. Поэтому никакие значения
-solved/tokens/time в этом аудите не заявляются.
+локальный Python 3.13.6 не является целевой средой. WSL2 distro `ozon` установлен,
+но не запускается: `HCS_E_HYPERV_NOT_INSTALLED` (виртуализация/Virtual Machine
+Platform недоступна). Поэтому никакие значения solved/tokens/time в этом аудите не
+заявляются; R0.1 должен выполнить владелец другой Docker-машины или этой машины
+после исправления виртуализации.
 
 ## Фактическая поверхность public набора
 
@@ -226,4 +229,3 @@ public cases просты, а системные failure modes не закрыт
 
 Эти источники подтверждают дизайн экспериментов, но не предсказывают закрытый score
 AIRI. Решение принимается окончательно только по нашим прогонам и контрольным точкам.
-
