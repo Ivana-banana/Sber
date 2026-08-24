@@ -10,6 +10,8 @@
 | `PLAN.md` | приоритеты, этапы, календарь, риски |
 | `docs/task.md` | источник требований и известных фактов |
 | `docs/architecture.md` | проверяемая архитектурная гипотеза |
+| `docs/strategy-audit.md` | аудит example agent, сравнение стратегий и уровень шансов |
+| `docs/plans/PLAN-KT4.md` | детальные задачи, зависимости и acceptance gates ближайшей КТ |
 | `docs/decisions.md` | почему выбрано именно так |
 | `docs/experiments.md` | доказательства на конкретных коммитах |
 | `HANDOFF.md` | кто что делает сейчас и как принять работу |
@@ -25,11 +27,11 @@
 | A. Запуск | нет/не executable `run.sh`, ошибка импорта, неверный архив | contract test и smoke из распакованного zip |
 | B. Среда | интернет/установка пакетов, несовместимость с образом | offline clean-container gate |
 | C. Решаемость | неверный артефакт, timeout, непроверенный ответ | tool loop + внешний verifier + failure taxonomy |
-| D. Обобщение | overfit на 7 public cases | capability-oriented design, мутации и новые локальные fixtures |
+| D. Обобщение | overfit на 6 public tasks | capability-oriented design, мутации и новые локальные fixtures |
 | E. Эффективность | лишние prompt/tool tokens и wall time | абляции только после сохранения solved count |
 
 Главная метрика — `solved_count`. Вторичные — `total_tokens`, затем `wall_time`.
-Public score всегда подписывать как `x/7 public examples`, а не как ожидаемые `x/15`.
+Public score всегда подписывать как `x/6 public tasks`, а не как ожидаемые `x/15`.
 
 ## Текущая точка
 
@@ -41,14 +43,16 @@ Public score всегда подписывать как `x/7 public examples`, �
 - Значит, до первого кандидата меньше недели: сначала рабочий baseline, затем
   улучшения. Исследовательская архитектура без вертикального прогона не на критическом пути.
 
-## Архитектурная ставка
+## Выбранная архитектурная ставка
 
-Начинаем с одного универсального агента с коротким bounded loop:
+Аудит пяти вариантов (`docs/strategy-audit.md`) выбрал hybrid cascade:
+детерминированный preflight/budget controller, один универсальный агент и внешний
+verifier с одним recovery pass.
 
 ```text
-instruction + workspace
+instruction + deterministic preflight
         ↓
-cheap inspection → task/capability hypothesis
+compact environment brief → task/capability hypothesis
         ↓
 plan next action → local tool → observe compact result
         ↑                         ↓
@@ -58,15 +62,18 @@ plan next action → local tool → observe compact result
 ```
 
 Не делаем четыре независимых «агента по типам задач» до данных. Малой LLM нужен
-общий надёжный контур, а специализацию сначала задают prompt playbooks и доступные
-инструменты. Подробности и открытые решения — `docs/architecture.md`.
+общий надёжный контур, а специализацию сначала задают prompt playbooks и компактный
+ACI. Направление принято, но параметры budget/tool protocol остаются гипотезами до
+baseline. Архитектура — `docs/architecture.md`, мелкий порядок работ —
+`docs/plans/PLAN-KT4.md`.
 
 ## Этапы и Definition of Done
 
 ### 0. Bootstrap и контракт — 24 августа
 
 - импортировать публичный repository snapshot отдельным коммитом, записать SHA;
-- инвентаризировать `agent/`, семь `local_task/`, тесты и reference solutions;
+- инвентаризировать `agent/`, шесть task packages, общий SQLi fixture, тесты и
+  reference solutions;
 - проверить фактический вызов Harbor, формат событий и ожидаемый способ завершения;
 - зафиксировать digest/пакеты/CLI целевого образа;
 - создать builder submission и contract smoke без умной логики.
@@ -185,4 +192,3 @@ regression → новый кандидат. Не ждать leaderboard для �
 
 Ответы фиксировать в `docs/task.md` с датой и источником; решения, которые они меняют,
 — в `docs/decisions.md`.
-

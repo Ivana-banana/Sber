@@ -58,9 +58,22 @@ SecureIntelligent. Это справочник, а не место для про
 - `local_task/` — публичные примеры с конфигурацией, окружением, инструкциями,
   тестами и иногда reference solution.
 
-На 24.08.2026 в публичном наборе видны семь каталогов:
+Проверенный upstream commit:
+`71f90810d7a608677bbcf44f409f0aefded38340` от 09.07.2026.
+
+На 24.08.2026 в публичном наборе **шесть оцениваемых task packages**:
 `bye-file`, `hello-file`, `find-sqli-login`, `fix-sqli-login`, `fix-sqli-search`,
-`incident-log-forensics`, `insecure-api-app`.
+`incident-log-forensics`. Каталог `insecure-api-app` не имеет `task.toml`: это общий
+fixture/generator исходников для SQLi-задач, а не седьмая задача.
+
+В public `task.toml` указано `allow_internet = true`. Это не отменяет нормативное
+требование финальной microVM без интернета и означает, что штатный public run сам
+по себе не доказывает offline-совместимость.
+
+Обнаружено расхождение упаковочных примеров: README описывает обязательный
+`run.sh`, а `sample_submission.zip` содержит верхний каталог `sample_submission/`
+с `run.sh` внутри. Нормативный layout нельзя угадывать — требуется Harbor smoke для
+обоих вариантов и подтверждение организаторов.
 
 ## Календарь контрольных точек
 
@@ -82,4 +95,3 @@ SecureIntelligent. Это справочник, а не место для про
 Документы не сообщают точные per-task budgets, нормативную модель, строгий формат
 финального ответа и неизменность digest образа. Это открытые вопросы, а не повод
 для хардкода. См. `PLAN.md`.
-

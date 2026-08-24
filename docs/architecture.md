@@ -1,6 +1,7 @@
-# Архитектурная гипотеза v0
+# Целевая архитектура v1 — hybrid cascade
 
-Статус: **гипотеза до baseline**, а не утверждённая финальная архитектура.
+Статус: направление выбрано аудитом `strategy-audit.md`; конкретные budgets,
+tool-calling protocol и параметры recovery остаются гипотезами до baseline.
 
 ## Цели
 
@@ -14,19 +15,20 @@
 
 ```text
 run.sh
-  └─ runtime adapter: instruction, env, deadline
-      └─ agent loop
-          ├─ inspect: pwd/tree/rg/read/processes
-          ├─ reason: capability hypothesis + next action
-          ├─ act: shell/read/write/patch
-          ├─ observe: exit code + bounded output
-          ├─ verify: tests/oracle/artifact checks
-          └─ finish or recover within budget
+  └─ runtime adapter: instruction, env, monotonic deadline
+      └─ deterministic preflight: workspace, tools, deliverables, limits
+          └─ universal agent loop + soft capability playbook
+              ├─ inspect: pwd/tree/rg/read/processes
+              ├─ reason: capability hypothesis + next action
+              ├─ act: shell/read/write/patch
+              ├─ observe: exit code + bounded output
+              ├─ verify: tests/oracle/artifact checks
+              └─ finish or one recovery pass within budget
 ```
 
-Один orchestrator владеет budget и состоянием. «Специалисты» на старте — короткие
-playbooks внутри prompt/context, а не отдельные LLM-процессы. Это уменьшает число
-вызовов и не теряет наблюдения между агентами.
+Один orchestrator владеет budget и состоянием. Preflight и deadline не требуют LLM.
+«Специалисты» на старте — короткие playbooks внутри prompt/context, а не отдельные
+LLM-процессы. Это уменьшает число вызовов и не теряет наблюдения между агентами.
 
 ## Предлагаемые модули
 
@@ -35,8 +37,9 @@ playbooks внутри prompt/context, а не отдельные LLM-проце
 | Модуль | Ответственность | Не делает |
 |---|---|---|
 | runtime | читает env/args, ставит deadline, запускает loop | не решает задачу |
+| preflight | находит workspace/tools и извлекает deliverable constraints | не выбирает ответ задачи |
 | llm client | совместимый вызов endpoint, usage, retry policy | не прячет бесконечные retry |
-| tools | локальные операции с typed result/exit code | не получает интернет |
+| tools | compact list/search/read-range/run/write/patch с typed result | не получает интернет |
 | loop | состояние, следующий шаг, budgets, stop/recovery | не знает имён public cases |
 | context | ограничение stdout, summaries, dedup | не удаляет критические ошибки |
 | verifier | запускает наблюдаемый oracle по гипотезе агента | не верит self-report LLM |
@@ -60,11 +63,25 @@ playbooks внутри prompt/context, а не отдельные LLM-проце
 - Жёсткий wall-clock deadline контролирует код, а не модель.
 - Резерв времени на verifier и корректное завершение выделяется заранее.
 - Tool result ограничивается по размеру с явной пометкой truncation.
+- У каждой shell-команды свой timeout меньше общего remaining time; после timeout
+  завершается вся process group, а не только родительский процесс.
 - Повтор идентичного action блокируется или требует новой гипотезы.
 - Retry endpoint ограничен числом и временем; постоянная ошибка завершается
   диагностируемо, а не зависанием.
 - Конкретные числа выбираются только после измерения target runtime и известных
   ограничений. До этого они `TBD`.
+
+## Фазы выполнения
+
+1. **Preflight:** без LLM получить минимальную карту среды и контракт результата.
+2. **Triage:** один LLM-вызов формирует capability hypothesis и первый дешёвый шаг.
+3. **Execute:** ровно одно действие за итерацию, bounded observation, repeat guard.
+4. **Verify:** внешний oracle по deliverable/test/service, а не самооценка модели.
+5. **Recover:** максимум один направленный проход по краткой ошибке verifier.
+6. **Finalize:** оставить артефакты в требуемом месте и завершить до deadline.
+
+Переходы контролирует код. Модель не может увеличить max steps, отменить reserve или
+начать новое исследование из фазы finalize.
 
 ## Capability playbooks
 
@@ -98,4 +115,3 @@ Playbook — подсказка порядка исследования, не ro
 6. Какой объём stdout/tool result начинает заметно ухудшать модель?
 
 Ответы превращаются в решения только через записи `docs/decisions.md`.
-
