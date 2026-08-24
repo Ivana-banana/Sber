@@ -15,7 +15,6 @@
 
 | Владелец | Ветка | Задача | Файлы/контракт | Проверка | Статус |
 |---|---|---|---|---|---|
-| Codex | `main` | Глубокий стратегический аудит: сравнить варианты, выбрать план победы и декомпозировать его | `PLAN.md`, `docs/architecture.md`, `docs/strategy-audit.md`, `docs/decisions.md`, `HANDOFF.md` | проверка требований, матрица стратегий, consistency audit | в работе; не редактировать перечисленные файлы |
 | — | — | Импорт upstream snapshot (этап 0) | `agent/`, `local_task/`, upstream metadata | штатный README smoke | свободно |
 | — | — | Инвентаризация target image | runtime package/tool manifest | offline probe | свободно |
 | — | — | Submission builder + unpacked smoke | `run.sh`, build script, tests | zip ≤10 МБ, clean run | свободно |
@@ -30,4 +29,5 @@
 
 | Дата | Владелец | Commit | Результат | Проверка / ограничения |
 |---|---|---|---|---|
-| 2026-08-24 | Codex | working tree | Стартовая документация и план | Контент-проверка; runtime ещё не запускался |
+| 2026-08-24 | Codex | `66493b3` | Статический аудит upstream, выбор hybrid cascade, granular-план КТ №4 | Markdown/link checks и пересчёт матрицы зелёные; runtime не проверен — на этой машине нет Docker/uv |
+| 2026-08-24 | Codex | `c6e5150` | Стартовая документация и план | Контент-проверка; runtime ещё не запускался |
