@@ -1,0 +1,16 @@
+# Line endings are part of the submission contract, not a style preference.
+#
+# The team works on Windows with core.autocrlf=true. Without this file Git rewrites
+# run.sh to CRLF on checkout, the builder packs it as it finds it, and the target
+# Linux runner reports `/bin/sh^M: bad interpreter` -- a zero on every task at once.
+# scripts/check_submission.py verifies the built archive as well, because a .gitattributes
+# only helps the people who have it.
+
+* text=auto eol=lf
+
+run.sh text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+
+*.zip binary
+*.docx binary

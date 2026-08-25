@@ -18,7 +18,6 @@
 | — | — | Импорт upstream snapshot (этап 0) | `agent/`, `local_task/`, upstream metadata | штатный README smoke | свободно |
 | — | — | Инвентаризация target image | runtime package/tool manifest | offline probe | свободно |
 | — | — | Submission builder + unpacked smoke | `run.sh`, build script, tests | zip ≤10 МБ, clean run | свободно |
-| — | — | Submission builder + check из фактически собранного zip | `scripts/build_submission.py`, `scripts/check_submission.py` | zip ≤10 МБ, распакован, холодный smoke | свободно, **следующий** |
 | — | — | `THIRD_PARTY_NOTICES.md` до заимствования текста playbook'ов | корневой notices-файл | сверка лицензий источников | свободно |
 | — | — | `preflight.py` + `tools.py` с bounded output | `agent/tools.py`, `agent/preflight.py` | unit + один public fixture | свободно |
 
@@ -32,6 +31,7 @@
 
 | Дата | Владелец | Commit | Результат | Проверка / ограничения |
 |---|---|---|---|---|
+| 2026-08-25 | Claude | (этот коммит) | Контракт упаковки: `run.sh`, `agent/main.py`, builder и preflight собранного архива | `pytest -q` 68 passed; preflight 5 PASS / 0 FAIL / 0 SKIP; zip 13 646 Б, sha256 `d6b634e1…`. Целевой образ не проверялся — блокер Docker. Найден и закрыт латентный CRLF-дефект `run.sh` |
 | 2026-08-25 | Claude | `e31f0c0` | Клиент endpoint: настройки из env, redaction секретов, липкая деградация протокола, dev-скрипт probe | `pytest -q` 45 passed, сети в тестах нет. Против настоящего endpoint не запускался: `DEFAULT_CALL_STYLE` — догадка до прогона `scripts/probe_endpoint.py` |
 | 2026-08-25 | Claude | `c0ee358` | Каркас: `limits`/`ports`/`state` + StubLlm на замороженных транскриптах | `pytest -q` 19 passed, в `agent/` только stdlib. Числа в `limits.py` не измерены |
 | 2026-08-25 | Claude | `c591975` | Промпт для Manus на поиск скиллов под хакатон | Контент-проверка; результатов поиска ещё нет |

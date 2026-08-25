@@ -74,6 +74,12 @@ times in tokens, which is the second ranking criterion. Lazy fallback in `agent.
 covers the case where this constant is wrong.
 """
 
+# --- Packaging ---------------------------------------------------------------
+
+MAX_SUBMISSION_BYTES = 10 * 1024 * 1024
+"""Hard archive limit from the competition contract."""
+
+
 MODEL_ENV_NAME = "LOCAL_AGENT_MODEL"
 BASE_URL_ENV_NAME = "OPENAI_BASE_URL"
 API_KEY_ENV_NAME = "OPENAI_API_KEY"
