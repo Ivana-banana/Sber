@@ -289,3 +289,75 @@ def test_every_step_leaves_a_trace_entry_with_its_tool_and_outcome(tmp_path: Pat
     tools = [event for event in state.audit if event.kind == "tool"]
     assert tools and tools[0].name == "list_dir"
     assert tools[0].duration_s >= 0.0
+
+
+def test_a_run_that_never_reached_finish_is_never_reported_as_solved(tmp_path: Path) -> None:
+    # The most expensive kind of wrong answer is a quiet success. `unverified` means
+    # "a non-empty file is there", which is the right answer when the model chose to
+    # finish without a self-check -- and the wrong one when it never got that far. A
+    # run killed by the step cap has proven nothing, whatever is lying on disk.
+    target = tmp_path / "half-written.txt"
+    llm = StubLlm(replies=[action("write_file", path=str(target), content="partial")])
+    verify = FakeVerify((True, "unverified", "exists and is non-empty"))
+
+    outcome = run(make_state(tmp_path), llm, verify)
+
+    assert outcome.solved is False, "no explicit finish means nothing was proven"
+    assert outcome.deliverable == target, "the artifact is still worth reporting"
+    assert outcome.verdict is not None and outcome.verdict.stage == "unverified"
+
+
+def test_a_stuck_run_holding_a_readable_file_is_still_a_zero(tmp_path: Path) -> None:
+    target = tmp_path / "note.txt"
+    target.write_text("something", encoding="utf-8")
+    llm = StubLlm(replies=[action("list_dir", path=str(tmp_path)) for _ in range(20)])
+    state = make_state(tmp_path)
+    state.artifacts.append(target)
+
+    outcome = run(state, llm, FakeVerify((True, "unverified", "")))
+
+    assert outcome.stop_reason == "stuck"
+    assert outcome.solved is False
+
+
+def test_solved_is_true_only_when_the_run_stopped_at_a_green_check(tmp_path: Path) -> None:
+    target = tmp_path / "done.txt"
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(target), content="x"),
+            action("finish", path=str(target), verify="test -s done.txt"),
+        ]
+    )
+
+    outcome = run(make_state(tmp_path), llm, FakeVerify((True, "command", "")))
+
+    assert outcome.solved is True
+    assert outcome.stop_reason == "verified", "verified is the only stop that proves anything"
+
+
+def test_a_red_check_is_not_overwritten_by_a_second_look_at_the_same_file(
+    tmp_path: Path,
+) -> None:
+    # Finalisation must not re-verify a run the verifier already rejected. The second
+    # call would come with no command, land on `unverified`, and leave the trace
+    # ending in a pass right after a real failure -- the red detail is the one thing
+    # a human reading this zero actually needs.
+    target = tmp_path / "report.json"
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(target), content="{}"),
+            action("finish", path=str(target), verify="pytest", summary="v1"),
+        ]
+    )
+    state = make_state(tmp_path)
+    state.budget.recovery_passes_used = state.budget.max_recovery_passes
+    verify = FakeVerify((False, "command", "exit 1: assert findings"))
+
+    outcome = run(state, llm, verify)
+
+    assert len(verify.calls) == 1, "the rejected deliverable is not offered a second time"
+    assert outcome.verdict is not None
+    assert outcome.verdict.ok is False
+    assert outcome.verdict.stage == "command"
+    stages = [event.name for event in state.audit if event.kind == "verify"]
+    assert stages[-1] == "command", "the trace must not end on a friendlier verdict"

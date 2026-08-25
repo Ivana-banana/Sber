@@ -50,6 +50,10 @@ class Outcome:
     """What the run has to show for itself. `solved` is never the model's opinion."""
 
     solved: bool
+    """True only when the run stopped at a green check, i.e. `stop_reason` is
+    `verified`. Never inferred from an artifact being present: a file on disk is
+    evidence that something was written, not that it is right."""
+
     stop_reason: str
     """`verified`, `verify-failed`, `stuck`, `steps`, `budget` or `llm-unusable`."""
 
@@ -310,15 +314,25 @@ def _finalise(
     verdict: VerifyResult | None,
     observations: list[str],
 ) -> Outcome:
-    """Hand whatever exists to the verifier before giving up on it.
+    """Look at whatever exists, report it, and claim nothing about it.
 
-    A run stopped by the step cap or the clock has usually left something on disk. The
-    external verifier will read that file whether or not we called ourselves finished,
-    so declining to check it would only mean we know less about our own result than
-    the grader does.
+    Every path into this function is a run that never reached a green check: the step
+    cap, the clock, a detector, an unusable endpoint, or a verifier that already said
+    no. So the artifact is still worth checking and still worth naming -- the external
+    grader will read that file whether or not we called ourselves finished, and a
+    human debugging a zero needs to know which file was left behind.
+
+    But `solved` stays False here, always. `unverified` is an honest `ok=True` for the
+    case `agent.verify` was built for -- the model chose to finish without a
+    self-check, and refusing that would invent a rule the real verifier does not have.
+    It is not honest for this case, where the model never got as far as claiming to be
+    done. The two say "a non-empty file is there" and differ entirely in what that is
+    evidence of, and treating them alike is how a timeout with a half-written file
+    becomes a success in our own baseline. `stop_reason == "verified"` is the only
+    thing that ever proves a task, and it never reaches this function.
     """
     deliverable = state.artifacts[-1] if state.artifacts else None
-    if deliverable is not None and stop_reason not in {"verify-failed"}:
+    if deliverable is not None and stop_reason != "verify-failed":
         verdict = verify(state, deliverable=deliverable, command="")
         state.record(
             "verify",
@@ -327,9 +341,8 @@ def _finalise(
             exit_code=0 if verdict.ok else 1,
         )
 
-    solved = bool(verdict and verdict.ok)
     return Outcome(
-        solved=solved,
+        solved=False,
         stop_reason=stop_reason,
         deliverable=deliverable,
         summary=summary or (verdict.detail if verdict else ""),
