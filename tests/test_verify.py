@@ -31,10 +31,10 @@ def make_state(tmp_path: Path, *, total_s: float = 600.0, secrets: tuple[str, ..
 
 
 def test_a_workspace_relative_deliverable_resolves_against_the_workspace(tmp_path: Path) -> None:
-    (tmp_path / "bye.txt").write_text("Bye", encoding="utf-8")
+    (tmp_path / "deliverable.txt").write_text("OK", encoding="utf-8")
     state = make_state(tmp_path)
 
-    result = verify(state, deliverable=Path("bye.txt"), command="")
+    result = verify(state, deliverable=Path("deliverable.txt"), command="")
 
     assert result.ok is True, "finish() gives a model-chosen path, which may be relative"
     assert result.stage == "unverified"
@@ -44,7 +44,7 @@ def test_a_deliverable_path_escaping_the_workspace_fails_at_existence(tmp_path: 
     workspace = tmp_path / "app"
     workspace.mkdir()
     outside = tmp_path / "outside.txt"
-    outside.write_text("Bye", encoding="utf-8")
+    outside.write_text("OK", encoding="utf-8")
     state = make_state(workspace)
 
     result = verify(state, deliverable=Path("..") / "outside.txt", command="")
@@ -75,7 +75,7 @@ def test_a_directory_in_place_of_the_deliverable_fails_at_existence(tmp_path: Pa
 
 
 def test_an_empty_deliverable_fails_at_non_empty(tmp_path: Path) -> None:
-    target = tmp_path / "bye.txt"
+    target = tmp_path / "deliverable.txt"
     target.write_text("", encoding="utf-8")
     state = make_state(tmp_path)
 
@@ -86,8 +86,8 @@ def test_an_empty_deliverable_fails_at_non_empty(tmp_path: Path) -> None:
 
 
 def test_a_present_non_empty_deliverable_with_no_command_is_unverified_but_ok(tmp_path: Path) -> None:
-    target = tmp_path / "bye.txt"
-    target.write_text("Bye", encoding="utf-8")
+    target = tmp_path / "deliverable.txt"
+    target.write_text("OK", encoding="utf-8")
     state = make_state(tmp_path)
 
     result = verify(state, deliverable=target, command="   ")
@@ -98,8 +98,8 @@ def test_a_present_non_empty_deliverable_with_no_command_is_unverified_but_ok(tm
 
 @POSIX_ONLY
 def test_a_verify_command_that_exits_zero_passes(tmp_path: Path) -> None:
-    target = tmp_path / "bye.txt"
-    target.write_text("Bye", encoding="utf-8")
+    target = tmp_path / "deliverable.txt"
+    target.write_text("OK", encoding="utf-8")
     state = make_state(tmp_path)
 
     result = verify(state, deliverable=target, command="true")
@@ -110,8 +110,8 @@ def test_a_verify_command_that_exits_zero_passes(tmp_path: Path) -> None:
 
 @POSIX_ONLY
 def test_a_verify_command_that_exits_non_zero_fails_even_if_it_prints_success(tmp_path: Path) -> None:
-    target = tmp_path / "bye.txt"
-    target.write_text("Bye", encoding="utf-8")
+    target = tmp_path / "deliverable.txt"
+    target.write_text("OK", encoding="utf-8")
     state = make_state(tmp_path)
 
     result = verify(state, deliverable=target, command="echo PASSED; exit 1")
@@ -122,16 +122,16 @@ def test_a_verify_command_that_exits_non_zero_fails_even_if_it_prints_success(tm
 
 @POSIX_ONLY
 def test_a_deliverable_that_looks_right_but_fails_its_own_command_is_not_ok(tmp_path: Path) -> None:
-    target = tmp_path / "bye.txt"
-    target.write_text("Bye\n", encoding="utf-8")
+    target = tmp_path / "deliverable.txt"
+    target.write_text("OK\n", encoding="utf-8")
     state = make_state(tmp_path)
 
-    result = verify(state, deliverable=target, command='[ "$(cat bye.txt)" = "Bye" ]')
+    result = verify(state, deliverable=target, command='[ "$(cat deliverable.txt)" = "OK" ]')
 
     assert result.ok is True
 
-    target.write_text("Bye extra\n", encoding="utf-8")
-    result = verify(state, deliverable=target, command='[ "$(cat bye.txt)" = "Bye" ]')
+    target.write_text("OK extra\n", encoding="utf-8")
+    result = verify(state, deliverable=target, command='[ "$(cat deliverable.txt)" = "OK" ]')
 
     assert result.ok is False
     assert result.stage == "command"
@@ -139,8 +139,8 @@ def test_a_deliverable_that_looks_right_but_fails_its_own_command_is_not_ok(tmp_
 
 @POSIX_ONLY
 def test_the_command_timeout_comes_from_the_budget_not_a_tool_default(tmp_path: Path) -> None:
-    target = tmp_path / "bye.txt"
-    target.write_text("Bye", encoding="utf-8")
+    target = tmp_path / "deliverable.txt"
+    target.write_text("OK", encoding="utf-8")
     # A near-exhausted budget leaves a sub-second tool timeout; the command sleeps
     # longer than that, so a passing test proves the budget's number was honoured.
     state = make_state(tmp_path, total_s=0.3)
@@ -154,8 +154,8 @@ def test_the_command_timeout_comes_from_the_budget_not_a_tool_default(tmp_path: 
 
 @POSIX_ONLY
 def test_secrets_configured_on_the_state_do_not_reach_the_detail(tmp_path: Path) -> None:
-    target = tmp_path / "bye.txt"
-    target.write_text("Bye", encoding="utf-8")
+    target = tmp_path / "deliverable.txt"
+    target.write_text("OK", encoding="utf-8")
     state = make_state(tmp_path, secrets=("sk-canary-0123456789",))
 
     result = verify(state, deliverable=target, command="echo sk-canary-0123456789; exit 1")
