@@ -361,3 +361,102 @@ def test_a_red_check_is_not_overwritten_by_a_second_look_at_the_same_file(
     assert outcome.verdict.stage == "command"
     stages = [event.name for event in state.audit if event.kind == "verify"]
     assert stages[-1] == "command", "the trace must not end on a friendlier verdict"
+
+
+# --- the shapes a small model actually sends ----------------------------------
+
+
+def test_arguments_nested_under_args_are_folded_up_not_dropped(tmp_path: Path) -> None:
+    # Most agent frameworks use {"tool": ..., "args": {...}}, so a model trained on
+    # them emits it against our flat schema. `ACTION_SCHEMA` sets no
+    # additionalProperties, so this passes validation and arrives here looking valid
+    # with every field empty -- a silently wrong action, which is worse than an error.
+    target = tmp_path / "nested.txt"
+    llm = StubLlm(
+        replies=[
+            LlmReply(
+                text=json.dumps(
+                    {"tool": "write_file", "args": {"path": str(target), "content": "folded"}}
+                )
+            )
+        ]
+    )
+
+    run(make_state(tmp_path), llm, FakeVerify())
+
+    assert target.read_text(encoding="utf-8") == "folded"
+
+
+def test_arguments_nested_under_the_openai_name_are_folded_too(tmp_path: Path) -> None:
+    target = tmp_path / "args.txt"
+    llm = StubLlm(
+        replies=[
+            LlmReply(
+                text=json.dumps(
+                    {"tool": "write_file", "arguments": {"path": str(target), "content": "x"}}
+                )
+            )
+        ]
+    )
+
+    run(make_state(tmp_path), llm, FakeVerify())
+
+    assert target.read_text(encoding="utf-8") == "x"
+
+
+def test_a_top_level_field_wins_over_the_same_field_nested(tmp_path: Path) -> None:
+    target = tmp_path / "outer.txt"
+    llm = StubLlm(
+        replies=[
+            LlmReply(
+                text=json.dumps(
+                    {
+                        "tool": "write_file",
+                        "path": str(target),
+                        "content": "outer",
+                        "args": {"content": "inner"},
+                    }
+                )
+            )
+        ]
+    )
+
+    run(make_state(tmp_path), llm, FakeVerify())
+
+    assert target.read_text(encoding="utf-8") == "outer", "the schema's own shape is the truth"
+
+
+def test_a_relative_path_is_resolved_against_the_workspace(tmp_path: Path) -> None:
+    # The process cwd is the agent's own install directory, not the task's -- that is
+    # the whole reason `resolve_workspace` exists. A relative path read against cwd
+    # silently inspects the wrong tree and reports a clean "not found".
+    (tmp_path / "routers").mkdir()
+    (tmp_path / "routers" / "auth.py").write_text("QUERY = 'select 1'\n", encoding="utf-8")
+    llm = StubLlm(replies=[action("read_range", path="routers/auth.py")])
+
+    outcome = run(make_state(tmp_path), llm, FakeVerify())
+
+    assert any("select 1" in text for text in outcome.observations)
+
+
+def test_an_action_missing_the_argument_its_tool_needs_is_an_error_not_a_no_op(
+    tmp_path: Path,
+) -> None:
+    # `sh -c ""` exits 0 with no output: a silent no-op that reads as success and
+    # teaches the model nothing.
+    llm = StubLlm(replies=[action("run_shell"), action("search", path=str(tmp_path))])
+
+    outcome = run(make_state(tmp_path), llm, FakeVerify())
+
+    assert any("run_shell needs `command`" in text for text in outcome.observations)
+    assert any("search needs `pattern`" in text for text in outcome.observations)
+
+
+def test_write_file_without_a_path_never_reaches_the_filesystem(tmp_path: Path) -> None:
+    before = sorted(entry.name for entry in tmp_path.iterdir())
+    llm = StubLlm(replies=[action("write_file", content="orphan")])
+
+    outcome = run(make_state(tmp_path), llm, FakeVerify())
+
+    assert any("write_file needs `path`" in text for text in outcome.observations)
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == before

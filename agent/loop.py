@@ -155,10 +155,10 @@ def run(
             )
             continue
 
-        args = _arguments(act, state)
-        if args is None:
-            observations.append(f"[step {step}] unknown tool: {tool}")
-            state.record("llm", "unknown-tool", tool)
+        args, problem = _arguments(act, state)
+        if problem or args is None:
+            observations.append(f"[step {step}] {problem}")
+            state.record("llm", "bad-action", problem)
             continue
 
         signal = detectors.blocked(state, tool, detectors.args_digest(args))
@@ -247,22 +247,84 @@ def _deliverable(act: dict[str, Any], state: AgentState) -> tuple[Path | None, s
     return candidate, ""
 
 
-def _arguments(act: dict[str, Any], state: AgentState) -> dict[str, object] | None:
-    """Pull the arguments one tool needs, or None when the tool is not one of ours."""
+REQUIRED: dict[str, str] = {
+    prompt.RUN_SHELL: "command",
+    prompt.READ_RANGE: "path",
+    prompt.SEARCH: "pattern",
+    prompt.WRITE_FILE: "path",
+}
+"""The one argument each tool cannot be run without.
+
+Absent from the list: `list_dir` and `search`'s path, which default to the workspace,
+and `write_file`'s content, because writing an empty file is a legitimate thing to ask
+for even though no verifier accepts one.
+"""
+
+
+def _arguments(act: dict[str, Any], state: AgentState) -> tuple[dict[str, object] | None, str]:
+    """Normalise one action into the arguments its tool takes. Returns (args, problem).
+
+    Two shapes are repaired rather than rejected, for the same reason `agent.llm`
+    accepts three tool-call dialects: a correct answer in an unexpected wrapper is
+    still a correct answer, and throwing it away costs a step for nothing.
+
+    * **Nested arguments.** Most agent frameworks use `{"tool": ..., "args": {...}}`,
+      so a model trained on them sends it against our flat schema. `ACTION_SCHEMA`
+      declares no `additionalProperties`, so that reply passes validation and would
+      arrive here looking valid with every field empty -- a silently wrong action,
+      which is worse than an error because nothing marks it.
+    * **Relative paths.** The process cwd is the agent's own install directory, not
+      the task's; that is the entire reason `resolve_workspace` exists. A relative
+      path left alone reads the wrong tree and comes back with a clean "not found",
+      which the model has no way to tell from an empty directory.
+
+    A missing required argument is *not* repaired. `sh -c ""` exits 0 with no output,
+    which reads as a successful step and teaches the model nothing; naming the missing
+    field costs the same step and can be acted on.
+    """
     tool = str(act.get("tool", ""))
-    path = str(act.get("path", "") or "").strip()
+    if tool not in prompt.TOOLS:
+        return None, f"unknown tool: {tool}. Доступны: {', '.join(prompt.TOOLS)}"
+
+    fields: dict[str, Any] = {}
+    for wrapper in ("args", "arguments", "parameters"):
+        nested = act.get(wrapper)
+        if isinstance(nested, dict):
+            fields.update(nested)
+    # Top level last: it is the shape the schema actually asked for, so it wins.
+    fields.update({key: value for key, value in act.items() if key != "tool"})
+
+    needed = REQUIRED.get(tool, "")
+    if needed and not str(fields.get(needed, "") or "").strip():
+        return None, f"{tool} needs `{needed}`, and it was missing or empty"
+
+    path = _in_workspace(str(fields.get("path", "") or "").strip(), state)
 
     if tool == prompt.RUN_SHELL:
-        return {"command": str(act.get("command", "") or "")}
+        return {"command": str(fields["command"])}, ""
     if tool == prompt.READ_RANGE:
-        return {"path": path, "start_line": int(act.get("start_line") or 1)}
+        return {"path": path, "start_line": _line(fields.get("start_line"))}, ""
     if tool == prompt.LIST_DIR:
-        return {"path": path or str(state.workspace)}
+        return {"path": path or str(state.workspace)}, ""
     if tool == prompt.SEARCH:
-        return {"pattern": str(act.get("pattern", "") or ""), "path": path or str(state.workspace)}
-    if tool == prompt.WRITE_FILE:
-        return {"path": path, "content": str(act.get("content", "") or "")}
-    return None
+        return {"pattern": str(fields["pattern"]), "path": path or str(state.workspace)}, ""
+    return {"path": path, "content": str(fields.get("content", "") or "")}, ""
+
+
+def _in_workspace(raw: str, state: AgentState) -> str:
+    """Anchor a relative path to the workspace, leaving an absolute one alone."""
+    if not raw:
+        return ""
+    candidate = Path(raw)
+    return str(candidate if candidate.is_absolute() else state.workspace / candidate)
+
+
+def _line(value: object) -> int:
+    """A start line, however the model spelled it. Never raises on junk."""
+    try:
+        return max(1, int(str(value)))
+    except (TypeError, ValueError):
+        return 1
 
 
 def _execute(tool: str, args: dict[str, object], state: AgentState) -> tools.ToolResult:
@@ -286,8 +348,6 @@ def _execute(tool: str, args: dict[str, object], state: AgentState) -> tools.Too
         return tools.search(str(args["pattern"]), Path(str(args["path"])), secrets=secrets)
 
     target = Path(str(args["path"]))
-    if not target.is_absolute():
-        target = state.workspace / target
     result = tools.write_file(
         target, str(args["content"]), workspace=state.workspace, secrets=secrets
     )
