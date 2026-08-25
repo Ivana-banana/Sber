@@ -24,6 +24,9 @@ workspaces/
 submission.zip
 *.log
 
+# Выгрузки внешних исследований: в Git идёт раскрытая копия из docs/research/
+/Работа по промпту_ что это значит_.zip
+
 # Editors and OS
 .idea/
 .vscode/

@@ -18,7 +18,9 @@
 | — | — | Импорт upstream snapshot (этап 0) | `agent/`, `local_task/`, upstream metadata | штатный README smoke | свободно |
 | — | — | Инвентаризация target image | runtime package/tool manifest | offline probe | свободно |
 | — | — | Submission builder + unpacked smoke | `run.sh`, build script, tests | zip ≤10 МБ, clean run | свободно |
-| — | — | Шаг 3: `preflight.py` + `tools.py` с bounded output | `agent/tools.py`, `agent/preflight.py` | unit + один public fixture | свободно |
+| — | — | Submission builder + check из фактически собранного zip | `scripts/build_submission.py`, `scripts/check_submission.py` | zip ≤10 МБ, распакован, холодный smoke | свободно, **следующий** |
+| — | — | `THIRD_PARTY_NOTICES.md` до заимствования текста playbook'ов | корневой notices-файл | сверка лицензий источников | свободно |
+| — | — | `preflight.py` + `tools.py` с bounded output | `agent/tools.py`, `agent/preflight.py` | unit + один public fixture | свободно |
 
 ## Блокеры и вопросы
 
