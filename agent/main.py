@@ -123,8 +123,13 @@ def main(
         return EXIT_OK
 
     brief = preflight.inspect_environment(state.workspace, env)
-    playbook = playbooks.select(state.instruction)
-    state.record("preflight", "playbook", playbook.name)
+    # `classify` rather than `select` for the numbers alone: "general, because two
+    # categories tied at 0" and "general, because the task said nothing we know" are
+    # different runs, and when this task comes back a zero that difference is the
+    # first thing worth reading.
+    choice = playbooks.classify(state.instruction)
+    playbook = choice.playbook
+    state.record("preflight", "playbook", f"{playbook.name}: {choice.reason}")
 
     client = llm or HttpLlm(
         settings=settings,

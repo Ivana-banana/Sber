@@ -198,3 +198,12 @@ def test_an_endpoint_that_answers_nothing_still_exits_cleanly(tmp_path: Path, ca
     assert main(["run.sh", "task"], ENV, tmp_path, llm=StubLlm(replies=[])) == EXIT_OK
 
     assert "stop=llm-unusable" in capsys.readouterr().out
+
+
+def test_an_unclassifiable_task_is_routed_to_the_general_playbook(tmp_path: Path) -> None:
+    from agent import playbooks
+
+    choice = playbooks.classify("непонятная задача без единого ключевого слова")
+
+    assert choice.playbook is playbooks.GENERAL
+    assert choice.reason, "the reason is what main puts in the trace"
