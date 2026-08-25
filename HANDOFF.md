@@ -16,21 +16,23 @@
 | Владелец | Ветка | Задача | Файлы/контракт | Проверка | Статус |
 |---|---|---|---|---|---|
 | — | — | Импорт upstream snapshot (этап 0) | `agent/`, `local_task/`, upstream metadata | штатный README smoke | свободно |
-| — | — | Инвентаризация target image | runtime package/tool manifest | offline probe | свободно |
+| — | — | Багфиксы клиента endpoint P0/P1: пустой ключ, классификация 4xx/5xx, форматы `tool_calls` | `agent/llm.py`, `tests/test_llm.py` | воспроизводящий тест на fake endpoint до фикса | свободно, **следующий** |
+| — | — | Пересмотр `DEFAULT_TASK_TIMEOUT_S`: public-задачи дают 120 с, а не 600 с | `agent/limits.py` | абляция, запись в `docs/experiments.md` | свободно |
 | — | — | Submission builder + unpacked smoke | `run.sh`, build script, tests | zip ≤10 МБ, clean run | свободно |
 | — | — | `THIRD_PARTY_NOTICES.md` до заимствования текста playbook'ов | корневой notices-файл | сверка лицензий источников | свободно |
-| — | — | `preflight.py` + `tools.py` с bounded output | `agent/tools.py`, `agent/preflight.py` | unit + один public fixture | свободно |
+| — | — | `preflight.py` + `tools.py` с bounded output; workspace ищется, а не берётся из `cwd` | `agent/tools.py`, `agent/preflight.py` | unit + один public fixture | свободно |
 
 ## Блокеры и вопросы
 
 | Дата | Владелец | Блокер | Что уже проверено | Что нужно |
 |---|---|---|---|---|
-| 2026-08-24 | Codex | На текущей машине нельзя запустить target container | Windows: `docker` и `uv` отсутствуют; WSL2 distro `ozon` есть, но старт падает с `HCS_E_HYPERV_NOT_INSTALLED` | Назначить R0.1 владельцу машины с рабочим Docker либо включить виртуализацию/Virtual Machine Platform и перепроверить |
+| 2026-08-24 | Codex | На текущей машине нельзя запустить target container | Windows: `docker` и `uv` отсутствуют; WSL2 distro `ozon` есть, но старт падает с `HCS_E_HYPERV_NOT_INSTALLED`. 25.08: состав образа снят Manus'ом из слоёв, контракт Harbor читается из wheel с PyPI — блокер мешает только **исполнению**, не анализу | Назначить R0.1 владельцу машины с рабочим Docker либо включить виртуализацию/Virtual Machine Platform и перепроверить |
 
 ## Завершено
 
 | Дата | Владелец | Commit | Результат | Проверка / ограничения |
 |---|---|---|---|---|
+| 2026-08-25 | Claude | (этот коммит) | Инвентаризация target image и контракт запуска: отчёты Manus M1/M3 разобраны, digest и лимиты зафиксированы | Digest и даты перепроверены через Docker Hub API; `acp.py` из образа побайтово совпал с wheel `harbor==0.16.1`. Контейнер не запускался, инвентарь только `linux/amd64`; выводы M3 — про классы серверов, не про endpoint оценки |
 | 2026-08-25 | Claude | (этот коммит) | Контракт упаковки: `run.sh`, `agent/main.py`, builder и preflight собранного архива | `pytest -q` 68 passed; preflight 5 PASS / 0 FAIL / 0 SKIP; zip 13 646 Б, sha256 `d6b634e1…`. Целевой образ не проверялся — блокер Docker. Найден и закрыт латентный CRLF-дефект `run.sh` |
 | 2026-08-25 | Claude | `e31f0c0` | Клиент endpoint: настройки из env, redaction секретов, липкая деградация протокола, dev-скрипт probe | `pytest -q` 45 passed, сети в тестах нет. Против настоящего endpoint не запускался: `DEFAULT_CALL_STYLE` — догадка до прогона `scripts/probe_endpoint.py` |
 | 2026-08-25 | Claude | `c0ee358` | Каркас: `limits`/`ports`/`state` + StubLlm на замороженных транскриптах | `pytest -q` 19 passed, в `agent/` только stdlib. Числа в `limits.py` не измерены |

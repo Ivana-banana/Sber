@@ -26,6 +26,8 @@ submission.zip
 
 # Выгрузки внешних исследований: в Git идёт раскрытая копия из docs/research/
 /Работа по промпту_ что это значит_.zip
+/Сбор фактического манифеста Docker-образа secureintelligent_acp.zip
+/Следовать промпту из файла*.zip
 
 # Editors and OS
 .idea/
