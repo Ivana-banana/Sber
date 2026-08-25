@@ -26,6 +26,7 @@ from agent.redact import redact, secrets_from_env
 
 PROBED_TOOLS: tuple[str, ...] = (
     "git",
+    "rg",
     "grep",
     "sed",
     "awk",
@@ -38,6 +39,8 @@ PROBED_TOOLS: tuple[str, ...] = (
     "curl",
     "unzip",
     "tar",
+    "patch",
+    "diff",
     "openssl",
 )
 """Utilities worth knowing about before the model guesses.
@@ -45,6 +48,13 @@ PROBED_TOOLS: tuple[str, ...] = (
 Chosen because a playbook would reach for them and because their absence changes the
 plan rather than one command: no `jq` means JSON is filtered in Python, no `sqlite3`
 means the same for databases. Nothing here is required for the agent to run.
+
+`rg`, `patch` and `diff` are here because two independent measurements of the target
+image found them present, and each one replaces a worse plan: `rg` a recursive `grep`
+over a tree, `patch`/`diff` a hand-written edit. `xxd` and `sqlite3` are here for the
+opposite reason -- the same measurements found them absent, and a forensics playbook
+reaches for both by reflex, so the brief is cheaper reporting them missing once than
+paying for the failed call and the model's recovery from it.
 """
 
 
@@ -57,6 +67,7 @@ class EnvironmentBrief:
     entries: tuple[str, ...] = ()
     hidden_entries: int = 0
     available: tuple[str, ...] = ()
+    absent: tuple[str, ...] = ()
     python: str = ""
     note: str = ""
     """Why the tree is empty, when it is: `missing`, `unreadable` or nothing."""
@@ -74,6 +85,8 @@ class EnvironmentBrief:
             lines.append(f"  … {self.hidden_entries} more entries")
         lines.append(f"python3: {self.python}")
         lines.append(f"tools: {', '.join(self.available[1:]) or 'none of the probed set'}")
+        if self.absent:
+            lines.append(f"absent: {', '.join(self.absent)}")
 
         text = redact("\n".join(lines), self.secrets)
         if len(text) > limits.BRIEF_MAX_CHARS:
@@ -121,13 +134,16 @@ def inspect_environment(workspace: Path, env: Mapping[str, str]) -> EnvironmentB
     """Look at the workspace and the machine, without touching the model."""
     secrets = secrets_from_env(env)
     python = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    available = ("python3",) + tuple(name for name in PROBED_TOOLS if shutil.which(name))
+    found = {name: bool(shutil.which(name)) for name in PROBED_TOOLS}
+    available = ("python3",) + tuple(name for name in PROBED_TOOLS if found[name])
+    absent = tuple(name for name in PROBED_TOOLS if not found[name])
 
     if not workspace.is_dir():
         return EnvironmentBrief(
             workspace=workspace,
             exists=False,
             available=available,
+            absent=absent,
             python=python,
             note="missing",
             secrets=secrets,
@@ -140,6 +156,7 @@ def inspect_environment(workspace: Path, env: Mapping[str, str]) -> EnvironmentB
         entries=tuple(entries),
         hidden_entries=hidden,
         available=available,
+        absent=absent,
         python=python,
         note=note,
         secrets=secrets,

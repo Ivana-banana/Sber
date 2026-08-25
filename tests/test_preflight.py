@@ -49,6 +49,29 @@ def test_the_brief_reports_which_interpreters_and_utilities_exist(tmp_path: Path
     assert brief.available, "at least the running interpreter must be discoverable"
 
 
+def test_the_brief_names_the_utilities_the_image_does_not_have(tmp_path: Path, monkeypatch) -> None:
+    """Absence is the half of the toolchain answer the model cannot look up.
+
+    The target image has no `sqlite3` and no `xxd`, measured twice by execution. A
+    forensics playbook reaches for both by reflex, and a brief that only lists what
+    exists leaves the model to discover that with a failed command and a recovery
+    step. Saying it once is cheaper than paying for it every run.
+    """
+    workspace = make_task(tmp_path)
+    monkeypatch.setattr(
+        "agent.preflight.shutil.which",
+        lambda name: None if name in {"sqlite3", "xxd"} else f"/usr/bin/{name}",
+    )
+
+    brief = inspect_environment(workspace, ENV)
+    rendered = brief.render()
+
+    assert "sqlite3" in brief.absent and "xxd" in brief.absent
+    assert "absent: " in rendered
+    assert "rg" in brief.available, "the image has ripgrep; a tree-wide grep is the worse plan"
+    assert "patch" in brief.available and "diff" in brief.available
+
+
 def test_the_brief_stays_small_enough_to_pay_for_on_every_call(tmp_path: Path) -> None:
     workspace = tmp_path / "app"
     workspace.mkdir()
