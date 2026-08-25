@@ -74,6 +74,15 @@ A starting value. Its effect on solved count has not been measured, and per the
 ninth Karpathy rule it does not get tightened before that measurement exists.
 """
 
+MAX_CONSECUTIVE_LLM_FAILURES = 3
+"""Logical calls that may fail in a row before the endpoint is declared unusable.
+
+Three and not one because a single transport failure is ordinary; three and not more
+because `agent.llm` already retries inside one logical call, so this is three times
+that ladder, not three requests. A run that cannot reach a model has no path to a
+deliverable and should say so while there is still time to leave what it has.
+"""
+
 MAX_RECOVERY_PASSES = 1
 """Directed retries after a red verifier, borrowed as a shape from the bounded
 fact-check loop in the ai-v-massy pipeline (`factcheck_retries <= 2`)."""

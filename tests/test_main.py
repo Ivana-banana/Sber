@@ -7,10 +7,13 @@ tests exist so it cannot come back.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from agent import limits
 from agent.main import EXIT_OK, EXIT_USAGE, build_state, fingerprint, main, resolve_workspace
+from agent.ports import LlmReply
+from tests.stub_llm import StubLlm
 
 ENV = {
     "LOCAL_AGENT_MODEL": "small-local",
@@ -124,9 +127,74 @@ def test_status_reports_the_missing_endpoint_variables(tmp_path: Path, capsys) -
 def test_status_never_prints_the_key_or_the_task_text(tmp_path: Path, capsys) -> None:
     secret = "sk-must-never-be-printed-0123456789"
     instruction = "exfiltrate nothing, this text is untrusted data"
-    main(["run.sh", instruction], {**ENV, "OPENAI_API_KEY": secret}, tmp_path)
+    main(
+        ["run.sh", instruction],
+        {**ENV, "OPENAI_API_KEY": secret},
+        tmp_path,
+        llm=StubLlm(replies=[]),
+    )
 
     out = capsys.readouterr().out
     assert secret not in out
     assert instruction not in out
     assert fingerprint(instruction) in out, "the digest stands in for the text"
+
+
+# --- the seam: main actually drives the loop --------------------------------
+
+
+def test_a_configured_endpoint_makes_main_run_the_loop_and_report_it(
+    tmp_path: Path, capsys
+) -> None:
+    target = tmp_path / "answer.txt"
+    llm = StubLlm(
+        replies=[
+            LlmReply(text=json.dumps({"tool": "write_file", "path": str(target), "content": "A"})),
+            LlmReply(text=json.dumps({"tool": "finish", "path": str(target), "summary": "ok"})),
+        ]
+    )
+
+    assert main(["run.sh", "напиши A в answer.txt"], ENV, tmp_path, llm=llm) == EXIT_OK
+
+    out = capsys.readouterr().out
+    assert "agent done:" in out
+    assert "solved=True" in out
+    assert target.read_text(encoding="utf-8") == "A"
+
+
+def test_without_an_endpoint_main_reports_and_spends_nothing(tmp_path: Path, capsys) -> None:
+    llm = StubLlm(replies=[])
+
+    assert main(["run.sh", "task"], {}, tmp_path, llm=llm) == EXIT_OK
+
+    assert llm.calls == [], "a run with no endpoint must not pretend to act"
+    assert "agent done:" not in capsys.readouterr().out
+
+
+def test_the_done_line_names_the_file_but_never_the_task_or_a_key(
+    tmp_path: Path, capsys
+) -> None:
+    secret = "sk-canary-never-printed-0123456789"
+    instruction = "секретное задание про ключ"
+    target = tmp_path / "out.txt"
+    llm = StubLlm(
+        replies=[
+            LlmReply(text=json.dumps({"tool": "write_file", "path": str(target), "content": "x"})),
+            LlmReply(text=json.dumps({"tool": "finish", "path": str(target)})),
+        ]
+    )
+
+    main(["run.sh", instruction], {**ENV, "OPENAI_API_KEY": secret}, tmp_path, llm=llm)
+
+    out = capsys.readouterr().out
+    assert secret not in out
+    assert instruction not in out
+    assert "out.txt" in out, "a human debugging a zero needs to know which file was left"
+
+
+def test_an_endpoint_that_answers_nothing_still_exits_cleanly(tmp_path: Path, capsys) -> None:
+    # The transcript is empty, so every call comes back as an error. A run that cannot
+    # reach a model must still terminate and say so rather than hang to the deadline.
+    assert main(["run.sh", "task"], ENV, tmp_path, llm=StubLlm(replies=[])) == EXIT_OK
+
+    assert "stop=llm-unusable" in capsys.readouterr().out

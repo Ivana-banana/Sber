@@ -16,8 +16,9 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from agent import limits
-from agent.llm import LlmSettings
+from agent import limits, loop, playbooks, preflight, redact, verify
+from agent.llm import HttpLlm, LlmSettings
+from agent.ports import LlmPort
 from agent.state import AgentState, Budget
 
 EXIT_OK = 0
@@ -73,12 +74,27 @@ def build_state(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> Agent
         instruction=argv[1],
         workspace=workspace,
         budget=Budget.from_env(env),
+        secrets=redact.secrets_from_env(env),
     )
     state.record("preflight", "workspace", reason)
     return state
 
 
-def main(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> int:
+def main(
+    argv: Sequence[str],
+    env: Mapping[str, str],
+    cwd: Path,
+    *,
+    llm: LlmPort | None = None,
+) -> int:
+    """Run one task end to end and report how it went, never whether it deserves a 1.
+
+    `llm` is injectable for the same reason the loop takes its client as an argument:
+    otherwise the only way to test this function is to let it open a socket, and a
+    test suite that reaches an endpoint costs tokens on the second ranking criterion
+    and fails wherever the endpoint is not reachable. Production passes nothing and
+    gets the real client.
+    """
     if len(argv) < 2 or not argv[1].strip():
         print('usage: run.sh "<task instruction>"', file=sys.stderr)
         return EXIT_USAGE
@@ -100,10 +116,34 @@ def main(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> int:
         f"endpoint={'configured' if not missing else 'missing:' + ','.join(missing)}"
     )
 
-    # --- seam: the inspect/act/verify loop lands here -----------------------
-    # Until it does, the exit code says "the contract works", not "the task is
-    # solved". Nothing here may ever report success on the strength of having run.
+    if missing:
+        # No endpoint, no actions. Saying so and leaving is the honest outcome; the
+        # exit code still reports that the entrypoint contract worked, because that is
+        # all it has ever meant here.
+        return EXIT_OK
 
+    brief = preflight.inspect_environment(state.workspace, env)
+    playbook = playbooks.select(state.instruction)
+    state.record("preflight", "playbook", playbook.name)
+
+    client = llm or HttpLlm(
+        settings=settings,
+        on_event=lambda kind, detail: state.record(kind, "llm", detail),
+    )
+    outcome = loop.run(state, client, verify.verify, brief=brief, playbook=playbook)
+
+    # Diagnostics, not the answer. M13 established that no public verifier reads agent
+    # stdout: the result lives in the file this line merely names. Printing the outcome
+    # is for a human reading a failed run, and it carries no task text and no secret.
+    print(
+        f"agent done: solved={outcome.solved} stop={outcome.stop_reason} "
+        f"stage={outcome.verdict.stage if outcome.verdict else 'none'} "
+        f"deliverable={outcome.deliverable or 'none'} "
+        f"steps={state.budget.steps_used}/{state.budget.max_steps} "
+        f"recovery={state.budget.recovery_passes_used} "
+        f"tokens={state.budget.total_tokens}"
+        f"{'' if state.budget.usage_reported else ' (lower bound: endpoint omitted usage)'}"
+    )
     return EXIT_OK
 
 
