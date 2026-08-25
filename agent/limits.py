@@ -62,6 +62,18 @@ need to hand it a quarter of an hour."""
 MAX_STEPS = 30
 """Hard cap on act/observe iterations. The loop counts them, the model cannot."""
 
+OBSERVATION_WINDOW = 8
+"""How many recent observations travel back to the model on each call.
+
+Resident context is paid on every call and total tokens are the second ranking
+criterion, so the history is a window rather than the whole transcript. Eight and not
+fewer because the verifier reserve can need the error from several steps back; eight
+and not more because an old directory listing has no bearing on the next action.
+
+A starting value. Its effect on solved count has not been measured, and per the
+ninth Karpathy rule it does not get tightened before that measurement exists.
+"""
+
 MAX_RECOVERY_PASSES = 1
 """Directed retries after a red verifier, borrowed as a shape from the bounded
 fact-check loop in the ai-v-massy pipeline (`factcheck_retries <= 2`)."""
