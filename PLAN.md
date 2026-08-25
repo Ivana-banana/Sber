@@ -104,8 +104,10 @@ baseline. Архитектура — `docs/architecture.md`, мелкий пор
   code audit, SWE-style fix, forensic/log analysis, CTF/local-service investigation;
 - внешняя проверка результата, а не self-report модели.
 
-**DoD:** baseline не регрессирует; хотя бы одна исходно проваленная capability
-закрыта повторяемо или доказано, что example baseline уже закрывает весь public set.
+**DoD:** baseline не регрессирует по числу решённых public-задач — это единственное
+блокирующее условие; `6/6` считается сильным сигналом, а не разрешением на выпуск.
+Дополнительно: хотя бы одна исходно проваленная capability закрыта повторяемо или
+доказано, что example baseline уже закрывает весь public set.
 
 ### 3. Обобщение и устойчивость — 28–29 августа
 

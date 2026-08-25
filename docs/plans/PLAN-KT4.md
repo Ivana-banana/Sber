@@ -87,7 +87,7 @@ mutation suite и fallback protocol в одиночку за неделю опа
 | I0.1 | integrate runtime/loop/tools/verifier | integration | C1,T1,V1,P1 | candidate agent | unit + contract suite | `agent:` |
 | I0.2 | public run ×3 | eval | I0.1 | E002 vs E001 | no solved regression; failures explained | `eval:` |
 | M0.1 | public mutations | eval | S0.2 | ≥18 variants: names/paths/values/wording | production has no fixture identifiers | `eval:` |
-| M0.2 | fault injection | eval | I0.1 | hang, empty output, huge output, tool error, endpoint retry, near deadline | no uncontrolled hang/crash | `eval:` |
+| M0.2 | fault injection | eval | I0.1 | hang, empty output, huge output, tool error, endpoint retry, near deadline, prompt injection в файле/stdout/логе | no uncontrolled hang/crash; инъекция не меняет policy, budget и output-contract | `eval:` |
 | M0.3 | cross-capability mini-suite | eval/security | I0.1 | at least audit/fix/forensics + one CTF-like local case | independent verifier per case | `eval:` |
 | A0.1 | ACI ablation | eval | M0 | compact tools vs raw bash | same suite/model/budget | `eval:` |
 | A0.2 | prompt/budget ablation | eval | M0 | max steps/output/reserve variants | one factor per run | `eval:` |
@@ -165,26 +165,30 @@ mutation suite и fallback protocol в одиночку за неделю опа
 | G0 Source | upstream SHA и шесть tasks зафиксированы | эксперименты недействительны |
 | G1 Contract | archive layout принят Harbor, `run.sh` executable | стоп всей feature-работы |
 | G2 Baseline | E001: 6 tasks ×3 с полными метриками | сначала чинить harness |
-| G3 Hybrid | E002 не хуже E001 по solved count | откатить причинный блок |
+| G3 Hybrid | E002 не хуже E001 по solved count — единственное блокирующее правило выпуска | откатить причинный блок |
 | G4 Robust | ≥80% mutations; 0 uncontrolled hangs/startup/package failures | чинить failure modes, не tokens |
 | G5 Generality | suite содержит не-public CTF-like + audit/fix/forensics | нельзя заявлять обобщение |
 | G6 Release | clean offline unpacked zip, ≤10 MB, hash повторяем | submission запрещён |
 
-Порог 80% — внутренний go/no-go, не прогноз closed score. Public `6/6` обязателен,
-но недостаточен.
+Порог 80% — внутренний go/no-go, не прогноз closed score. Public `6/6` — сильный
+сигнал, но не блокер: выпуск останавливает регрессия solved count, а не недобор
+последней public-задачи (`docs/research/verdict-adversarial-plan-review.md` §2.1).
 
 ## Что режем при отставании
 
 Режем в таком порядке:
 
-1. native-tool fallback, если R0.4 зелёный ×3;
-2. дополнительные playbooks;
-3. глубокие token ablations;
-4. вторую реализацию patch tool;
-5. расширение suite сверх минимального G5.
+1. дополнительные playbooks;
+2. глубокие token ablations;
+3. вторую реализацию patch tool;
+4. расширение suite сверх минимального G5.
 
 Не режем: G1, deadline/per-tool timeout, verifier reserve, public baseline,
-fault injection hangs, clean unpacked archive и rollback candidate.
+fault injection hangs, prompt-injection acceptance, clean unpacked archive и
+rollback candidate. Отдельно не режем **protocol fallback**: `R0.4 зелёный ×3`
+измеряет доступный нам endpoint, а не endpoint оценки, а несовместимость протокола
+обнуляет все 15 задач сразу. Код уже написан (`fb30fee`), вырезать его — снимать
+страховку общего отказа.
 
 ## Данные для решений после КТ №4
 
