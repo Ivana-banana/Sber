@@ -7,6 +7,7 @@ the difference the check is for.
 from __future__ import annotations
 
 import hashlib
+import stat
 import zipfile
 from pathlib import Path
 
@@ -64,6 +65,23 @@ def test_entrypoint_is_executable_inside_the_archive(archive: Path) -> None:
     # setting it. Getting it wrong means the runner cannot start us at all.
     mode = zipfile.ZipFile(archive).getinfo("run.sh").external_attr >> 16
     assert mode & 0o111, f"run.sh mode is {mode:o}"
+
+
+def test_the_archive_says_it_came_from_unix_or_that_mode_is_ignored(archive: Path) -> None:
+    # The mode above lives in the high half of external_attr, and an extractor reads
+    # it only when the central directory says the archive was made on Unix. `ZipInfo`
+    # takes that byte from the build platform, so a Windows build ships a correct
+    # 0o755 next to a "made on DOS" marker and `unzip` drops the bit. Then `./run.sh`
+    # is Permission denied before the first LLM call, and the test above still passes
+    # because it reads back the number we wrote ourselves.
+    info = zipfile.ZipFile(archive).getinfo("run.sh")
+    assert info.create_system == 3, f"run.sh declares host {info.create_system}, not 3 (Unix)"
+
+    # And the mode has to carry its file type, because that is the same field an
+    # extractor reads to tell a regular file from a symlink. Type bits left at zero
+    # make the entry a file of no type, which is not what any of them expect.
+    mode = info.external_attr >> 16
+    assert stat.S_ISREG(mode), f"run.sh mode 0o{mode:o} has no regular-file type bits"
 
 
 def test_archive_fits_the_limit(archive: Path) -> None:

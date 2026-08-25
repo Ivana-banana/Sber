@@ -15,13 +15,16 @@ the hash recorded next to a checkpoint proves nothing about what was uploaded.
 The permission bit is not cosmetic. On Windows there is no executable bit on disk, so
 a naively written `run.sh` arrives in the archive as mode 0644 and the runner cannot
 start it. It is set here on purpose, and `scripts/check_submission.py` verifies it
-from the built file rather than trusting this code.
+from the built file rather than trusting this code. Writing the number is only half
+of it: the archive must also declare a Unix host, or an extractor is free to ignore
+the mode it just read. See `UNIX_HOST`.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import stat
 import sys
 import zipfile
 from pathlib import Path
@@ -39,6 +42,15 @@ SKIP_DIRS = frozenset({"__pycache__", ".git", ".venv", ".pytest_cache", ".ruff_c
 SKIP_SUFFIXES = (".pyc", ".pyo", ".log")
 
 EXECUTABLE = frozenset({"run.sh"})
+
+UNIX_HOST = 3
+"""Host system written into the central directory.
+
+`ZipInfo` takes this from whatever platform is building, so a Windows build says DOS.
+An extractor reads the Unix mode only when this field says Unix: `unzip` is entitled
+to ignore a perfectly correct 0o755 next to a DOS marker, and then the runner cannot
+start `./run.sh` at all. Set explicitly so the archive does not depend on who built
+it."""
 
 FROZEN_TIME = (1980, 1, 1, 0, 0, 0)
 """The earliest timestamp the zip format can represent. Any fixed value works; this
@@ -79,9 +91,13 @@ def build(root: Path, out: Path) -> tuple[int, str]:
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path, name in entries:
             info = zipfile.ZipInfo(name, date_time=FROZEN_TIME)
+            info.create_system = UNIX_HOST
             info.compress_type = zipfile.ZIP_DEFLATED
             mode = 0o755 if name in EXECUTABLE else 0o644
-            info.external_attr = (mode << 16) | 0o100000
+            # File type and permissions are one `st_mode`, and both belong in the high
+            # half. Written as two fields, the type bits land among the DOS attributes
+            # instead and the entry becomes a file of no type.
+            info.external_attr = (stat.S_IFREG | mode) << 16
             archive.writestr(info, path.read_bytes())
 
     data = out.read_bytes()
