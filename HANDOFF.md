@@ -16,8 +16,6 @@
 | Владелец | Ветка | Задача | Файлы/контракт | Проверка | Статус |
 |---|---|---|---|---|---|
 | — | — | Импорт upstream snapshot (этап 0) | `agent/`, `local_task/`, upstream metadata | штатный README smoke | свободно |
-| — | — | Багфиксы клиента endpoint P0/P1: пустой ключ, классификация 4xx/5xx, форматы `tool_calls` | `agent/llm.py`, `tests/test_llm.py` | воспроизводящий тест на fake endpoint до фикса | свободно, **следующий** |
-| — | — | Пересмотр `DEFAULT_TASK_TIMEOUT_S`: public-задачи дают 120 с, а не 600 с | `agent/limits.py` | абляция, запись в `docs/experiments.md` | свободно |
 | — | — | Submission builder + unpacked smoke | `run.sh`, build script, tests | zip ≤10 МБ, clean run | свободно |
 | — | — | `THIRD_PARTY_NOTICES.md` до заимствования текста playbook'ов | корневой notices-файл | сверка лицензий источников | свободно |
 | — | — | `preflight.py` + `tools.py` с bounded output; workspace ищется, а не берётся из `cwd` | `agent/tools.py`, `agent/preflight.py` | unit + один public fixture | свободно |
@@ -32,7 +30,7 @@
 
 | Дата | Владелец | Commit | Результат | Проверка / ограничения |
 |---|---|---|---|---|
-| 2026-08-25 | Claude | (этот коммит) | Инвентаризация target image и контракт запуска: отчёты Manus M1/M3 разобраны, digest и лимиты зафиксированы | Digest и даты перепроверены через Docker Hub API; `acp.py` из образа побайтово совпал с wheel `harbor==0.16.1`. Контейнер не запускался, инвентарь только `linux/amd64`; выводы M3 — про классы серверов, не про endpoint оценки |
+| 2026-08-25 | Claude | `5851d29` | Инвентаризация target image и контракт запуска: отчёты Manus M1/M3 разобраны, digest и лимиты зафиксированы | Digest и даты перепроверены через Docker Hub API; `acp.py` из образа побайтово совпал с wheel `harbor==0.16.1`. Контейнер не запускался, инвентарь только `linux/amd64`; выводы M3 — про классы серверов, не про endpoint оценки |
 | 2026-08-25 | Claude | (этот коммит) | Разрешены оба расхождения с `verdict-image-and-endpoint.md`: стартовая ступень `native_tools` (доказано конфигурацией эталонного агента), два срока вместо одного (600 с внешняя граница + 90 с на первый deliverable), `tool_choice` не шлём | `pytest -q` 93 passed. Требование к будущей петле: после 90 с переходить от исследования к производству |
 | 2026-08-25 | Claude | (этот коммит) | Клиент endpoint приведён в соответствие с поведением локальных серверов: keyless endpoint, классификация HTTP-статусов, один retry на 5xx, диалекты tool call, валидация против schema. Workspace вычисляется, а не берётся из cwd | `pytest -q` 89 passed; preflight 5 PASS / 0 FAIL / 0 SKIP. Против настоящего endpoint по-прежнему ничего не запускалось |
 | 2026-08-25 | Claude | (этот коммит) | Контракт упаковки: `run.sh`, `agent/main.py`, builder и preflight собранного архива | `pytest -q` 68 passed; preflight 5 PASS / 0 FAIL / 0 SKIP; zip 13 646 Б, sha256 `d6b634e1…`. Целевой образ не проверялся — блокер Docker. Найден и закрыт латентный CRLF-дефект `run.sh` |
