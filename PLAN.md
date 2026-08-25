@@ -194,3 +194,31 @@ regression → новый кандидат. Не ждать leaderboard для �
 
 Ответы фиксировать в `docs/task.md` с датой и источником; решения, которые они меняют,
 — в `docs/decisions.md`.
+
+## AFK-очередь на ночь 25→26.08.2026 (sber-1f)
+
+Работаю в паре с sber-8a в этом же рабочем дереве: она (loop/main.py/prompt.py) ведёт
+I0.1-интеграцию, я — V1 verify() и всё, что зависит от готового seam. Владение по
+файлам зафиксировано в переписке через SendMessage, не здесь.
+
+- [x] Закоммитить обнаруженный в дереве завершённый WIP (detectors, write_file) —
+  `19d1b64`, `8a7a719`.
+- [x] `agent/verify.py` + `tests/test_verify.py` (V1 core: existence → non-empty →
+  command exit code, `unverified` при пустой команде) — `459eced`, зелёный на Windows
+  и на реальном POSIX (WSL2 `ozon`).
+- [ ] Дождаться коммита sber-8a с `agent/loop.py`/seam в `agent/main.py`, подключающим
+  `verify()` и recovery pass.
+- [ ] После интеграции: полный `pytest -q` на Windows и в WSL2 (`/mnt/d/vano/Sber`).
+- [ ] Пересобрать submission (`scripts/build_submission.py` + `check_submission.py`),
+  подтвердить preflight и лимит 10 МБ — новый код не должен тянуть что-то вне stdlib.
+- [ ] Записать карту эксперимента в `docs/experiments.md` (что изменилось, что не
+  проверялось живьём — реальный endpoint этой ночью не вызывается) и перенести строку
+  из `HANDOFF.md` «Активные задачи» в «Завершено».
+- [ ] Если к утру freeze (30.08 18:00) далеко, а I0.1 закрыт — следующий свободный шаг
+  по `docs/plans/PLAN-KT4.md`: M0.1 mutations или V1.2 полная verifier ladder
+  (schema/targeted/regression поверх текущего exact-и-command), смотреть по остатку
+  бюджета (`afk-limits` недоступен на этой машине, см. `BLOCKED.md`) и по тому, что
+  сама интеграция не встала.
+
+Ограничение честно: без вызова реального `LOCAL_AGENT_MODEL/OPENAI_BASE_URL` решаемость
+задач этой ночью не измеряется — только контракт и unit/contract-тесты.
