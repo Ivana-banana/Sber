@@ -22,7 +22,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from agent import limits
+from agent.detectors import args_digest, digest
 from agent.ports import LlmReply
+from agent.redact import redact
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,27 @@ class Event:
     detail: str
     duration_s: float = 0.0
     exit_code: int | None = None
+
+
+@dataclass(frozen=True)
+class ActionRecord:
+    """One executed action, reduced to what the stuck detectors need.
+
+    Deliberately not the action itself. Arguments and output are hashed, so the
+    history stays a fixed size whatever the model sends and whatever a tool prints,
+    and so a secret that appeared in an observation cannot survive here as plain text.
+    """
+
+    step: int
+    tool: str
+    args_digest: str
+    result_fingerprint: str
+    ok: bool
+    error_code: str = ""
+    """Short machine-readable failure label, e.g. `exit:127`. Empty on success."""
+
+    novel: bool = True
+    """Whether this action produced an observation the run had not already seen."""
 
 
 def _reserve_for(total_s: float) -> float:
@@ -183,6 +206,24 @@ class AgentState:
     audit: list[Event] = field(default_factory=list)
     """Append-only trace. Nothing removes entries; truncation happens at render time."""
 
+    actions: list[ActionRecord] = field(default_factory=list)
+    """Sliding window of the last `limits.ACTION_HISTORY` actions, for the detectors.
+
+    Separate from `audit` on purpose: the trace is append-only and exists to be read
+    by a human afterwards, while this window is a fixed-size working set the loop
+    queries on every step. Merging them would make one of the two wrong.
+    """
+
+    seen_results: set[str] = field(default_factory=set, repr=False)
+    """Every result fingerprint this run has produced, for the progress detector."""
+
+    _artifacts_seen: int = field(default=0, repr=False)
+    """How many artifacts existed at the previous observation, so that producing one
+    counts as progress even when the command that produced it printed nothing new."""
+
+    secrets: tuple[str, ...] = field(default=(), repr=False)
+    """Values that must not reach an observation, a hash or the trace."""
+
     def record(
         self,
         kind: str,
@@ -202,3 +243,37 @@ class AgentState:
         )
         self.audit.append(event)
         return event
+
+    def observe(
+        self,
+        tool: str,
+        args: Mapping[str, object],
+        output: str,
+        *,
+        ok: bool = True,
+        error_code: str = "",
+    ) -> ActionRecord:
+        """Record an executed action in the detector window.
+
+        The output is redacted before it is hashed, not after. A fingerprint taken
+        from raw text would be a stable identifier derived from a secret, which is the
+        same leak in a shorter form.
+        """
+        fingerprint = digest(redact(output, self.secrets))
+        produced = len(self.artifacts) > self._artifacts_seen
+        self._artifacts_seen = len(self.artifacts)
+        novel = produced or fingerprint not in self.seen_results
+        self.seen_results.add(fingerprint)
+
+        record = ActionRecord(
+            step=self.budget.steps_used,
+            tool=tool,
+            args_digest=args_digest(args),
+            result_fingerprint=fingerprint,
+            ok=ok,
+            error_code=error_code,
+            novel=novel,
+        )
+        self.actions.append(record)
+        del self.actions[: -limits.ACTION_HISTORY]
+        return record

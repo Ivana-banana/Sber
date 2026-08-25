@@ -66,6 +66,36 @@ MAX_RECOVERY_PASSES = 1
 """Directed retries after a red verifier, borrowed as a shape from the bounded
 fact-check loop in the ai-v-massy pipeline (`factcheck_retries <= 2`)."""
 
+ACTION_HISTORY = 6
+"""How many recent actions the loop remembers for its stuck detectors.
+
+Six because the widest pattern below (`ALTERNATING_STOP`) needs six to be visible;
+a window that cannot hold the pattern it looks for is decoration.
+"""
+
+REPEAT_FAILURE_BLOCK = 2
+"""Identical failed calls after which the same call is refused before it runs.
+
+Starting value, not a measurement. The action is refused rather than the run stopped:
+a model that repeats one broken command has usually misread an error, and the cheapest
+correction is telling it so while the budget is still there.
+"""
+
+EXACT_REPEAT_STOP = 4
+ALTERNATING_STOP = 6
+"""Defaults read from the OpenHands agent SDK stuck detector at revision `041078f`:
+four identical action/observation pairs, six steps of an A-B-A-B cycle. Checked
+against their source rather than quoted from prose.
+"""
+
+NO_PROGRESS_STOP = 4
+"""Consecutive actions that produce no observation the run has not already seen.
+
+Conservative carry-over of the OpenHands window, not a measurement of our own loop.
+An action counts as progress when it yields a new result fingerprint or leaves a new
+artifact; anything else is the loop paying tokens to stand still.
+"""
+
 # --- Tools ------------------------------------------------------------------
 
 TOOL_TIMEOUT_MAX_S = 120.0
