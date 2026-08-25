@@ -77,6 +77,38 @@ TOOL_OUTPUT_TAIL_BYTES = 2000
 """How much of a tool's output reaches the model. Head and tail are kept because the
 command and its failure usually live at opposite ends. Truncation is always marked."""
 
+SHELL_EXECUTABLE = "/bin/sh"
+"""What `run_shell` execs. `sh` and not `bash`: the pipelines and redirections a
+playbook needs are POSIX, and `sh` is present in every image we might be handed."""
+
+READ_MAX_BYTES = 8000
+READ_MAX_LINES = 200
+"""One `read_range` window. Deliberately smaller than the shell output budget: a file
+is re-readable at another offset, so a wide window buys nothing and costs context on
+every step."""
+
+LIST_MAX_ENTRIES = 100
+"""Entries one directory listing may show before it says how many it hid."""
+
+SEARCH_MAX_MATCHES = 50
+"""Matches one search returns. A pattern with thousands of hits is the wrong pattern,
+and the fix is a narrower query, not a longer answer."""
+
+BINARY_SNIFF_BYTES = 4096
+"""Prefix examined to decide text vs binary. A NUL byte in it means binary, which is
+the rule `grep` uses and it is right often enough for triage."""
+
+# --- Preflight ---------------------------------------------------------------
+
+BRIEF_MAX_CHARS = 1500
+BRIEF_MAX_ENTRIES = 30
+BRIEF_MAX_DEPTH = 2
+"""Size of the environment map handed to the model.
+
+Paid on every call, so it is a map and not an inventory: the top of the tree, the
+interpreter and the utilities that exist. Anything deeper is a search away, and a
+search the model asks for is cheaper than a listing carried on every call."""
+
 # --- LLM --------------------------------------------------------------------
 
 LLM_TIMEOUT_S = 120.0

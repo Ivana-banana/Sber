@@ -18,7 +18,7 @@
 | — | — | Импорт upstream snapshot (этап 0) | `agent/`, `local_task/`, upstream metadata | штатный README smoke | свободно |
 | — | — | Submission builder + unpacked smoke | `run.sh`, build script, tests | zip ≤10 МБ, clean run | свободно |
 | — | — | Интеграция playbook'ов: `agent/playbooks.py`, выбор одного по классу задачи, перевод текстов на английский | `agent/playbooks.py`, системный prompt, `INCLUDE_FILES` сборщика | абляция на локальном наборе: solved count, затем токены | свободно |
-| — | — | `preflight.py` + `tools.py` с bounded output; workspace ищется, а не берётся из `cwd` | `agent/tools.py`, `agent/preflight.py` | unit + один public fixture | свободно |
+| Claude | main | `preflight.py` + `tools.py` с bounded output (T1.1/T1.2/T1.4) | `agent/tools.py`, `agent/preflight.py`, секция Tools в `agent/limits.py` | unit + синтетическое дерево; public fixture недоступен, `local_task/` не импортирован (S0.1) | сделано, коммит ниже |
 
 ## Блокеры и вопросы
 
