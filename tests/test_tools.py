@@ -17,7 +17,16 @@ from pathlib import Path
 import pytest
 
 from agent import limits
-from agent.tools import clip, file_info, list_dir, read_range, run_argv, run_shell, search
+from agent.tools import (
+    clip,
+    file_info,
+    list_dir,
+    read_range,
+    run_argv,
+    run_shell,
+    search,
+    write_file,
+)
 
 POSIX_ONLY = pytest.mark.skipif(os.name != "posix", reason="target image is Linux; /bin/sh absent on Windows")
 
@@ -280,6 +289,51 @@ def test_search_without_a_match_is_a_clean_empty_answer(tmp_path: Path) -> None:
 
 def test_a_broken_pattern_fails_without_raising(tmp_path: Path) -> None:
     result = search("([unclosed", tmp_path)
+
+    assert result.ok is False
+    assert result.detail
+
+
+def test_write_file_puts_exactly_the_bytes_it_was_given(tmp_path: Path) -> None:
+    result = write_file(tmp_path / "bye.txt", "Bye", workspace=tmp_path)
+
+    assert result.ok is True
+    assert (tmp_path / "bye.txt").read_bytes() == b"Bye", (
+        "verifiers compare exact content; a helpful trailing newline is a zero"
+    )
+
+
+def test_write_file_creates_missing_parents(tmp_path: Path) -> None:
+    result = write_file(tmp_path / "deep" / "nested" / "report.json", "{}", workspace=tmp_path)
+
+    assert result.ok is True
+    assert (tmp_path / "deep" / "nested" / "report.json").read_text(encoding="utf-8") == "{}"
+
+
+def test_write_file_replaces_content_rather_than_appending(tmp_path: Path) -> None:
+    target = tmp_path / "answer.txt"
+    write_file(target, "first", workspace=tmp_path)
+    write_file(target, "second", workspace=tmp_path)
+
+    assert target.read_text(encoding="utf-8") == "second"
+
+
+def test_write_file_refuses_to_leave_the_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+
+    result = write_file(workspace / ".." / "outside.txt", "x", workspace=workspace)
+
+    assert result.ok is False
+    assert "outside the workspace" in result.detail
+    assert not outside.exists(), "a refused write must not have happened first"
+
+
+def test_write_file_refuses_a_directory_without_raising(tmp_path: Path) -> None:
+    (tmp_path / "adir").mkdir()
+
+    result = write_file(tmp_path / "adir", "x", workspace=tmp_path)
 
     assert result.ok is False
     assert result.detail

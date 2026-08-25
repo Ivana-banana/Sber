@@ -224,6 +224,66 @@ def run_shell(
     )
 
 
+def write_file(
+    path: Path,
+    content: str,
+    *,
+    workspace: Path,
+    secrets: Iterable[str] = (),
+) -> ToolResult:
+    """Write exactly `content` to `path`, creating parents, replacing what was there.
+
+    Exactly, and that word is the whole point. Four of the six public verifiers
+    compare a file against a fixed expectation -- shell string equality, a sorted
+    `diff`, a JSON parse -- so a courtesy trailing newline or a diagnostic line is not
+    a cosmetic difference, it is a zero. Nothing is appended and nothing is formatted.
+
+    Writing goes through a tool rather than through `run_shell` because the shell path
+    requires the model to quote the content correctly, and file content in these tasks
+    contains the characters that break quoting: newlines, quotes, dollars, backslashes.
+    A quoting bug there produces a plausible-looking file with the wrong bytes.
+
+    The write is confined to the workspace. `resolve_workspace` is our own contract for
+    where the task lives, so a path escaping it is either a mistake or the file content
+    steering the agent -- and task files are untrusted data.
+    """
+    try:
+        root = workspace.resolve()
+        target = Path(path)
+        if not target.is_absolute():
+            target = root / target
+        target = target.resolve()
+    except OSError as exc:
+        return ToolResult(name="write_file", ok=False, detail=f"bad path: {exc}")
+
+    if target != root and root not in target.parents:
+        return ToolResult(
+            name="write_file",
+            ok=False,
+            detail=f"refused: {target} is outside the workspace {root}",
+        )
+
+    started = time.monotonic()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("w", encoding="utf-8", newline="") as handle:
+            handle.write(content)
+    except OSError as exc:
+        return ToolResult(
+            name="write_file",
+            ok=False,
+            detail=redact(f"{exc.__class__.__name__}: {exc}", secrets),
+            duration_s=time.monotonic() - started,
+        )
+
+    return ToolResult(
+        name="write_file",
+        ok=True,
+        output=f"wrote {len(content.encode('utf-8'))} bytes to {target}",
+        duration_s=time.monotonic() - started,
+    )
+
+
 def _looks_binary(path: Path) -> bool:
     with path.open("rb") as handle:
         return b"\x00" in handle.read(limits.BINARY_SNIFF_BYTES)
