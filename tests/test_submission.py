@@ -7,6 +7,7 @@ the difference the check is for.
 from __future__ import annotations
 
 import hashlib
+import os
 import stat
 import zipfile
 from pathlib import Path
@@ -15,7 +16,7 @@ import pytest
 
 from agent import limits
 from scripts.build_submission import ROOT, build
-from scripts.check_submission import check
+from scripts.check_submission import CONTRACT_LABEL, apply_declared_modes, check
 
 SMOKE_PARENT_ENV: dict[str, str] = {}
 """Deliberately empty in most tests: the cold start is exercised separately, and an
@@ -109,6 +110,19 @@ def repack(source: Path, target: Path, *, transform) -> Path:
     return target
 
 
+def to_dos_host(info, data):
+    """Rewrite an entry as a Windows build that forgot to declare a Unix host.
+
+    The mode stays a perfectly correct 0o755. Only the byte saying how to read it
+    changes, which is precisely why this defect survives an inspection of the mode.
+    """
+    new = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+    new.create_system = 0
+    new.external_attr = info.external_attr
+    new.compress_type = info.compress_type
+    return new, data
+
+
 def test_a_good_archive_has_no_blocking_problems(archive: Path) -> None:
     import os
 
@@ -117,15 +131,70 @@ def test_a_good_archive_has_no_blocking_problems(archive: Path) -> None:
     assert any("run.sh is present at the root" in message for message in report.passed)
 
 
-def test_cold_start_reports_its_own_result(archive: Path) -> None:
+def contract_messages(report) -> tuple[list[str], list[str], list[str]]:
+    """The three places the contract run can report itself, in one call."""
+    pick = lambda bucket: [m for m in bucket if m.startswith(CONTRACT_LABEL)]  # noqa: E731
+    return pick(report.passed), pick(report.failures), pick(report.skipped)
+
+
+def test_the_cold_start_contract_reports_exactly_one_result(archive: Path) -> None:
     import os
 
-    report = check(archive, os.environ)
-    started = [m for m in report.passed if "cold start" in m]
-    skipped = [m for m in report.skipped if "cold start" in m]
+    passed, failed, skipped = contract_messages(check(archive, os.environ))
+    outcomes = len(passed) + len(failed) + len(skipped)
 
-    assert started or skipped, "the cold start must say what happened, pass or skip"
-    assert not (started and skipped)
+    assert outcomes == 1, (
+        "the contract run must say what happened exactly once; "
+        f"got {outcomes} (pass={passed} fail={failed} skip={skipped})"
+    )
+
+
+def test_extraction_applies_the_mode_the_archive_declares(archive: Path, tmp_path: Path) -> None:
+    # `extractall` restores no permissions on any platform, so an extracted tree proves
+    # nothing on its own. The checker has to reproduce what a mode-restoring extractor
+    # does -- read the mode out of the central directory -- rather than chmod a constant
+    # it chose itself, which would pass whatever the builder wrote.
+    with zipfile.ZipFile(archive) as zf:
+        dest = tmp_path / "unpacked"
+        zf.extractall(dest)
+        applied = apply_declared_modes(zf, dest)
+
+    assert applied.get("run.sh") == 0o755, f"declared modes applied: {applied}"
+
+
+def test_a_dos_host_byte_leaves_the_entrypoint_without_a_mode(
+    archive: Path, tmp_path: Path
+) -> None:
+    dos = repack(archive, tmp_path / "dos.zip", transform=to_dos_host)
+
+    with zipfile.ZipFile(dos) as zf:
+        dest = tmp_path / "unpacked"
+        zf.extractall(dest)
+        applied = apply_declared_modes(zf, dest)
+
+    assert "run.sh" not in applied, (
+        "a DOS host byte means the 0o755 next to it is not a Unix mode, "
+        "and an extractor is entitled to ignore it"
+    )
+
+
+def test_a_dos_host_archive_never_gets_a_contract_pass(archive: Path, tmp_path: Path) -> None:
+    # The regression this whole split exists for. The old cold start chmod'ed the
+    # entrypoint and launched it as `sh run.sh`, so it repaired the exact defect it was
+    # supposed to catch and reported PASS on an archive the runner could not start.
+    dos = repack(archive, tmp_path / "dos.zip", transform=to_dos_host)
+    passed, failed, skipped = contract_messages(check(dos, SMOKE_PARENT_ENV))
+
+    assert not passed, f"an unusable archive was reported as passing: {passed}"
+    assert failed or skipped, "the contract run has to report the DOS archive, not stay silent"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows cannot exec a shell script directly")
+def test_a_dos_host_archive_fails_the_contract_on_posix(archive: Path, tmp_path: Path) -> None:
+    dos = repack(archive, tmp_path / "dos.zip", transform=to_dos_host)
+    _, failed, _ = contract_messages(check(dos, os.environ))
+
+    assert failed, "on a platform that can run ./run.sh, a lost mode is a failure, not a skip"
 
 
 def test_missing_file_is_reported(tmp_path: Path) -> None:

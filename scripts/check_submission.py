@@ -41,6 +41,17 @@ from agent.main import fingerprint  # noqa: E402
 
 ENTRYPOINT = "run.sh"
 
+UNIX_HOST = 3
+"""Host system an entry must declare before its mode counts as a Unix mode.
+
+Spelled out here rather than imported from the builder on purpose. This file checks the
+file on disk, and a checker that learned the number from the code that wrote it would
+agree with a wrong builder instead of catching one."""
+
+CONTRACT_LABEL = "cold start contract"
+DIAGNOSTIC_LABEL = "cold start diagnostic"
+"""Two different questions, so two different labels. See `check_cold_start`."""
+
 CRLF = b"\r\n"
 """Named rather than inline so this file survives being edited by tooling that
 rewrites its own line endings -- which is the very defect being checked for."""
@@ -180,47 +191,131 @@ def check_archive(path: Path, report: Report) -> zipfile.ZipFile | None:
     return archive
 
 
-def check_cold_start(archive: zipfile.ZipFile, report: Report, parent: Mapping[str, str]) -> None:
-    """Extract into a fresh directory and run the entrypoint from there."""
-    shell = shutil.which("sh") or shutil.which("bash")
-    if shell is None:
-        report.skip("cold start: no POSIX shell on this machine")
-        return
+def apply_declared_modes(archive: zipfile.ZipFile, dest: Path) -> dict[str, int]:
+    """Apply the permissions the archive declares, and return what was applied.
 
+    `extractall` restores no permissions at all, on any platform, so an extracted tree
+    says nothing on its own about how the archive was packed. This reproduces what a
+    mode-restoring extractor does instead: take the mode from the central directory,
+    and only where the host byte says it is a Unix mode. An archive built on Windows
+    without that byte set declares DOS, gets nothing applied here, and will not run --
+    which is the case worth catching.
+
+    Real `unzip` is the ground truth this approximates. Neither settles what the
+    organisers' runner does; only a run in the target image can.
+    """
+    applied: dict[str, int] = {}
+    for info in archive.infolist():
+        if info.create_system != UNIX_HOST:
+            continue
+        mode = (info.external_attr >> 16) & 0o777
+        if not mode:
+            continue
+        (dest / info.filename).chmod(mode)
+        applied[info.filename] = mode
+    return applied
+
+
+def launch(
+    argv: list[str], workspace: Path, parent: Mapping[str, str]
+) -> tuple[subprocess.CompletedProcess[str] | None, str]:
+    """Run the entrypoint once. Exactly one of (result, error message) is set."""
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=workspace,
+            env=smoke_env(parent),
+            capture_output=True,
+            text=True,
+            timeout=SMOKE_TIMEOUT_S,
+        )
+    except OSError as exc:
+        # Not just a missing file: launching a file whose executable bit did not
+        # survive extraction arrives here as PermissionError, and that is the failure
+        # this check exists for.
+        return None, f"could not launch: {exc}"
+    except subprocess.TimeoutExpired:
+        return None, f"did not finish within {SMOKE_TIMEOUT_S}s"
+
+    if result.returncode != 0:
+        tail = (result.stderr or result.stdout).strip().splitlines()[-5:]
+        return None, f"exited {result.returncode}: " + " | ".join(tail)
+    return result, ""
+
+
+def check_cold_start(archive: zipfile.ZipFile, report: Report, parent: Mapping[str, str]) -> None:
+    """Extract into a fresh directory and run the entrypoint the way the runner will.
+
+    Two runs, and the difference between them is the whole point.
+
+    The **contract** run launches the extracted `run.sh` directly with nothing repaired
+    first, on whatever mode survived extraction. It is the only check that proves the
+    archive carries a usable executable bit.
+
+    The **diagnostic** run forces the mode and goes through `sh` explicitly. It answers
+    a different question -- whether the script itself is sound -- and runs only when the
+    contract run could not, or did not, succeed.
+
+    These used to be one run: the diagnostic one, under the contract's name. It chmod'ed
+    the entrypoint before launching it and so repaired the exact defect it was meant to
+    detect, which is how an archive declaring a DOS host byte passed preflight.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         unpacked = Path(tmp) / "unpacked"
         archive.extractall(unpacked)
-
-        workspace = Path(tmp) / "workspace"
-        workspace.mkdir()
+        applied = apply_declared_modes(archive, unpacked)
 
         entry = unpacked / ENTRYPOINT
-        entry.chmod(0o755)
+        declared = applied.get(ENTRYPOINT, 0)
 
-        try:
-            result = subprocess.run(
-                [shell, str(entry), SMOKE_INSTRUCTION],
-                cwd=workspace,
-                env=smoke_env(parent),
-                capture_output=True,
-                text=True,
-                timeout=SMOKE_TIMEOUT_S,
-            )
-        except FileNotFoundError as exc:
-            report.fail(f"cold start could not launch: {exc}")
-            return
-        except subprocess.TimeoutExpired:
-            report.fail(f"cold start did not finish within {SMOKE_TIMEOUT_S}s")
-            return
+        workspace = Path(tmp) / "contract"
+        workspace.mkdir()
+        result = None
 
-        if result.returncode != 0:
-            tail = (result.stderr or result.stdout).strip().splitlines()[-5:]
+        if not declared & 0o111:
+            host = archive.getinfo(ENTRYPOINT).create_system
             report.fail(
-                f"cold start exited {result.returncode}: " + " | ".join(tail)
+                f"{CONTRACT_LABEL}: extraction leaves {ENTRYPOINT} without an executable "
+                f"mode (host {host}, applied {declared:o}); the runner cannot start it"
             )
-            return
+        elif os.name == "nt":
+            # Windows has no execve for a shell script, so the launch would fail here
+            # for a reason that has nothing to do with the archive.
+            report.skip(
+                f"{CONTRACT_LABEL}: Windows cannot execute a shell script directly, so "
+                f"only the declared mode {declared:o} was checked; rerun this on Linux"
+            )
+        else:
+            # An absolute path, not a literal `./run.sh`, because the working directory
+            # belongs to the task rather than to us -- see run.sh. Either way the kernel
+            # still demands the executable bit, which is the property under test.
+            result, error = launch([str(entry), SMOKE_INSTRUCTION], workspace, parent)
+            if error:
+                report.fail(f"{CONTRACT_LABEL}: {ENTRYPOINT} {error}")
+            else:
+                report.ok(
+                    f"{CONTRACT_LABEL}: {ENTRYPOINT} ran from a clean directory on the "
+                    f"mode the archive declared ({declared:o}), nothing repaired first"
+                )
 
-        report.ok(f"cold start exited 0 from a clean directory: {result.stdout.strip()[:200]}")
+        if result is None:
+            shell = shutil.which("sh") or shutil.which("bash")
+            if shell is None:
+                report.skip(f"{DIAGNOSTIC_LABEL}: no POSIX shell on this machine")
+                return
+
+            workspace = Path(tmp) / "diagnostic"
+            workspace.mkdir()
+            entry.chmod(0o755)
+
+            result, error = launch([shell, str(entry), SMOKE_INSTRUCTION], workspace, parent)
+            if error:
+                report.fail(f"{DIAGNOSTIC_LABEL}: `sh {ENTRYPOINT}` {error}")
+                return
+            report.ok(
+                f"{DIAGNOSTIC_LABEL}: `sh {ENTRYPOINT}` works once the mode is forced, "
+                "so the script itself is sound"
+            )
 
         # Exit 0 alone does not prove the entrypoint carried the task text. The agent
         # prints a digest of what it received; if quoting mangled it, this is where
