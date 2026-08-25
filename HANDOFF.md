@@ -18,7 +18,7 @@
 | — | — | Импорт upstream snapshot (этап 0) | `agent/`, `local_task/`, upstream metadata | штатный README smoke | свободно |
 | — | — | Инвентаризация target image | runtime package/tool manifest | offline probe | свободно |
 | — | — | Submission builder + unpacked smoke | `run.sh`, build script, tests | zip ≤10 МБ, clean run | свободно |
-| Claude | main | Шаг 3: `preflight.py` + `tools.py` с bounded output | `agent/tools.py`, `agent/preflight.py` | unit + один public fixture | свободно |
+| — | — | Шаг 3: `preflight.py` + `tools.py` с bounded output | `agent/tools.py`, `agent/preflight.py` | unit + один public fixture | свободно |
 
 ## Блокеры и вопросы
 
