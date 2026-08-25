@@ -11,6 +11,7 @@
 | E001 | 2026-08-25 | см. карточку | Контракт упаковки: builder + preflight собранного архива | endpoint не вызывался | — | — | — | контракт зелёный, решаемость не измерялась |
 | E002 | 2026-08-25 | `70033bf` | Тот же архив, исполнен в ФС целевого образа (`chroot`, без сети) | образ `5a93249d…`, endpoint не вызывался | — | — | 367–416 мс на старт | старт зелёный, решаемость не измерялась |
 | E003 | 2026-08-25 | `ed01732` | Тот же архив под `docker run --network none` в целевом образе | образ `1324d7bb…c8a3`, amd64, endpoint не вызывался | — | — | старт в пределах секунды | старт зелёный; найден риск экстрактора |
+| E004 | 2026-08-25 | `fd640a8` | Первый прогон настоящей петли (`agent.loop`, не заглушки) в контейнере: endpoint отсутствует, и endpoint сконфигурирован но недостижим | образ `1324d7bb…c8a3`, amd64; endpoint не настоящий — `127.0.0.1:1` под `--network none` | 0 | 0 | 0.6 с / 12.7 с | петля не решала задачу; проверялась только деградация без endpoint и без сети |
 
 ## Per-task результаты
 
@@ -142,6 +143,88 @@
     чинится**. Требуется подтверждение способа распаковки у организаторов.
   - `nproc=8` и `memory.max=max` принадлежат хосту WSL2, а не оценочной microVM:
     настоящие лимиты по-прежнему не измерены.
+
+### E004 — первый прогон настоящей петли в контейнере целевого образа
+
+- Date/time (MSK): 2026-08-25, ночь AFK
+- Commit / dirty state: `fd640a8`, worktree чистый. Прогонялось дважды на двух
+  коммитах: сначала `91316ac` (архив `bdbf5eb9…f819`, 49 204 Б), затем, после того как
+  владелец `agent/loop.py` починил дефект из Limitations прежней версии этой записи
+  (`b4636c0`, разбор в `fd640a8`), пересобрано и перепрогнано на `fd640a8`
+  (`ad69d86f…4e7b`, 49 609 Б) — ниже приведены финальные числа по `fd640a8`
+- Upstream SHA: не импортирован
+- Image tag + digest: `secureintelligent/acp@sha256:1324d7bb140422a9929f5bc538f55ec0480d2731742effee02bf67604130c8a3`,
+  подтверждён `docker images --no-trunc` перед прогоном
+- Model and sampling params: настоящий endpoint не вызывался ни разу. Два прогона:
+  (a) переменные не заданы; (b) `LOCAL_AGENT_MODEL=small-local`,
+  `OPENAI_BASE_URL=http://127.0.0.1:1/v1` (недостижимый порт), `OPENAI_API_KEY`
+  фиктивный, `AGENT_TIMEOUT_S=90`
+- Hypothesis: с этим коммитом в архиве едет не заглушка (`agent/main.py` печатал
+  статус и выходил, см. E001 limitations), а настоящая `agent.loop.run`; она должна
+  безопасно деградировать без сети и без зависаний в обоих случаях
+- Command:
+
+  ```bash
+  python3 scripts/build_submission.py
+  python3 scripts/check_submission.py build/submission.zip
+  docker run --rm --network none \
+    -v .../submission.zip:/tmp/submission.zip:ro \
+    secureintelligent/acp@sha256:1324d7bb…c8a3 \
+    bash -c 'unzip -q /tmp/submission.zip && ./run.sh "<текст>"'
+  # повторено с -e AGENT_TIMEOUT_S=90 -e LOCAL_AGENT_MODEL=... -e OPENAI_BASE_URL=... -e OPENAI_API_KEY=...
+  ```
+
+- Environment/budgets: Docker 29.6.1 внутри WSL2 `ozon`; `--network none`; (a)
+  `AGENT_TIMEOUT_S` не задан → дефолт `600s`/резерв `120s`/`30` шагов; (b)
+  `AGENT_TIMEOUT_S=90s` → резерв `30s` (пол `VERIFY_RESERVE_MIN_S`)
+- Raw log path + SHA-256: вывод команд приведён в этой записи целиком, отдельный файл
+  не заводился — воспроизводится командой выше построчно
+- Submission zip SHA-256 + size: `ad69d86fded33cd94a57b44f2b697d4836956d5db563bcf550730b5a5afd4e7b`,
+  49 609 Б; `check_submission.py` — 5/5 PASS, включая cold-start контракт (доступен
+  только на POSIX, на Windows ранее был SKIP)
+- Result:
+  - **(a) Без переменных**: `agent ready: workspace=/app (image workdir /app) ...
+    endpoint=missing:LOCAL_AGENT_MODEL,OPENAI_BASE_URL`, exit `0`, строки
+    `agent done:` нет — код читает `missing` и выходит до создания `loop`/`client`,
+    ни одного сетевого вызова. `0.6` с.
+  - **(b) С переменными, но недостижимый endpoint**: `agent ready: ... budget=90s
+    reserve=30s ... endpoint=configured`, затем `agent done: solved=False
+    stop=llm-unusable stage=none deliverable=none steps=3/30 recovery=0 tokens=0`,
+    exit `0`. Ровно `MAX_CONSECUTIVE_LLM_FAILURES=3` неудачных попытки, затем честная
+    остановка — `12.7` с, не зависла и не досидела до `AGENT_TIMEOUT_S`. Этот сценарий
+    не создаёт артефакт и не проходит через `_finalise`, поэтому он не упражняет
+    дефект, найденный и закрытый ниже — числа (a)/(b) идентичны на обоих коммитах.
+  - Побочно подтверждено: при `AGENT_TIMEOUT_S=20` (< `VERIFY_RESERVE_MIN_S=30`) весь
+    бюджет уходит в резерв, `spendable_s()=0` с самого начала, `may_act()` сразу
+    `False` — петля не делает ни одного шага (`steps=0/30`) и не пытается звонить в
+    endpoint. Безопасное вырождение, а не баг, но короткий `AGENT_TIMEOUT_S` в тестах
+    надо выбирать `> VERIFY_RESERVE_MIN_S`, иначе тест ничего не проверяет.
+- Per-task failures: задачи не давались, только offline-деградация без/с
+  недостижимым endpoint
+- Conclusion and next experiment: **следующий гейт после G6 — B0.1, реальный публичный
+  прогон против настоящего `LOCAL_AGENT_MODEL`/`OPENAI_BASE_URL`.** Этой ночью он не
+  делался: нет гарантированного доступа к реальному endpoint без присмотра человека,
+  и жечь бюджет об недостижимый endpoint хуже, чем не пытаться (см. `PLAN.md`,
+  AFK-очередь). Контракт петли в контейнере теперь доказан с обеих сторон
+  (нет-конфига и есть-конфига-но-недостижим); чего он не доказывает — ниже
+- Limitations: **решаемость задач не измерена.** Ни одна из шести public tasks не
+  запускалась через настоящий цикл; `StubLlm`-тесты (`tests/test_loop.py`,
+  15 сценариев по записанной ленте) проверяют логику петли, но не поведение против
+  реального ответа модели. Пороги детекторов (`ACTION_HISTORY`, `EXACT_REPEAT_STOP`,
+  `ALTERNATING_STOP`, `NO_PROGRESS_STOP`, `REPEAT_FAILURE_BLOCK`) и
+  `OBSERVATION_WINDOW=8` — стартовые значения, не калибровка. `chroot`-риск
+  экстрактора из E003 не переоценивался. Найденный при разборе этого прогона дефект
+  (`_finalise` на `steps`/`budget`/`stuck` звал `verify(..., command="")`, что давало
+  `ok=True`/`stage=unverified` — то есть `Outcome.solved=True` — на любом непустом
+  артефакте, даже когда модель ни разу не пыталась `finish`) закрыт в `b4636c0` тем же
+  вечером: `solved=True` теперь возможен только через явный зелёный `finish`,
+  `_finalise` безусловно даёт `solved=False`, а `verify()` по-прежнему зовётся и
+  вердикт попадает в трассу — для разбора нуля, не как доказательство. Направление
+  ошибки выбрано осознанно: недооценивать собственный `solved` безопаснее, чем
+  показывать непроверенный успех (Harbor всё равно не читает `Outcome.solved`, только
+  среду, так что на реальный score это не влияло — влияло бы на наш собственный
+  B0.1/H0.2). Мутационное тестирование той же ночью нашло соседний дефект в защите
+  `verify-failed` от повторной перезаписи вердикта — тоже закрыт, тест добавлен.
   - Нет Harbor wrapper: контейнер запущен с `--entrypoint /bin/sh`, а не так, как
     его запускает оценивающая обвязка.
   - `workspace=/app` — намеренное поведение `resolve_workspace`, но в голом
