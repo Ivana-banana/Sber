@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from agent.state import AgentState, Budget
-from agent.verify import VerifyResult, verify
+from agent.verify import verify
 
 POSIX_ONLY = pytest.mark.skipif(os.name != "posix", reason="target image is Linux; /bin/sh absent on Windows")
 
@@ -30,12 +30,36 @@ def make_state(tmp_path: Path, *, total_s: float = 600.0, secrets: tuple[str, ..
     return state
 
 
+def test_a_workspace_relative_deliverable_resolves_against_the_workspace(tmp_path: Path) -> None:
+    (tmp_path / "bye.txt").write_text("Bye", encoding="utf-8")
+    state = make_state(tmp_path)
+
+    result = verify(state, deliverable=Path("bye.txt"), command="")
+
+    assert result.ok is True, "finish() gives a model-chosen path, which may be relative"
+    assert result.stage == "unverified"
+
+
+def test_a_deliverable_path_escaping_the_workspace_fails_at_existence(tmp_path: Path) -> None:
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("Bye", encoding="utf-8")
+    state = make_state(workspace)
+
+    result = verify(state, deliverable=Path("..") / "outside.txt", command="")
+
+    assert result.ok is False
+    assert result.stage == "existence"
+
+
 def test_a_missing_deliverable_fails_at_existence(tmp_path: Path) -> None:
     state = make_state(tmp_path)
 
     result = verify(state, deliverable=tmp_path / "report.json", command="")
 
-    assert result == VerifyResult(ok=False, stage="existence", detail=result.detail)
+    assert result.ok is False
+    assert result.stage == "existence"
     assert "report.json" in result.detail
 
 

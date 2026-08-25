@@ -46,8 +46,33 @@ class VerifyResult:
     detail: str
 
 
+def _resolve_within_workspace(path: Path, workspace: Path) -> Path | None:
+    """Join a workspace-relative path; refuse one that resolves outside it.
+
+    Mirrors `agent.tools.write_file`'s own guard. `finish(path, ...)` takes whatever
+    path shape the model gives it, and the model has no reliable way to know whether
+    the loop's cwd equals the workspace -- `agent/main.py`'s own `resolve_workspace`
+    exists because that assumption was already wrong once. `None` on escape rather
+    than raising, because a wrong or hostile path is data for `verify` to report, not
+    a reason to crash the run.
+    """
+    try:
+        root = workspace.resolve()
+        target = path if path.is_absolute() else root / path
+        target = target.resolve()
+    except OSError:
+        return None
+    if target != root and root not in target.parents:
+        return None
+    return target
+
+
 def verify(state: AgentState, *, deliverable: Path, command: str) -> VerifyResult:
     """Check a claimed deliverable the way a public verifier would.
+
+    `deliverable` may be relative to `state.workspace`, since that is what `finish`
+    hands the loop; it is resolved and confined the same way `write_file` confines a
+    write.
 
     The command's timeout comes from `state.budget.tool_timeout_s()`, never a tool
     default: a verify command is acting, and acting past the reserve is what
@@ -59,12 +84,14 @@ def verify(state: AgentState, *, deliverable: Path, command: str) -> VerifyResul
     output can (`tests/test_verify.py` caught this by putting the canary in the
     command, not the output).
     """
-    if not deliverable.is_file():
+    resolved = _resolve_within_workspace(deliverable, state.workspace)
+    if resolved is None or not resolved.is_file():
         return VerifyResult(
             ok=False,
             stage=STAGE_EXISTENCE,
             detail=f"expected deliverable not found: {deliverable}",
         )
+    deliverable = resolved
 
     if deliverable.stat().st_size == 0:
         return VerifyResult(
