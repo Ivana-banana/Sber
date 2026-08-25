@@ -13,7 +13,7 @@
 | 2 | WSL2 `ozon`, Ubuntu 22.04.5 | `wsl -d ozon` | распаковку настоящим `unzip`, exec-бит, `./run.sh` без единой починки, полный pytest на Linux | что это целевая среда: Python 3.10 против 3.12 и другой набор утилит |
 | 3 | Docker внутри WSL2 | `docker` 29.6.1 (Server, overlayfs) | старт в произвольном образе, в том числе `--network none` | что это **тот** образ, пока он не скачан по digest |
 | 3.5 | ФС `secureintelligent/acp`, `chroot` + `unshare --net` | выполнено внешним прогоном M12 | G1 (компоновка), контракт аргументов и exit code, dash-совместимость `run.sh`, состав утилит и Python — исполнением, а не по списку пакетов | что это контейнер: нет Harbor wrapper, cgroups, seccomp и смонтированных `/proc`, `/sys` |
-| 4 | `secureintelligent/acp` offline, `docker run --network none` | ещё не выполнялся | G6 (offline-старт в контейнере) и лимиты настоящей среды | решаемость: цикла в `agent/main.py` ещё нет |
+| 4 | `secureintelligent/acp` offline, `docker run --network none` | выполнен 2026-08-25, образ скачан по digest, см. `E003` | G6: contract-запуск `./run.sh` без `chmod`, побайтовый round-trip текста, коды выхода, обе компоновки, отсутствие сети | лимиты оценочной microVM (`nproc`/память принадлежат хосту WSL2), Harbor wrapper и решаемость |
 
 ## Проверено 2026-08-25
 
