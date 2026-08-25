@@ -18,6 +18,7 @@
 | — | — | Импорт upstream snapshot (этап 0) | `agent/`, `local_task/`, upstream metadata | штатный README smoke | свободно |
 | — | — | Инвентаризация target image | runtime package/tool manifest | offline probe | свободно |
 | — | — | Submission builder + unpacked smoke | `run.sh`, build script, tests | zip ≤10 МБ, clean run | свободно |
+| Claude | main | Шаг 3: `preflight.py` + `tools.py` с bounded output | `agent/tools.py`, `agent/preflight.py` | unit + один public fixture | свободно |
 
 ## Блокеры и вопросы
 
@@ -29,5 +30,9 @@
 
 | Дата | Владелец | Commit | Результат | Проверка / ограничения |
 |---|---|---|---|---|
+| 2026-08-25 | Claude | `e31f0c0` | Клиент endpoint: настройки из env, redaction секретов, липкая деградация протокола, dev-скрипт probe | `pytest -q` 45 passed, сети в тестах нет. Против настоящего endpoint не запускался: `DEFAULT_CALL_STYLE` — догадка до прогона `scripts/probe_endpoint.py` |
+| 2026-08-25 | Claude | `c0ee358` | Каркас: `limits`/`ports`/`state` + StubLlm на замороженных транскриптах | `pytest -q` 19 passed, в `agent/` только stdlib. Числа в `limits.py` не измерены |
+| 2026-08-25 | Claude | `c591975` | Промпт для Manus на поиск скиллов под хакатон | Контент-проверка; результатов поиска ещё нет |
+| 2026-08-25 | Claude | `1acfd9a` | Перенос архитектурных паттернов из AIOS/ozon/ai-v-massy/datacon_2026 | Статус документа — предложение; §8 ждёт решения команды |
 | 2026-08-24 | Codex | `66493b3` | Статический аудит upstream, выбор hybrid cascade, granular-план КТ №4 | Markdown/link checks и пересчёт матрицы зелёные; runtime не проверен — на этой машине нет Docker/uv |
 | 2026-08-24 | Codex | `c6e5150` | Стартовая документация и план | Контент-проверка; runtime ещё не запускался |
