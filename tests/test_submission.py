@@ -51,7 +51,7 @@ def test_archive_holds_only_what_the_allowlist_names(archive: Path) -> None:
 
     for name in names:
         top = name.split("/")[0]
-        assert top in {"run.sh", "agent"}, f"unexpected entry: {name}"
+        assert top in {"run.sh", "agent", "THIRD_PARTY_NOTICES.md"}, f"unexpected entry: {name}"
 
 
 def test_caches_and_compiled_files_never_ship(archive: Path) -> None:

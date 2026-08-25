@@ -32,7 +32,7 @@ if str(ROOT) not in sys.path:
 
 from agent import limits  # noqa: E402
 
-INCLUDE_FILES = ("run.sh",)
+INCLUDE_FILES = ("run.sh", "THIRD_PARTY_NOTICES.md")
 INCLUDE_TREES = ("agent",)
 
 SKIP_DIRS = frozenset({"__pycache__", ".git", ".venv", ".pytest_cache", ".ruff_cache"})
