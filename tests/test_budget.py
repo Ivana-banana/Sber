@@ -76,6 +76,20 @@ def test_recovery_is_bounded_by_code() -> None:
     assert not budget.may_recover()
 
 
+def test_recovery_may_not_start_inside_the_verifier_reserve() -> None:
+    """A recovery pass edits things, so it is acting and obeys the acting rule.
+
+    Recovery that begins once only the reserve is left spends the very time the
+    final verification needs, and a run that cannot verify cannot finish. The guard
+    must therefore be no weaker than `may_act`.
+    """
+    budget, clock = make_budget(600.0)
+    clock.advance(600.0 - budget.verify_reserve_s + 1.0)
+    assert budget.remaining_s() > 0, "the run itself has not run out yet"
+    assert not budget.may_act()
+    assert not budget.may_recover()
+
+
 def test_tool_timeout_shrinks_with_the_remaining_time() -> None:
     budget, clock = make_budget(600.0)
     assert budget.tool_timeout_s() == limits.TOOL_TIMEOUT_MAX_S

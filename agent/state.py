@@ -131,8 +131,14 @@ class Budget:
         return self.elapsed_s() >= self.early_deadline_s
 
     def may_recover(self) -> bool:
-        """Whether a directed retry after a red verifier is still allowed."""
-        return self.recovery_passes_used < self.max_recovery_passes and self.remaining_s() > 0
+        """Whether a directed retry after a red verifier is still allowed.
+
+        Recovery edits the workspace, so it is acting and obeys the acting rule. The
+        earlier `remaining_s() > 0` was weaker than `may_act`, which let a retry start
+        once only the reserve was left -- spending the very time the re-verification
+        needs. A run that cannot verify cannot finish.
+        """
+        return self.recovery_passes_used < self.max_recovery_passes and self.spendable_s() > 0
 
     def tool_timeout_s(self) -> float:
         """Timeout for one shell command: never long enough to eat the reserve."""
