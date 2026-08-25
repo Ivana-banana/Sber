@@ -115,3 +115,32 @@ def test_from_env_ignores_garbage_and_non_positive_values() -> None:
         budget = Budget.from_env({"AGENT_TIMEOUT_S": raw}, clock=clock)
         assert budget.total_s == limits.DEFAULT_TASK_TIMEOUT_S, raw
         assert budget.may_act(), "a broken value must not disable the guards"
+
+
+# --- the early deliverable checkpoint ---------------------------------------
+
+
+def test_the_checkpoint_comes_long_before_the_outer_bound() -> None:
+    budget, clock = make_budget(600.0)
+    assert not budget.past_early_deadline()
+
+    clock.advance(limits.EARLY_DELIVERABLE_DEADLINE_S - 1)
+    assert not budget.past_early_deadline()
+
+    clock.advance(2)
+    assert budget.past_early_deadline()
+    assert budget.may_act(), "producing an answer is work, not the end of the run"
+
+
+def test_the_checkpoint_precedes_the_smallest_observed_task_limit() -> None:
+    # The public set contains 120-second tasks and the runner never says which kind
+    # this is. An answer has to exist before that floor, with room for startup.
+    assert limits.EARLY_DELIVERABLE_DEADLINE_S < 120.0
+
+
+def test_a_budget_smaller_than_the_checkpoint_is_all_early_phase() -> None:
+    budget, clock = make_budget(60.0)
+    assert budget.early_deadline_s <= budget.total_s - budget.verify_reserve_s
+
+    clock.advance(budget.total_s - budget.verify_reserve_s)
+    assert budget.past_early_deadline(), "a short run must not spend everything exploring"

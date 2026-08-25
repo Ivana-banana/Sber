@@ -67,12 +67,17 @@ class Budget:
     bound, not a measurement, and must be reported as such."""
 
     verify_reserve_s: float = field(default=0.0)
+    early_deadline_s: float = field(default=limits.EARLY_DELIVERABLE_DEADLINE_S)
+    """When a checkable answer must exist, independent of the outer bound."""
 
     def __post_init__(self) -> None:
         if self.started_at == 0.0:
             self.started_at = self.clock()
         if self.verify_reserve_s == 0.0:
             self.verify_reserve_s = _reserve_for(self.total_s)
+        # A budget shorter than the checkpoint has no room for a two-phase plan; the
+        # whole run is then the early phase.
+        self.early_deadline_s = min(self.early_deadline_s, self.total_s - self.verify_reserve_s)
 
     @classmethod
     def from_env(
@@ -114,6 +119,16 @@ class Budget:
     def may_act(self) -> bool:
         """Whether another act/observe iteration may start."""
         return self.steps_used < self.max_steps and self.spendable_s() > 0
+
+    def past_early_deadline(self) -> bool:
+        """Whether a best-effort answer should already exist on disk.
+
+        The runner never tells us the real limit, and the public set contains both
+        120-second and 600-second tasks. Rather than betting on one of them, the loop
+        treats this moment as the point where exploring stops and producing starts:
+        past it, being killed costs the refinement, never the deliverable.
+        """
+        return self.elapsed_s() >= self.early_deadline_s
 
     def may_recover(self) -> bool:
         """Whether a directed retry after a red verifier is still allowed."""

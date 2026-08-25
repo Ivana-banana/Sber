@@ -344,7 +344,13 @@ class HttpLlm:
                     "function": {"name": TOOL_NAME, "parameters": schema},
                 }
             ]
-            body["tool_choice"] = {"type": "function", "function": {"name": TOOL_NAME}}
+            # `tool_choice` is deliberately not sent. The organisers' reference agent
+            # registers its tools through pydantic-ai without forcing a choice, and
+            # that is the configuration known to work against the evaluation endpoint.
+            # Sending it would add the one parameter Ollama documents as unsupported
+            # and that TGI expects in a different shape, buying a downgrade for
+            # transport reasons rather than model quality. If the model answers in
+            # prose instead of calling the tool, `_read_reply` recovers the JSON.
         elif self.style == JSON_SCHEMA:
             body["response_format"] = {
                 "type": "json_schema",

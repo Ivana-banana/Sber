@@ -144,7 +144,18 @@ def test_native_tool_call_arguments_become_the_reply() -> None:
     result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
     assert isinstance(result, LlmReply)
     assert json.loads(result.text) == {"action": "ls"}
-    assert endpoint.bodies[0]["tool_choice"]["function"]["name"] == "emit_action"
+    assert endpoint.bodies[0]["tools"][0]["function"]["name"] == "emit_action"
+
+
+def test_tool_choice_is_never_sent() -> None:
+    # The reference agent registers tools through pydantic-ai without forcing a
+    # choice, and that configuration is the one proven against the evaluation
+    # endpoint. Sending tool_choice adds the single parameter Ollama documents as
+    # unsupported and TGI expects in another shape, costing a rung for transport
+    # reasons rather than model quality.
+    client, endpoint, _ = make_client([(200, tool_reply('{"action":"ls"}'))])
+    client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+    assert "tool_choice" not in endpoint.bodies[0]
 
 
 def test_plain_completion_never_requests_a_response_format() -> None:

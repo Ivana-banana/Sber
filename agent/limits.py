@@ -5,29 +5,40 @@ down in two places is a defect, because the two copies drift and the diverged on
 the one that fires in production. Everything that limits time, size, steps or retries
 lives here and is imported, never re-typed.
 
-None of these values is measured yet. The task statement says every closed task has
-its own time and token limit but never gives the numbers, so these are conservative
-placeholders that must survive the first target-image baseline before they become
-decisions. Marked TBD in `docs/architecture.md`; do not quote them as measured.
+Some of these are now measurements and say so in their own docstring: the task
+timeouts, the image workdir, the archive limit and the starting call style all cite
+what they were read from. The rest -- step caps, output sizes, retry counts -- remain
+conservative placeholders that must survive the first target-image baseline before
+they become decisions. Do not quote a placeholder as if it were measured.
 """
 
 from __future__ import annotations
 
 # --- Wall clock -------------------------------------------------------------
 
-DEFAULT_TASK_TIMEOUT_S = 120.0
-"""Wall clock we assume for one task. The runner never tells us.
+DEFAULT_TASK_TIMEOUT_S = 600.0
+"""Outer bound on one task. The runner never tells us the real one.
 
 Measured from the public task configs: `[agent].timeout_sec` is 120 for the file
 tasks and 600 for the audit, fix and forensics tasks. Harbor applies it with
 `asyncio.wait_for` around the agent call and passes it to the agent neither as an
 argument nor as an environment variable.
 
-The smaller value is chosen deliberately. Assuming 600 on a 120-second task means
-being killed mid-work with nothing written, which is a zero; assuming 120 on a
-600-second task means stopping while time remains, which keeps whatever was already
-produced. The asymmetry only holds if the loop writes its deliverable early and then
-improves it -- that is a requirement on the loop, not a nice-to-have.
+Picking one of the two numbers is a false choice, and both options lose: assume 600
+on a 120-second task and we are killed mid-work; assume 120 on a 600-second task and
+we stop while five minutes of budget remain. So this constant is not the stop
+condition at all. It is the outer bound on how long we may keep *improving* an
+answer, while `EARLY_DELIVERABLE_DEADLINE_S` fixes when an answer must first exist.
+Being killed then costs the improvement, never the deliverable.
+"""
+
+EARLY_DELIVERABLE_DEADLINE_S = 90.0
+"""When a best-effort answer must already be written to disk.
+
+Sits below the smallest observed task limit (120 s) with margin for the runner's own
+startup. Past this point the loop stops exploring and produces something checkable,
+whatever it has. A task that turns out to be a 600-second one simply continues
+afterwards and refines what is already there.
 """
 
 TIMEOUT_ENV_NAMES: tuple[str, ...] = ("AGENT_TIMEOUT_S",)
@@ -81,12 +92,18 @@ Six because the worst legitimate path is one retry plus three rungs of fallback,
 a cap that cuts the ladder short would look like an unsupported endpoint."""
 
 DEFAULT_CALL_STYLE = "native_tools"
-"""Which request shape we start from. TBD: set from the target-model baseline.
+"""Which request shape we start from.
 
-Deliberately a constant and not a run-time probe. The evaluated model is the same for
+Not a guess. The organisers' own reference agent builds a pydantic-ai
+`OpenAIChatModel` and registers `bash`, `read_file`, `apply_diff` and `append_file`
+with `@agent.tool`, which is native function calling with no text fallback anywhere
+in it. An evaluation endpoint that did not support native tool calls would score
+their own baseline zero on every task, so the endpoint supports them.
+
+Deliberately a constant and not a run-time probe: the evaluated model is the same for
 all fifteen tasks, so probing on every run would pay for the same answer fifteen
 times in tokens, which is the second ranking criterion. Lazy fallback in `agent.llm`
-covers the case where this constant is wrong.
+covers the case where this reasoning is wrong.
 """
 
 # --- Where the task lives ----------------------------------------------------
