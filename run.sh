@@ -5,10 +5,15 @@
 # the one thing that must never fail to start. A missing interpreter here is a zero
 # on every task at once.
 #
-# The working directory is NOT changed. The runner starts us inside the task
-# workspace, and that path is the agent's whole world; cd-ing to the archive would
-# quietly point every relative lookup at our own source tree instead. The archive is
-# reached through PYTHONPATH instead.
+# The working directory is NOT changed, but not for the reason it might look like.
+# Harbor execs us with cwd set to the agent's own install directory
+# (/opt/harbor/local-agent), NOT the task's directory -- verified against Harbor
+# 0.16.1 and the competition wrapper. So cwd is our source tree, and treating it as
+# the workspace would point every relative lookup at ourselves. The agent resolves the
+# real workspace itself; see agent.main.resolve_workspace. cwd is preserved only so
+# that resolution still has the runner's own choice available as a last resort.
+#
+# The archive is reached through PYTHONPATH rather than cd for the same reason.
 #
 # "$@" rather than "$1" so an instruction containing quotes, newlines, backslashes or
 # leading dashes arrives intact.

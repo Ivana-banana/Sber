@@ -85,15 +85,32 @@ class LlmSettings:
         )
 
     def missing(self) -> tuple[str, ...]:
-        """Which required variables are empty. Checked before the first call."""
+        """Which genuinely required variables are empty. Checked before the first call.
+
+        The API key is deliberately not required. Local OpenAI-compatible servers are
+        keyless unless explicitly started otherwise: vLLM checks Bearer only with
+        `--api-key`/`VLLM_API_KEY`, SGLang defaults `--api-key` to None, llama.cpp
+        only enforces it when started with `--api-key`, LM Studio and a local Ollama
+        need none at all. Harbor also passes only non-empty variables through, so an
+        unset key reaches us as an absent variable rather than an empty string.
+
+        Treating that as a fatal misconfiguration would mean refusing to make a single
+        request against an ordinary local endpoint -- a zero on every task for a
+        condition that is normal.
+        """
         absent = []
         if not self.model:
             absent.append(limits.MODEL_ENV_NAME)
         if not self.base_url:
             absent.append(limits.BASE_URL_ENV_NAME)
-        if not self.api_key:
-            absent.append(limits.API_KEY_ENV_NAME)
         return tuple(absent)
+
+    def headers(self) -> dict[str, str]:
+        """Request headers. Authorization appears only when there is a key to send."""
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
 
     def sanitized_summary(self) -> dict[str, Any]:
         """Everything about the endpoint that is safe to write down."""
@@ -102,6 +119,90 @@ class LlmSettings:
             "base_url": self.base_url,
             "api_key_present": bool(self.api_key),
         }
+
+
+AUTH_STATUSES = frozenset({401, 403})
+NOT_FOUND_STATUSES = frozenset({404})
+PRESSURE_STATUSES = frozenset({408, 409, 425, 429})
+SHAPE_STATUSES = frozenset({400, 422, 501})
+
+FATAL = "fatal"
+RETRY = "retry"
+SHAPE = "shape"
+
+
+def classify_status(status: int) -> str:
+    """Decide what an HTTP status means for the ladder.
+
+    Treating every 4xx as "this request shape is unsupported" is wrong, and the
+    documented behaviour of local servers says so: Ollama returns 400 for malformed or
+    missing parameters, 404 for an unknown model and 429 for rate limiting, while
+    llama.cpp returns 401 for a bad key. Downgrading the protocol on a 429 would spend
+    three needless requests and then permanently cripple the client for a condition
+    that clears on its own.
+
+    No source in the reviewed set promises a specific status for an unsupported
+    parameter, so `SHAPE` is a candidate for stepping down, not proof of one.
+    """
+    if status in AUTH_STATUSES or status in NOT_FOUND_STATUSES:
+        return FATAL
+    if status in PRESSURE_STATUSES:
+        return RETRY
+    if status in SHAPE_STATUSES:
+        return SHAPE
+    if status >= 500:
+        # Retried once, then treated as a shape problem. A 500 is not always an
+        # outage: llama.cpp returns one when it fails to parse the model's tool-call
+        # arguments, which at temperature 0 repeats forever.
+        return RETRY
+    return FATAL
+
+
+def validate_against_schema(value: Any, schema: dict[str, Any]) -> str | None:
+    """Return a reason the value fails the schema, or None if it passes.
+
+    Deliberately partial: enough to catch what small models actually get wrong -- a
+    missing required key, an invented key, a value of the wrong primitive type -- and
+    no more. There is no jsonschema package in the target image and writing a full
+    validator would be building a library instead of using one.
+
+    This matters because syntactically valid JSON is not a correct answer. Tool calls
+    with mangled argument names are documented on vLLM, and without this check such a
+    reply is accepted as a success and never triggers the fallback.
+    """
+    if schema.get("type") == "object" and not isinstance(value, dict):
+        return f"expected an object, got {type(value).__name__}"
+    if not isinstance(value, dict):
+        return None
+
+    properties = schema.get("properties")
+    properties = properties if isinstance(properties, dict) else {}
+
+    for key in schema.get("required", []):
+        if key not in value:
+            return f"missing required key {key!r}"
+
+    if schema.get("additionalProperties") is False:
+        for key in value:
+            if key not in properties:
+                return f"unexpected key {key!r}"
+
+    kinds: dict[str, type | tuple[type, ...]] = {
+        "string": str,
+        "integer": int,
+        "number": (int, float),
+        "boolean": bool,
+        "array": list,
+        "object": dict,
+    }
+    for key, spec in properties.items():
+        if key not in value or not isinstance(spec, dict):
+            continue
+        expected = kinds.get(spec.get("type", ""))
+        if expected and not isinstance(value[key], expected):
+            return f"key {key!r} should be {spec['type']}"
+
+    return None
 
 
 def _extract_usage(payload: dict[str, Any]) -> tuple[int, int, bool]:
@@ -270,38 +371,87 @@ class HttpLlm:
             ]
         return body
 
+    def _read_tool_call(self, message: dict[str, Any]) -> str | None:
+        """Pull the arguments out of a tool call, across the dialects seen in the wild.
+
+        Three shapes are accepted because three shapes are documented:
+
+        * OpenAI and vLLM: `tool_calls` is a list, `function.arguments` is a JSON
+          string;
+        * TGI: `tool_calls` is a single object and the payload sits in
+          `function.parameters` as an object already;
+        * a parser failure on vLLM or LM Studio: `tool_calls` is empty and the call is
+          left in `message.content`, which the caller then salvages.
+
+        Rejecting the TGI shape as unusable would throw away a correct answer and
+        downgrade the protocol for no reason.
+        """
+        calls = message.get("tool_calls")
+        if isinstance(calls, dict):
+            calls = [calls]
+        if not isinstance(calls, list) or not calls:
+            return None
+
+        if len(calls) > 1:
+            # The protocol has exactly one action per turn. More than one means the
+            # model produced conflicting intent; taking the first silently would hide
+            # that, so it goes into the trace.
+            self._note("protocol", f"{len(calls)} tool calls returned, using the first")
+
+        function = calls[0].get("function") if isinstance(calls[0], dict) else None
+        if not isinstance(function, dict):
+            return None
+
+        arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            return arguments
+        if isinstance(arguments, dict):
+            return json.dumps(arguments)
+
+        parameters = function.get("parameters")
+        if isinstance(parameters, dict):
+            return json.dumps(parameters)
+        return None
+
     def _read_reply(
         self, payload: dict[str, Any], schema: dict[str, object] | None
-    ) -> tuple[str, bool] | None:
-        """Return (text, ok). None means the reply is unusable at this style."""
+    ) -> tuple[str | None, str]:
+        """Return (text, "") on success, or (None, reason) when the reply is unusable."""
         message = _first_message(payload)
         content = message.get("content")
         content = content if isinstance(content, str) else ""
 
         if schema is None:
-            return (content, True) if content else None
+            return (content, "") if content else ("", "empty content")
 
         if self.style == NATIVE_TOOLS:
-            calls = message.get("tool_calls")
-            if not isinstance(calls, list) or not calls:
-                return None
-            arguments = calls[0].get("function", {}).get("arguments")
-            if not isinstance(arguments, str):
-                return None
-            content = arguments
+            arguments = self._read_tool_call(message)
+            if arguments is not None:
+                content = arguments
+            elif content:
+                # The server's parser failed but the model did produce a call. Better
+                # to recover it than to change the prompt and hope.
+                self._note("protocol", "tool call arrived in content, not tool_calls")
+            else:
+                return None, "no tool call and no content"
 
         if not content:
-            return None
-        if self.style == TEXT:
-            salvaged = _salvage_json(content)
-            if salvaged is None:
-                return None
+            return None, "empty content"
+
+        salvaged = _salvage_json(content)
+        if salvaged is not None:
             content = salvaged
+
         try:
-            json.loads(content)
-        except json.JSONDecodeError:
-            return None
-        return content, True
+            parsed = json.loads(content)
+        except json.JSONDecodeError as exc:
+            return None, f"not json: {exc.msg}"
+
+        reason = validate_against_schema(parsed, dict(schema))
+        if reason is not None:
+            return None, f"schema: {reason}"
+
+        return content, ""
 
     def _attempt_loop(
         self,
@@ -320,12 +470,11 @@ class HttpLlm:
             return LlmError(reason="no time left for an llm call", retryable=False)
 
         url = f"{self.settings.base_url}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.settings.api_key}",
-        }
+        headers = self.settings.headers()
 
         last = LlmError(reason="no attempt was made", retryable=False)
+        retries_at_style = 0
+
         for attempt in range(limits.LLM_MAX_ATTEMPTS):
             body = self._build_body(messages, schema, max_output_tokens)
             try:
@@ -338,21 +487,33 @@ class HttpLlm:
                     return last
                 continue
 
-            if status >= 500:
-                last = LlmError(reason=f"endpoint returned {status}", retryable=True)
-                if not self._backoff(attempt):
-                    return last
-                continue
-
             if status >= 400:
                 detail = redact(raw.decode("utf-8", "replace"), self.settings.secrets)
+                verdict = classify_status(status)
                 last = LlmError(
                     reason=f"endpoint returned {status}: {detail[:ERROR_DETAIL_LIMIT]}",
-                    retryable=False,
+                    retryable=verdict == RETRY,
                 )
-                # A rejected request shape is exactly what the ladder is for; a
-                # rejected key or model is not, and must not be retried forever.
+
+                if verdict == FATAL:
+                    # A rejected key, an unknown model or an unknown route. The ladder
+                    # cannot fix any of them and retrying only spends the deadline.
+                    return last
+
+                if verdict == RETRY:
+                    # One retry at the current rung. A server error that survives it is
+                    # more likely a deterministic parser failure than an outage, so the
+                    # second response is to change the request shape, not repeat it.
+                    if retries_at_style == 0 and self._backoff(attempt):
+                        retries_at_style += 1
+                        continue
+                    if schema is not None and self._demote(f"persistent http {status}"):
+                        retries_at_style = 0
+                        continue
+                    return last
+
                 if schema is not None and self._demote(f"http {status}"):
+                    retries_at_style = 0
                     continue
                 return last
 
@@ -364,17 +525,17 @@ class HttpLlm:
                     return last
                 continue
 
-            read = self._read_reply(payload, schema)
-            if read is None:
-                last = LlmError(reason=f"unusable reply at style {self.style}", retryable=False)
-                if schema is not None and self._demote("unparseable reply"):
+            text, reason = self._read_reply(payload, schema)
+            if text is None:
+                last = LlmError(reason=f"{reason} at style {self.style}", retryable=False)
+                if schema is not None and self._demote(reason):
+                    retries_at_style = 0
                     continue
                 # Not retried on purpose. Sampling is at temperature 0 and the request
                 # would be byte-identical, so a repeat buys the same reply and pays
                 # for it in tokens, which is the second ranking criterion.
                 return last
 
-            text, _ = read
             prompt_tokens, completion_tokens, reported = _extract_usage(payload)
             return LlmReply(
                 text=text,

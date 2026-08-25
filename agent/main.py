@@ -16,6 +16,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from agent import limits
 from agent.llm import LlmSettings
 from agent.state import AgentState, Budget
 
@@ -37,13 +38,44 @@ def fingerprint(instruction: str) -> str:
     return hashlib.sha256(instruction.encode("utf-8")).hexdigest()[:FINGERPRINT_CHARS]
 
 
+def resolve_workspace(env: Mapping[str, str], cwd: Path, agent_dir: Path) -> tuple[Path, str]:
+    """Find the directory the task actually lives in. Returns (path, why).
+
+    The obvious answer -- "wherever the runner started us" -- is wrong here. Harbor
+    execs the agent with the working directory set to the agent's own install
+    directory, so `cwd` is this archive, not the task. Every public task keeps its
+    files under the image's WORKDIR instead, and the instructions reference absolute
+    paths there.
+
+    Nothing is hardcoded as the answer: each candidate is checked, the reason is
+    returned for the trace, and the runner's own cwd remains the final fallback so a
+    layout we have not seen still leaves the agent somewhere real.
+    """
+    declared = env.get(limits.WORKSPACE_ENV_NAME, "").strip()
+    if declared:
+        candidate = Path(declared)
+        if candidate.is_dir():
+            return candidate, f"{limits.WORKSPACE_ENV_NAME}={declared}"
+
+    image_workdir = Path(limits.IMAGE_WORKDIR)
+    if image_workdir.is_dir() and image_workdir.resolve() != agent_dir.resolve():
+        return image_workdir, f"image workdir {limits.IMAGE_WORKDIR}"
+
+    return cwd, "runner cwd (no better candidate)"
+
+
 def build_state(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> AgentState:
     """Assemble the run's state. Separate from `main` so tests do not need a shell."""
-    return AgentState(
+    agent_dir = Path(__file__).resolve().parent.parent
+    workspace, reason = resolve_workspace(env, cwd, agent_dir)
+
+    state = AgentState(
         instruction=argv[1],
-        workspace=cwd,
+        workspace=workspace,
         budget=Budget.from_env(env),
     )
+    state.record("preflight", "workspace", reason)
+    return state
 
 
 def main(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> int:
@@ -60,6 +92,7 @@ def main(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> int:
     # and no task content.
     print(
         f"agent ready: workspace={state.workspace} "
+        f"({state.audit[0].detail}) "
         f"instruction={len(state.instruction)}:{fingerprint(state.instruction)} "
         f"budget={state.budget.total_s:.0f}s "
         f"reserve={state.budget.verify_reserve_s:.0f}s "

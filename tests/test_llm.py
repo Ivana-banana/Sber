@@ -243,14 +243,32 @@ def test_a_rejected_key_is_not_laddered_away() -> None:
 # --- retries and timeouts ---------------------------------------------------
 
 
-def test_server_error_is_retried_then_reported() -> None:
+def test_server_error_is_retried_once_then_reported() -> None:
+    # Once, not until the schedule runs out. A 500 that survives one retry is more
+    # likely a deterministic parser failure than an outage -- llama.cpp returns one
+    # when it cannot parse the model's own tool arguments.
     client, endpoint, events = make_client([(503, b"upstream unavailable")])
     result = client.complete([], max_output_tokens=16)
 
     assert isinstance(result, LlmError)
     assert result.retryable
-    assert len(endpoint.bodies) == len(limits.LLM_RETRY_BACKOFF_S) + 1
-    assert [kind for kind, _ in events] == ["retry"] * len(limits.LLM_RETRY_BACKOFF_S)
+    assert len(endpoint.bodies) == 2
+    assert [kind for kind, _ in events] == ["retry"]
+
+
+def test_a_persistent_server_error_changes_the_request_shape() -> None:
+    client, _, events = make_client(
+        [
+            (503, b"parse failure"),
+            (503, b"parse failure"),
+            (200, chat_reply('{"action":"ls"}')),
+        ]
+    )
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert client.style == llm.JSON_SCHEMA
+    assert [kind for kind, _ in events] == ["retry", "degrade"]
 
 
 def test_transport_exception_becomes_an_error_not_a_crash() -> None:
@@ -293,3 +311,148 @@ def test_fallback_can_be_switched_off_for_measurement() -> None:
     assert client.style == llm.NATIVE_TOOLS, "the probe must report this rung, not a lower one"
     assert events == []
     assert len(endpoint.bodies) == 1
+
+
+# --- what the local-server survey corrected ---------------------------------
+
+
+def test_a_keyless_endpoint_is_usable() -> None:
+    # vLLM, SGLang and llama.cpp check Bearer only when started with --api-key;
+    # LM Studio and a local Ollama are keyless outright. Harbor also forwards only
+    # non-empty variables, so an unset key reaches us as an absent one. Refusing to
+    # call would be a zero on every task for a normal condition.
+    keyless = {"LOCAL_AGENT_MODEL": "small-local", "OPENAI_BASE_URL": "http://127.0.0.1:8000/v1"}
+    client, endpoint, _ = make_client([(200, chat_reply("answer"))], env=keyless)
+
+    assert client.settings.missing() == ()
+    result = client.complete([], max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert "Authorization" not in endpoint.headers[0], "no key means no empty Bearer header"
+
+
+def test_rate_limiting_waits_instead_of_crippling_the_protocol() -> None:
+    client, endpoint, events = make_client(
+        [(429, b'{"error":"rate limit exceeded"}'), (200, tool_reply('{"action":"ls"}'))]
+    )
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert client.style == llm.NATIVE_TOOLS, "a 429 says nothing about the request shape"
+    assert [kind for kind, _ in events] == ["retry"]
+    assert "tools" in endpoint.bodies[1], "the retry repeats the same shape"
+
+
+def test_an_unknown_model_is_fatal_and_not_laddered() -> None:
+    client, endpoint, events = make_client([(404, b'{"error":"model not found"}')])
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmError)
+    assert not result.retryable
+    assert client.style == llm.NATIVE_TOOLS
+    assert len(endpoint.bodies) == 1
+    assert events == []
+
+
+def test_a_rejected_key_is_fatal_even_for_a_structured_call() -> None:
+    client, endpoint, _ = make_client([(401, b'{"error":"invalid api key"}')])
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmError)
+    assert len(endpoint.bodies) == 1, "no key problem was ever solved by dropping a rung"
+
+
+def test_the_tgi_tool_call_shape_is_accepted() -> None:
+    # TGI answers with tool_calls as an object and the payload already parsed under
+    # function.parameters. Calling that unusable would discard a correct answer.
+    payload = json.dumps(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": {
+                            "function": {"name": "emit_action", "parameters": {"action": "ls"}}
+                        },
+                    }
+                }
+            ]
+        }
+    ).encode()
+    client, _, _ = make_client([(200, payload)])
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert json.loads(result.text) == {"action": "ls"}
+    assert client.style == llm.NATIVE_TOOLS, "a usable answer must not cost a rung"
+
+
+def test_a_tool_call_stranded_in_content_is_recovered() -> None:
+    # Documented on vLLM and LM Studio: when the server's parser fails, the call is
+    # left in message.content with tool_calls empty.
+    payload = json.dumps(
+        {"choices": [{"message": {"content": '{"action": "ls"}', "tool_calls": []}}]}
+    ).encode()
+    client, _, events = make_client([(200, payload)])
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert json.loads(result.text) == {"action": "ls"}
+    assert any(kind == "protocol" for kind, _ in events)
+
+
+def test_several_tool_calls_are_recorded_not_silently_dropped() -> None:
+    payload = json.dumps(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {"function": {"name": "emit_action", "arguments": '{"action":"ls"}'}},
+                            {"function": {"name": "emit_action", "arguments": '{"action":"rm"}'}},
+                        ],
+                    }
+                }
+            ]
+        }
+    ).encode()
+    client, _, events = make_client([(200, payload)])
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert json.loads(result.text) == {"action": "ls"}
+    assert any("2 tool calls" in detail for _, detail in events)
+
+
+def test_valid_json_that_breaks_the_schema_is_not_a_success() -> None:
+    # vLLM has documented tool calls that are valid JSON with mangled argument names.
+    # Without validation the loop would act on a reply that means nothing.
+    strict: dict[str, object] = {
+        "type": "object",
+        "properties": {"action": {"type": "string"}},
+        "required": ["action"],
+        "additionalProperties": False,
+    }
+    client, _, events = make_client(
+        [(200, chat_reply('{"actoin":"ls"}')), (200, chat_reply('{"action":"ls"}'))],
+        style=llm.JSON_SCHEMA,
+    )
+    result = client.complete_structured([], schema=strict, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert json.loads(result.text) == {"action": "ls"}
+    assert any("schema" in detail for _, detail in events)
+
+
+def test_a_wrong_primitive_type_is_caught() -> None:
+    typed: dict[str, object] = {
+        "type": "object",
+        "properties": {"steps": {"type": "integer"}},
+        "required": ["steps"],
+    }
+    client, _, _ = make_client([(200, chat_reply('{"steps":"three"}'))], style=llm.TEXT)
+    result = client.complete_structured([], schema=typed, max_output_tokens=16)
+
+    assert isinstance(result, LlmError)
+    assert "schema" in result.reason

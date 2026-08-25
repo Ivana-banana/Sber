@@ -15,15 +15,27 @@ from __future__ import annotations
 
 # --- Wall clock -------------------------------------------------------------
 
-DEFAULT_TASK_TIMEOUT_S = 600.0
-"""Assumed wall clock for one task when the runner tells us nothing. TBD."""
+DEFAULT_TASK_TIMEOUT_S = 120.0
+"""Wall clock we assume for one task. The runner never tells us.
+
+Measured from the public task configs: `[agent].timeout_sec` is 120 for the file
+tasks and 600 for the audit, fix and forensics tasks. Harbor applies it with
+`asyncio.wait_for` around the agent call and passes it to the agent neither as an
+argument nor as an environment variable.
+
+The smaller value is chosen deliberately. Assuming 600 on a 120-second task means
+being killed mid-work with nothing written, which is a zero; assuming 120 on a
+600-second task means stopping while time remains, which keeps whatever was already
+produced. The asymmetry only holds if the loop writes its deliverable early and then
+improves it -- that is a requirement on the loop, not a nice-to-have.
+"""
 
 TIMEOUT_ENV_NAMES: tuple[str, ...] = ("AGENT_TIMEOUT_S",)
 """Environment variables we read for the task deadline.
 
-Only our own name is listed. How the official runner communicates per-task limits is
-an open question in `PLAN.md`; guessing organiser variable names here would put an
-invented contract into production code.
+Only our own name, used by our harness and tests. Confirmed 25.08.2026 against Harbor
+0.16.1 and the competition wrapper: the runner passes the timeout to no one. There is
+nothing else to read.
 """
 
 VERIFY_RESERVE_FRACTION = 0.20
@@ -62,8 +74,11 @@ LLM_RETRY_BACKOFF_S: tuple[float, ...] = (1.0, 3.0)
 """Finite retry schedule for transport failures. A permanently broken endpoint must
 fail diagnosably rather than hang until the task times out."""
 
-LLM_MAX_ATTEMPTS = 4
-"""Total requests one logical call may cost, retries and protocol fallbacks included."""
+LLM_MAX_ATTEMPTS = 6
+"""Total requests one logical call may cost, retries and protocol fallbacks included.
+
+Six because the worst legitimate path is one retry plus three rungs of fallback, and
+a cap that cuts the ladder short would look like an unsupported endpoint."""
 
 DEFAULT_CALL_STYLE = "native_tools"
 """Which request shape we start from. TBD: set from the target-model baseline.
@@ -73,6 +88,20 @@ all fifteen tasks, so probing on every run would pay for the same answer fifteen
 times in tokens, which is the second ranking criterion. Lazy fallback in `agent.llm`
 covers the case where this constant is wrong.
 """
+
+# --- Where the task lives ----------------------------------------------------
+
+WORKSPACE_ENV_NAME = "LOCAL_AGENT_WORKDIR"
+"""Convention from the sample entrypoint, which exports it for its child process."""
+
+IMAGE_WORKDIR = "/app"
+"""`WORKDIR` of `secureintelligent/acp`, and where every public task keeps its files.
+
+Not a guess and not a path from anyone's laptop: read from the image config, and every
+public task Dockerfile is `FROM secureintelligent/acp:latest` with `WORKDIR /app`.
+Used only as a candidate; `agent.main.resolve_workspace` falls back when it is absent.
+"""
+
 
 # --- Packaging ---------------------------------------------------------------
 

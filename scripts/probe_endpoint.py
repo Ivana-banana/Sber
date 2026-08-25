@@ -60,6 +60,9 @@ def main() -> int:
     if missing:
         print(f"not configured: {', '.join(missing)}", file=sys.stderr)
         return 2
+    if not settings.api_key:
+        # Not an error: local servers are keyless unless started with --api-key.
+        print("note: no api key set, calling without an Authorization header")
 
     print(json.dumps(settings.sanitized_summary(), indent=2))
 
