@@ -24,6 +24,7 @@ class StubLlm:
 
     replies: list[LlmReply | LlmError] = field(default_factory=list)
     calls: list[list[Message]] = field(default_factory=list)
+    schemas: list[dict[str, object]] = field(default_factory=list)
 
     _next: int = 0
 
@@ -58,7 +59,24 @@ class StubLlm:
         messages: list[Message],
         *,
         max_output_tokens: int,
+        timeout_s: float | None = None,
     ) -> LlmReply | LlmError:
+        return self._next_reply(messages)
+
+    def complete_structured(
+        self,
+        messages: list[Message],
+        *,
+        schema: dict[str, object],
+        max_output_tokens: int,
+        timeout_s: float | None = None,
+    ) -> LlmReply | LlmError:
+        # The transcript is shared between both methods: a recording is a sequence of
+        # what the model said, not two independent streams.
+        self.schemas.append(schema)
+        return self._next_reply(messages)
+
+    def _next_reply(self, messages: list[Message]) -> LlmReply | LlmError:
         self.calls.append(list(messages))
         if self._next >= len(self.replies):
             # An exhausted transcript means the loop took a path the recording does

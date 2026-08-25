@@ -58,10 +58,21 @@ command and its failure usually live at opposite ends. Truncation is always mark
 
 LLM_TIMEOUT_S = 120.0
 LLM_MAX_OUTPUT_TOKENS = 2048
-LLM_MAX_RETRIES = 2
 LLM_RETRY_BACKOFF_S: tuple[float, ...] = (1.0, 3.0)
-"""Finite retry schedule. A permanently broken endpoint must fail diagnosably rather
-than hang until the task times out."""
+"""Finite retry schedule for transport failures. A permanently broken endpoint must
+fail diagnosably rather than hang until the task times out."""
+
+LLM_MAX_ATTEMPTS = 4
+"""Total requests one logical call may cost, retries and protocol fallbacks included."""
+
+DEFAULT_CALL_STYLE = "native_tools"
+"""Which request shape we start from. TBD: set from the target-model baseline.
+
+Deliberately a constant and not a run-time probe. The evaluated model is the same for
+all fifteen tasks, so probing on every run would pay for the same answer fifteen
+times in tokens, which is the second ranking criterion. Lazy fallback in `agent.llm`
+covers the case where this constant is wrong.
+"""
 
 MODEL_ENV_NAME = "LOCAL_AGENT_MODEL"
 BASE_URL_ENV_NAME = "OPENAI_BASE_URL"

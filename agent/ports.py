@@ -54,11 +54,29 @@ class LlmError:
 
 @runtime_checkable
 class LlmPort(Protocol):
-    """The only way the loop is allowed to reach a model."""
+    """The only way the loop is allowed to reach a model.
+
+    Two methods rather than one, same split as the datacon extraction client: free
+    text and a call whose reply is guaranteed to parse as JSON. They fail
+    differently, so collapsing them would push protocol handling into the loop.
+
+    `timeout_s` is passed in because the caller owns the deadline. A call allowed to
+    run longer than the time left is how a run turns into a timeout zero.
+    """
 
     def complete(
         self,
         messages: list[Message],
         *,
         max_output_tokens: int,
+        timeout_s: float | None = None,
+    ) -> LlmReply | LlmError: ...
+
+    def complete_structured(
+        self,
+        messages: list[Message],
+        *,
+        schema: dict[str, object],
+        max_output_tokens: int,
+        timeout_s: float | None = None,
     ) -> LlmReply | LlmError: ...
