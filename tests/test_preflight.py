@@ -126,3 +126,46 @@ def test_nested_directories_are_summarised_but_not_walked_forever(tmp_path: Path
 
     assert "level0/" in rendered
     assert "level9" not in rendered, "depth is capped; the loop searches the rest on demand"
+
+
+def test_an_absent_tool_with_a_verified_substitute_names_it(tmp_path: Path, monkeypatch) -> None:
+    # Reporting `sqlite3: absent` only tells the model its first plan is dead. The
+    # substitutes below were run inside secureintelligent/acp on 2026-08-26, so the
+    # brief can hand it the second plan in the same breath instead of paying for a
+    # failed call and a recovery step.
+    workspace = make_task(tmp_path)
+    monkeypatch.setattr("agent.preflight.shutil.which", lambda name: None)
+
+    rendered = inspect_environment(workspace, ENV).render()
+
+    assert "instead:" in rendered
+    assert "od -A x -t x1z" in rendered, "xxd"
+    assert "tcpdump -nn -r" in rendered, "tshark"
+    assert "nc -z" in rendered, "nmap"
+    assert "objdump -d" in rendered, "gdb"
+
+
+def test_a_tool_that_is_present_is_never_offered_a_substitute(tmp_path: Path, monkeypatch) -> None:
+    # The substitution line is priced on every request. On an image where the real
+    # utilities exist it must disappear entirely, not degrade to advice nobody needs.
+    workspace = make_task(tmp_path)
+    monkeypatch.setattr("agent.preflight.shutil.which", lambda name: f"/usr/bin/{name}")
+
+    rendered = inspect_environment(workspace, ENV).render()
+
+    assert "absent:" not in rendered
+    assert "instead:" not in rendered
+
+
+def test_only_a_measured_substitute_is_offered(tmp_path: Path, monkeypatch) -> None:
+    # A tool absent with no verified replacement is reported absent and nothing more.
+    # Guessing a second plan is worse than admitting there is none.
+    workspace = make_task(tmp_path)
+    monkeypatch.setattr(
+        "agent.preflight.shutil.which", lambda name: None if name == "jq" else f"/usr/bin/{name}"
+    )
+
+    rendered = inspect_environment(workspace, ENV).render()
+
+    assert "absent: jq" in rendered
+    assert "instead:" not in rendered

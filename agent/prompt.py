@@ -108,9 +108,11 @@ playbook (342) the resident static prompt is 775 tokens per call, above the 615 
 the M15 verdict projected. Tokens are the second ranking criterion, so this is a debt
 against the English-translation ablation, not a number to leave unsaid.
 
-tiktoken is absent from the target image, so this is a recorded measurement and not
-something computed at import time -- the same rule `agent/playbooks.py` follows. What
-regresses locally is the line and character count; see `tests/test_prompt.py`.
+tiktoken is installed in the target image but cannot encode there: it fetches the BPE
+file over the network on first use, and the run is offline. So this is a recorded
+measurement and not something computed at import time -- the same rule
+`agent/playbooks.py` follows, with the same corrected reason. What regresses locally
+is the line and character count; see `tests/test_prompt.py`.
 """
 
 
