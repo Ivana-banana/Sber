@@ -27,14 +27,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from agent.paths import permits
 from agent.redact import redact
 from agent.state import AgentState
 from agent.tools import run_shell
 
 STAGE_EXISTENCE = "existence"
+STAGE_REFUSED = "refused"
+STAGE_STALE = "stale"
 STAGE_NON_EMPTY = "non-empty"
 STAGE_COMMAND = "command"
 STAGE_UNVERIFIED = "unverified"
+
+STALE_GRACE_S = 2.0
+"""How far before the run's start a deliverable's mtime may sit and still count.
+
+Not zero: a filesystem's mtime resolution, a container clock and the moment the state
+object is built are all slightly apart, and a two-second grace costs nothing while a
+strict comparison would fail a file the run really did write."""
 
 
 @dataclass(frozen=True)
@@ -46,8 +56,10 @@ class VerifyResult:
     detail: str
 
 
-def _resolve_within_workspace(path: Path, workspace: Path) -> Path | None:
-    """Join a workspace-relative path; refuse one that resolves outside it.
+def _resolve_deliverable(
+    path: Path, workspace: Path, permitted: tuple[Path, ...] = ()
+) -> Path | None:
+    """Join a workspace-relative path; refuse one the run was never allowed to write.
 
     Mirrors `agent.tools.write_file`'s own guard. `finish(path, ...)` takes whatever
     path shape the model gives it, and the model has no reliable way to know whether
@@ -62,7 +74,7 @@ def _resolve_within_workspace(path: Path, workspace: Path) -> Path | None:
         target = target.resolve()
     except OSError:
         return None
-    if target != root and root not in target.parents:
+    if not permits(target, root, permitted):
         return None
     return target
 
@@ -72,7 +84,9 @@ def verify(state: AgentState, *, deliverable: Path, command: str) -> VerifyResul
 
     `deliverable` may be relative to `state.workspace`, since that is what `finish`
     hands the loop; it is resolved and confined the same way `write_file` confines a
-    write.
+    write -- inside the workspace, or at a path the task itself named. The two have to
+    agree: a deliverable the run was allowed to write but not allowed to check would
+    fail verification for existing in the place the task asked for.
 
     The command's timeout comes from `state.budget.tool_timeout_s()`, never a tool
     default: a verify command is acting, and acting past the reserve is what
@@ -84,14 +98,42 @@ def verify(state: AgentState, *, deliverable: Path, command: str) -> VerifyResul
     output can (`tests/test_verify.py` caught this by putting the canary in the
     command, not the output).
     """
-    resolved = _resolve_within_workspace(deliverable, state.workspace)
-    if resolved is None or not resolved.is_file():
+    resolved = _resolve_deliverable(deliverable, state.workspace, state.named_paths)
+    if resolved is None:
+        # Deliberately not "not found". Review caught the old message telling the model
+        # a file it had just created did not exist, because both cases collapsed into
+        # one string -- and `run_shell` is not confined, so creating the artifact at the
+        # right absolute path is something a run can really do. Being told the truth is
+        # what lets it correct the path instead of moving the file somewhere wrong.
+        return VerifyResult(
+            ok=False,
+            stage=STAGE_REFUSED,
+            detail=f"outside this run's write policy, not checked: {deliverable}",
+        )
+    if not resolved.is_file():
         return VerifyResult(
             ok=False,
             stage=STAGE_EXISTENCE,
             detail=f"expected deliverable not found: {deliverable}",
         )
     deliverable = resolved
+
+    try:
+        modified = deliverable.stat().st_mtime
+    except OSError as exc:
+        return VerifyResult(
+            ok=False, stage=STAGE_EXISTENCE, detail=f"{deliverable}: {exc.__class__.__name__}"
+        )
+    if modified < state.started_wall - STALE_GRACE_S:
+        # The task's own input file is a file that exists and is non-empty, so without
+        # this the cheapest way to "solve" anything is to point `finish` at something
+        # that was already there. Widening the write policy to paths the task names
+        # made that cheaper still: any existing file the text mentions would do.
+        return VerifyResult(
+            ok=False,
+            stage=STAGE_STALE,
+            detail=f"{deliverable} predates this run; it is not something this run produced",
+        )
 
     if deliverable.stat().st_size == 0:
         return VerifyResult(

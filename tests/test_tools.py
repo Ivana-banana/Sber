@@ -330,6 +330,39 @@ def test_write_file_refuses_to_leave_the_workspace(tmp_path: Path) -> None:
     assert not outside.exists(), "a refused write must not have happened first"
 
 
+def test_write_file_accepts_a_path_the_task_named(tmp_path: Path) -> None:
+    """E009's zero, at the tool boundary.
+
+    The workspace guess was the agent's own directory, the task named its deliverable
+    by absolute path, and confining the write to the workspace put a correct answer in
+    the wrong place -- where the run then verified it and reported success.
+    """
+    workspace = tmp_path / "opt" / "harbor" / "local-agent"
+    workspace.mkdir(parents=True)
+    target = tmp_path / "srv" / "bootstrap" / "farewell.marker"
+    target.parent.mkdir(parents=True)
+
+    result = write_file(target, "Ciao", workspace=workspace, permitted=(target,))
+
+    assert result.ok is True
+    assert target.read_bytes() == b"Ciao"
+
+
+def test_write_file_still_refuses_a_path_nobody_named(tmp_path: Path) -> None:
+    # Widening the policy to the task text must not widen it to everything: file
+    # contents and command output are not the task, and cannot move a write.
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    named = tmp_path / "srv" / "report.json"
+    named.parent.mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere.txt"
+
+    result = write_file(elsewhere, "x", workspace=workspace, permitted=(named,))
+
+    assert result.ok is False
+    assert not elsewhere.exists()
+
+
 def test_write_file_refuses_a_directory_without_raising(tmp_path: Path) -> None:
     (tmp_path / "adir").mkdir()
 

@@ -12,12 +12,11 @@ to report its own status, and must not raise on a malformed argument list.
 from __future__ import annotations
 
 import hashlib
-import re
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from agent import limits, loop, playbooks, preflight, redact, verify
+from agent import limits, loop, paths, playbooks, preflight, redact, verify
 from agent.llm import HttpLlm, LlmSettings
 from agent.ports import LlmPort
 from agent.state import AgentState, Budget
@@ -38,64 +37,6 @@ def fingerprint(instruction: str) -> str:
     is untrusted data and may be large.
     """
     return hashlib.sha256(instruction.encode("utf-8")).hexdigest()[:FINGERPRINT_CHARS]
-
-
-SYSTEM_ROOTS: tuple[str, ...] = (
-    "/bin", "/sbin", "/usr", "/lib", "/lib32", "/lib64", "/etc", "/proc", "/sys",
-    "/dev", "/run", "/boot", "/opt/harbor",
-)
-"""Directories a task text names without meaning "the task lives here".
-
-Instructions mention `/bin/sh`, `/usr/bin/python3` and `/etc/passwd` constantly. A
-tool is not a workspace, and treating one as such would point the whole run at the
-image's own system tree.
-"""
-
-INSTRUCTION_SCAN_CHARS = 4000
-PATH_TOKEN = re.compile(r"/[A-Za-z0-9._+-]+(?:/[A-Za-z0-9._+-]+)*")
-
-
-def directories_named_by(instruction: str, agent_dir: Path) -> list[Path]:
-    """Existing directories the task text points at, most-mentioned first.
-
-    Why the task text is allowed to decide anything at all. It is untrusted input and
-    is never followed as instructions -- but the deliverable path in it *is* the task,
-    and when the image has no `/app` there is nothing else that knows where the task
-    lives. The rule is deliberately narrow: a candidate must already exist on disk, so
-    nothing here creates or reaches anywhere new, and the choice is recorded in the
-    trace.
-
-    A named file that does not exist yet still counts through its parent, because the
-    deliverable is by definition the file the run has not written yet.
-    """
-    counts: dict[Path, int] = {}
-    for match in PATH_TOKEN.finditer(instruction[:INSTRUCTION_SCAN_CHARS]):
-        token = match.group().rstrip("./-")
-        if not token or token == "/":
-            continue
-        candidate = Path(token)
-        if not candidate.is_dir():
-            candidate = candidate.parent
-        if not candidate.is_dir() or candidate == Path(candidate.root):
-            continue
-        try:
-            resolved = candidate.resolve()
-        except OSError:
-            continue
-        if any(
-            resolved == Path(root) or Path(root) in resolved.parents
-            for root in SYSTEM_ROOTS
-        ):
-            continue
-        # Our own tree is never the task, whether the text names it by mistake or on
-        # purpose. Ancestors of it are excluded for the same reason: `/opt` is not a
-        # workspace just because we were installed under it.
-        agent_root = agent_dir.resolve()
-        if resolved == agent_root or agent_root in resolved.parents or resolved in agent_root.parents:
-            continue
-        counts[resolved] = counts.get(resolved, 0) + 1
-
-    return sorted(counts, key=lambda path: -counts[path])
 
 
 def resolve_workspace(
@@ -123,14 +64,23 @@ def resolve_workspace(
     if image_workdir.is_dir() and image_workdir.resolve() != agent_dir.resolve():
         return image_workdir, f"image workdir {limits.IMAGE_WORKDIR}"
 
-    # Measured in E009: when the image WORKDIR is not `/app`, the two candidates above
-    # both miss and cwd is our own install directory. The run then writes its
-    # deliverable into the agent's source tree, verifies it there and reports success
-    # against a verifier that scores zero. The task text is the only remaining thing
-    # that knows where the task is.
-    named = directories_named_by(instruction, agent_dir)
+    # cwd before the task text, and only skipped when it is our own install directory.
+    # A runner that starts us inside the task -- a manual run, a different harness, a
+    # future contract without Harbor -- already knows the answer, and review caught the
+    # first version of this overruling it with a guess.
+    if cwd.resolve() != agent_dir.resolve():
+        return cwd, "runner cwd"
+
+    # Measured in E009: under the Harbor contract cwd *is* our own install directory,
+    # so with no `/app` the run wrote its deliverable into the agent's source tree,
+    # verified it there and reported success against a verifier that scored zero. The
+    # task text is the only remaining thing that knows where the task is.
+    named = paths.workspace_candidates(instruction, agent_dir)
     if named:
-        return named[0], f"directory named by the task text ({named[0]})"
+        # The path itself is already printed as `workspace=`; the reason says how many
+        # candidates competed, so a zero can be read back as "there was only one" or
+        # "it won over another" without echoing more of the task text.
+        return named[0], f"named by the task text ({len(named)} candidate(s))"
 
     return cwd, "runner cwd (no better candidate)"
 
@@ -143,6 +93,7 @@ def build_state(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> Agent
     state = AgentState(
         instruction=argv[1],
         workspace=workspace,
+        named_paths=paths.writable_paths(argv[1], agent_dir),
         budget=Budget.from_env(env),
         secrets=redact.secrets_from_env(env),
     )

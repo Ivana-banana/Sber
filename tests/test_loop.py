@@ -460,3 +460,29 @@ def test_write_file_without_a_path_never_reaches_the_filesystem(tmp_path: Path) 
 
     assert any("write_file needs `path`" in text for text in outcome.observations)
     assert sorted(entry.name for entry in tmp_path.iterdir()) == before
+
+
+def test_the_loop_hands_the_write_policy_to_the_tool(tmp_path: Path) -> None:
+    """Записанные в задаче пути должны доходить до `write_file`, а не оставаться в state.
+
+    Ровно этот провод и есть исправление E009: workspace был вычислен как собственный
+    каталог агента, задача назвала артефакт абсолютным путём, и запрет записи вне
+    workspace превращал верное действие в артефакт не в том месте. Без этого теста
+    провод можно удалить, и весь сьют останется зелёным — проверено мутацией.
+    """
+    workspace = tmp_path / "opt" / "harbor" / "local-agent"
+    workspace.mkdir(parents=True)
+    target = tmp_path / "srv" / "bootstrap" / "farewell.marker"
+    target.parent.mkdir(parents=True)
+
+    state = AgentState(
+        instruction=f"Создай {target} с содержимым Ciao.",
+        workspace=workspace,
+        budget=Budget(total_s=600.0, clock=lambda: 0.0),
+        named_paths=(target,),
+    )
+    llm = StubLlm(replies=[action("write_file", path=str(target), content="Ciao")] * 3)
+
+    run(state, llm)
+
+    assert target.read_bytes() == b"Ciao", "запись по названному задачей пути была отклонена"

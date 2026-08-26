@@ -174,6 +174,50 @@ def test_system_directories_are_not_mistaken_for_the_task(tmp_path, monkeypatch)
     assert workspace == agent_dir
 
 
+def test_a_url_is_not_a_filesystem_path(tmp_path, monkeypatch) -> None:
+    """`http://127.0.0.1:8080/tmp/report` must not make `/tmp` the workspace.
+
+    Found by review, then reproduced: the colon before a port ends the token, so the
+    tail of a URL reads as an ordinary absolute path. Network tasks name URLs in almost
+    every instruction, and the behaviour even depended on whether a port was given.
+    """
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.setattr(limits, "IMAGE_WORKDIR", str(tmp_path / "absent"))
+    real = tmp_path / "case" / "evidence"
+    real.mkdir(parents=True)
+
+    workspace, _ = resolve_workspace(
+        {}, cwd=agent_dir, agent_dir=agent_dir,
+        instruction=(
+            f"Query http://127.0.0.1:8080/tmp/report and http://api:9000/var/status, "
+            f"then write your findings under {real}/report.json."
+        ),
+    )
+
+    assert workspace == real
+
+
+def test_a_bare_top_level_directory_is_not_a_workspace(tmp_path, monkeypatch) -> None:
+    """A task lives in a directory someone made for it, not in a mount point.
+
+    `/tmp`, `/var`, `/root`, `/opt`, `/srv`, `/mnt` belong to the image. Letting the
+    task text select one would hand `write_file` the whole subtree and put its listing
+    in the prompt through the environment brief.
+    """
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.setattr(limits, "IMAGE_WORKDIR", str(tmp_path / "absent"))
+
+    for top in ("/tmp", "/var", "/srv", "/opt", "/root"):
+        workspace, why = resolve_workspace(
+            {}, cwd=agent_dir, agent_dir=agent_dir,
+            instruction=f"Leave the summary in {top}/summary.txt when you are done.",
+        )
+        assert workspace == agent_dir, f"{top} was accepted as a workspace"
+        assert "cwd" in why
+
+
 def test_the_directory_the_task_names_most_wins(tmp_path, monkeypatch) -> None:
     quiet = tmp_path / "quiet"
     quiet.mkdir()
@@ -211,6 +255,18 @@ def test_resolution_always_lands_somewhere_real(tmp_path: Path, monkeypatch) -> 
     monkeypatch.setattr(limits, "IMAGE_WORKDIR", str(tmp_path / "definitely-absent"))
     workspace, _ = resolve_workspace({}, cwd=tmp_path, agent_dir=tmp_path)
     assert workspace.is_dir()
+
+
+def test_the_paths_the_task_names_reach_the_state(tmp_path: Path, monkeypatch) -> None:
+    # The write policy lives on the state and is read by the tool and the verifier.
+    # If it is never populated, both fall back to workspace-only confinement and E009
+    # comes straight back.
+    monkeypatch.setattr(limits, "IMAGE_WORKDIR", str(tmp_path / "absent"))
+    state = build_state(
+        ["run.sh", "Create /srv/bootstrap/farewell.marker containing Ciao."], {}, tmp_path
+    )
+
+    assert Path("/srv/bootstrap/farewell.marker") in state.named_paths
 
 
 def test_the_chosen_workspace_and_its_reason_reach_the_trace(tmp_path: Path, monkeypatch) -> None:

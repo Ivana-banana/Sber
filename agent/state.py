@@ -210,6 +210,22 @@ class AgentState:
     workspace: Path
     budget: Budget
 
+    started_wall: float = field(default_factory=time.time)
+    """When this run began, in wall clock, so a deliverable can be dated against it.
+
+    Monotonic time is the right clock for budgets and the wrong one here: a file's
+    mtime is wall clock, and the two cannot be compared.
+    """
+
+    named_paths: tuple[Path, ...] = ()
+    """Absolute paths the task text names, in the order it names them.
+
+    The write policy, not a suggestion: a path the task itself names is part of the
+    task's contract, and refusing to write there turns a correct action into a wrong
+    artifact (measured in E009). Nothing the *environment* says reaches this tuple --
+    file contents, logs and command output are not the task text.
+    """
+
     hypothesis: str = ""
     """Current guess about what the task is and how it will be checked."""
 

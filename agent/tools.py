@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent import limits
+from agent.paths import permits
 from agent.redact import redact
 
 CHUNK_BYTES = 65536
@@ -229,6 +230,7 @@ def write_file(
     content: str,
     *,
     workspace: Path,
+    permitted: tuple[Path, ...] = (),
     secrets: Iterable[str] = (),
 ) -> ToolResult:
     """Write exactly `content` to `path`, creating parents, replacing what was there.
@@ -243,9 +245,12 @@ def write_file(
     contains the characters that break quoting: newlines, quotes, dollars, backslashes.
     A quoting bug there produces a plausible-looking file with the wrong bytes.
 
-    The write is confined to the workspace. `resolve_workspace` is our own contract for
-    where the task lives, so a path escaping it is either a mistake or the file content
-    steering the agent -- and task files are untrusted data.
+    The write is confined to the workspace and to the paths the task text names.
+    `resolve_workspace` is a guess about where the task lives and E009 showed it can be
+    wrong, so confining to it alone refuses the one path the task actually asked for
+    and leaves the answer in the wrong place. What stays refused is everything neither
+    the workspace nor the task named: a file's contents, a log line or a command's
+    output cannot move a write, because none of them is the instruction.
     """
     try:
         root = workspace.resolve()
@@ -256,11 +261,11 @@ def write_file(
     except OSError as exc:
         return ToolResult(name="write_file", ok=False, detail=f"bad path: {exc}")
 
-    if target != root and root not in target.parents:
+    if not permits(target, root, permitted):
         return ToolResult(
             name="write_file",
             ok=False,
-            detail=f"refused: {target} is outside the workspace {root}",
+            detail=f"refused: {target} is outside the workspace {root} and unnamed by the task",
         )
 
     started = time.monotonic()

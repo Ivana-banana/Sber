@@ -349,7 +349,11 @@ def _execute(tool: str, args: dict[str, object], state: AgentState) -> tools.Too
 
     target = Path(str(args["path"]))
     result = tools.write_file(
-        target, str(args["content"]), workspace=state.workspace, secrets=secrets
+        target,
+        str(args["content"]),
+        workspace=state.workspace,
+        permitted=state.named_paths,
+        secrets=secrets,
     )
     if result.ok and target not in state.artifacts:
         # Tracked as the model named it, not as the filesystem resolves it: the

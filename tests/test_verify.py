@@ -40,7 +40,14 @@ def test_a_workspace_relative_deliverable_resolves_against_the_workspace(tmp_pat
     assert result.stage == "unverified"
 
 
-def test_a_deliverable_path_escaping_the_workspace_fails_at_existence(tmp_path: Path) -> None:
+def test_a_deliverable_path_escaping_the_write_policy_says_so(tmp_path: Path) -> None:
+    """Refused and absent are different facts, and the model acts on the difference.
+
+    They used to share one message. `run_shell` is not confined to the workspace, so a
+    run can genuinely create the artifact at the right absolute path -- and then be
+    told the file it just wrote does not exist, which argues it into moving a correct
+    answer somewhere wrong.
+    """
     workspace = tmp_path / "app"
     workspace.mkdir()
     outside = tmp_path / "outside.txt"
@@ -50,7 +57,8 @@ def test_a_deliverable_path_escaping_the_workspace_fails_at_existence(tmp_path: 
     result = verify(state, deliverable=Path("..") / "outside.txt", command="")
 
     assert result.ok is False
-    assert result.stage == "existence"
+    assert result.stage == "refused"
+    assert "not checked" in result.detail
 
 
 def test_a_missing_deliverable_fails_at_existence(tmp_path: Path) -> None:
@@ -161,3 +169,82 @@ def test_secrets_configured_on_the_state_do_not_reach_the_detail(tmp_path: Path)
     result = verify(state, deliverable=target, command="echo sk-canary-0123456789; exit 1")
 
     assert "sk-canary-0123456789" not in result.detail
+
+
+def test_a_deliverable_the_task_named_verifies_outside_the_workspace(tmp_path: Path) -> None:
+    """Write policy and verification have to agree on where the answer may live.
+
+    E009: the workspace was resolved to the agent's own directory, so a deliverable
+    written where the task asked for it would have been refused here for existing in
+    the right place. The two guards read the same policy now.
+    """
+    workspace = tmp_path / "opt" / "harbor" / "local-agent"
+    workspace.mkdir(parents=True)
+    named = tmp_path / "srv" / "bootstrap" / "farewell.marker"
+    named.parent.mkdir(parents=True)
+    named.write_bytes(b"Ciao")
+
+    state = AgentState(
+        instruction=f"Create {named} containing exactly Ciao.",
+        workspace=workspace,
+        budget=Budget(total_s=600.0, clock=lambda: 0.0),
+        named_paths=(named,),
+    )
+
+    result = verify(state, deliverable=named, command="")
+
+    assert result.ok is True
+    assert result.stage == "unverified"
+
+
+def test_a_deliverable_nobody_named_is_still_refused(tmp_path: Path) -> None:
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    elsewhere = tmp_path / "elsewhere" / "loot.txt"
+    elsewhere.parent.mkdir(parents=True)
+    elsewhere.write_text("x", encoding="utf-8")
+
+    state = AgentState(
+        instruction="Write /app/report.json with the findings.",
+        workspace=workspace,
+        budget=Budget(total_s=600.0, clock=lambda: 0.0),
+        named_paths=(Path("/app/report.json"),),
+    )
+
+    result = verify(state, deliverable=elsewhere, command="")
+
+    assert result.ok is False
+    assert result.stage == "refused"
+
+
+def test_a_file_that_predates_the_run_is_not_a_deliverable(tmp_path: Path) -> None:
+    """The cheapest way to fake success is to point `finish` at the task's own input.
+
+    Every input file exists and is non-empty, which is all the earlier stages asked
+    for. Widening the write policy to paths the task names made it cheaper still: any
+    existing file the text mentions would have passed.
+    """
+    import os
+    import time
+
+    stale = tmp_path / "input.py"
+    stale.write_text("def add(a, b): return a - b\n", encoding="utf-8")
+    long_ago = time.time() - 3600
+    os.utime(stale, (long_ago, long_ago))
+    state = make_state(tmp_path)
+
+    result = verify(state, deliverable=stale, command="")
+
+    assert result.ok is False
+    assert result.stage == "stale"
+
+
+def test_a_file_this_run_wrote_is_accepted(tmp_path: Path) -> None:
+    fresh = tmp_path / "report.json"
+    fresh.write_text('{"findings": []}', encoding="utf-8")
+    state = make_state(tmp_path)
+
+    result = verify(state, deliverable=fresh, command="")
+
+    assert result.ok is True
+    assert result.stage == "unverified"
