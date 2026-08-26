@@ -230,3 +230,31 @@ def test_a_path_the_task_names_is_still_in_the_policy(tmp_path: Path) -> None:
     target.parent.mkdir(parents=True)
 
     assert writable_paths(f"Create {target} containing Ciao.", agent_dir) == (target,)
+
+
+def test_a_slash_prefixed_word_is_not_a_writable_path() -> None:
+    """Instructions are full of things that look like paths and are not.
+
+    `/user` as a scope name, `/constants` as a module, `/tests` as a directory that
+    exists only in the prose. Each of them was writable -- and at the root of the
+    filesystem, since `permits` matches a named path exactly whether or not it exists.
+    """
+    agent_dir = Path("/opt/harbor/local-agent")
+    policy = writable_paths(
+        "The cache key ignores the /user scope; see /constants and /tests.", agent_dir
+    )
+
+    assert policy == ()
+
+
+def test_a_deliverable_in_a_directory_that_does_not_exist_yet_is_writable(tmp_path: Path) -> None:
+    # "Create the directory and write the report into it" must keep working: the rule
+    # is about the nearest real ancestor, not about the file already being there.
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    base = tmp_path / "app"
+    base.mkdir()
+
+    assert writable_paths(f"Write {base}/reports/summary.json", agent_dir) == (
+        base / "reports" / "summary.json",
+    )

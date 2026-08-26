@@ -214,6 +214,15 @@ def writable_paths(instruction: str, agent_dir: Path) -> tuple[Path, ...]:
             continue
         if resolved == agent_root or agent_root in resolved.parents:
             continue
+        # The deliverable's directory has to be somewhere real. Instructions are full
+        # of slash-prefixed words that are not paths at all -- a `/user` scope, a
+        # `/constants` module, a `/tests` directory that only exists in the prose --
+        # and every one of them was writable, at the root of the filesystem. Walking to
+        # the nearest existing ancestor keeps "create the directory and write into it"
+        # working, while refusing anything whose only real ancestor is `/`.
+        anchor = _existing_ancestor(path)
+        if anchor is None or len(anchor.parts) - 1 < 1:
+            continue
         allowed.append(path)
     return tuple(allowed)
 
