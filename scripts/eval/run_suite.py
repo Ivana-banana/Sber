@@ -177,7 +177,7 @@ class Runner:
         self.logs = Path(args.out) / "logs"
         self.logs.mkdir(parents=True, exist_ok=True)
 
-    def counter_call(self, path: str, method: str) -> dict[str, int] | None:
+    def counter_call(self, path: str, method: str) -> dict[str, object] | None:
         """Talk to the counting proxy through `docker exec`, not over the network.
 
         The proxy lives on an `--internal` network and the host firewall drops traffic
@@ -334,8 +334,8 @@ class Runner:
             proc, wall, killed = self.exec_agent(container, spec)
             counters = self.counter_call("/__counters", "GET")
             if counters:
-                base.endpoint_tokens = counters.get("total_tokens")
-                base.endpoint_requests = counters.get("requests")
+                base.endpoint_tokens = counters.get("total_tokens")  # type: ignore[assignment]
+                base.endpoint_requests = counters.get("requests")  # type: ignore[assignment]
             base.wall_s = round(wall, 1)
             output = "" if proc is None else (proc.stdout or "") + (proc.stderr or "")
             log_file = self.logs / f"{spec.name}.r{repeat}.log"
@@ -356,6 +356,17 @@ class Runner:
             ready = READY_LINE.search(output)
             if ready:
                 base.workspace = ready["workspace"]
+
+            trace = self.counter_call("/__exchanges", "GET")
+            if trace and trace.get("exchanges"):
+                (self.logs / f"{spec.name}.r{repeat}.trace").write_text(
+                    "\n".join(
+                        f"--- call {item.get('call')} ---\n"
+                        f"{item.get('content') or item.get('tool_calls')}"
+                        for item in trace["exchanges"]
+                    ),
+                    encoding="utf-8",
+                )
 
             reward, note = self.verify(container, spec)
             base.reward = reward

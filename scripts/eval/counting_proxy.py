@@ -11,6 +11,13 @@ how the run ends.
 It is also an independent check on the agent's own accounting. Two numbers that agree
 are two measurements; one number is a claim.
 
+The same position makes it the only place the run's actions are visible without adding
+anything to the archive. E009 could say that eleven runs were killed with nothing on
+disk, and nothing at all about what they spent those steps doing -- the agent prints two
+status lines and no trace. Every request carries the whole conversation and every reply
+carries the action, so recording the last exchange of each call reconstructs the
+trajectory from outside the agent.
+
 Only stdlib. Deliberately non-streaming: the agent asks for whole completions, so the
 proxy can buffer a response, read its `usage`, and pass the bytes on untouched. If the
 client ever starts streaming, the counters here would silently stop seeing usage, so
@@ -26,8 +33,14 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+EXCHANGES_PATH = "/__exchanges"
 COUNTERS_PATH = "/__counters"
 RESET_PATH = "/__reset"
+MAX_EXCHANGES = 200
+EXCHANGE_CHARS = 2000
+"""Bounds on what one task's trace may hold. A run is capped at 30 steps, so 200 leaves
+room for retries and protocol fallbacks without letting a wedged run fill memory."""
+
 UPSTREAM_TIMEOUT_S = 900.0
 """Long, because one CPU-bound completion legitimately takes minutes here. A proxy that
 gives up first would be recorded as an endpoint failure the endpoint never had."""
@@ -39,6 +52,7 @@ class Counters:
         self._zero()
 
     def _zero(self) -> None:
+        self.exchanges: list[dict[str, object]] = []
         self.requests = 0
         self.input_tokens = 0
         self.output_tokens = 0
@@ -61,12 +75,35 @@ class Counters:
             if not usage:
                 self.responses_without_usage += 1
                 return
+            self.remember(payload)
             self.input_tokens += int(usage.get("prompt_tokens", 0))
             self.output_tokens += int(usage.get("completion_tokens", 0))
             self.total_tokens += int(
                 usage.get("total_tokens", 0)
                 or usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
             )
+
+    def remember(self, payload: bytes) -> None:
+        """Keep the model's reply -- the action it chose -- for the run's trace.
+
+        Called with the lock already held. Only the assistant's own text: the request
+        carries the system prompt and the whole observation history on every call, and
+        storing that would be storing the same kilobytes tens of times per task.
+        """
+        if len(self.exchanges) >= MAX_EXCHANGES:
+            return
+        try:
+            choices = json.loads(payload).get("choices") or []
+            message = choices[0].get("message", {}) if choices else {}
+        except (ValueError, AttributeError, IndexError, KeyError):
+            return
+        self.exchanges.append(
+            {
+                "call": self.requests,
+                "content": str(message.get("content") or "")[:EXCHANGE_CHARS],
+                "tool_calls": str(message.get("tool_calls") or "")[:EXCHANGE_CHARS],
+            }
+        )
 
     def error(self) -> None:
         with self.lock:
@@ -106,6 +143,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - name fixed by BaseHTTPRequestHandler
         if self.path == COUNTERS_PATH:
             self._json(COUNTERS.snapshot())
+            return
+        if self.path == EXCHANGES_PATH:
+            with COUNTERS.lock:
+                self._json({"exchanges": list(COUNTERS.exchanges)})
             return
         self._forward(b"")
 
