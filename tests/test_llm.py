@@ -550,3 +550,31 @@ def test_a_wrong_primitive_type_is_caught() -> None:
 
     assert isinstance(result, LlmError)
     assert "schema" in result.reason
+
+
+def test_the_llama_cpp_flat_tool_call_shape_is_accepted() -> None:
+    # llama.cpp documents finish_reason "tool" and tool_calls entries carrying name and
+    # arguments at the top level, without the OpenAI "function" wrapper. Reading only
+    # the wrapped shape would call every native call unusable and cost a rung on the
+    # one server we can actually run locally.
+    payload = json.dumps(
+        {
+            "choices": [
+                {
+                    "finish_reason": "tool",
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {"name": "emit_action", "arguments": '{"action": "ls"}'}
+                        ],
+                    },
+                }
+            ]
+        }
+    ).encode()
+    client, _, _ = make_client([(200, payload)])
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert json.loads(result.text) == {"action": "ls"}
+    assert client.style == llm.NATIVE_TOOLS, "a usable answer must not cost a rung"
