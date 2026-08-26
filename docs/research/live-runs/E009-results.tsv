@@ -1,0 +1,19 @@
+task	repeat	reward	tokens	wall_s	steps	stop	claim	failure	note
+audit-hardcoded-token	1	0	?	180.1	?	killed	-	timeout	
+audit-parser-trust-boundary	1	0	?	95.0	?	killed	-	timeout	
+audit-path-normalization	1	0	7754	162.8	7	verified	True	verification	
+ctf-duplicate-parameter	1	0	?	95.1	?	killed	-	timeout	
+ctf-header-override	1	0	8962	132.3	9	stuck	False	reasoning	
+ctf-signed-cookie	1	0	5910	125.1	6	verified	True	verification	
+fix-cache-key-scope	1	0	?	95.1	?	killed	-	timeout	
+fix-redirect-scheme	1	0	6150	144.0	7	verified	True	verification	
+fix-zip-slip-extract	1	0	?	180.1	?	killed	-	timeout	
+forensics-sharded-exfil	1	0	?	95.0	?	killed	-	timeout	
+forensics-ssh-bruteforce	1	0	?	180.0	?	killed	-	timeout	
+forensics-webshell-chain	1	0	?	180.0	?	killed	-	timeout	
+mut-audit-query-gate	1	0	?	180.1	?	killed	-	timeout	
+mut-fix-inventory-filter	1	0	4338	135.0	5	verified	True	verification	
+mut-fix-session-lookup	1	0	7458	143.8	8	verified	True	verification	
+mut-forensics-egress-ledger	1	0	?	180.1	?	killed	-	timeout	
+mut-greeting-farewell	1	0	6868	74.1	7	verified	True	verification	
+mut-salutation-beacon	1	0	?	180.1	?	killed	-	timeout	
