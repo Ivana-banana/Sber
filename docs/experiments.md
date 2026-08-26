@@ -16,6 +16,7 @@
 | E006 | 2026-08-26 | `d1f7570` | Те же четыре кейса **внутри целевого образа**, `--network none`, Python 3.12.13 | образ `1324d7bb…c8a3`, amd64; **модель — та же скриптованная заглушка**, не LLM | 1/1 сценария A (заглушка, не решаемость) | 500 / 508 / 0 / 500 | 0.90 с / 0.66 с / 331.1 с / 0.65 с | все находки E005 воспроизвелись на Python 3.12 — это свойства кода, а не WSL |
 | E007 | 2026-08-26 | см. карточку | Изоляция среды между повторами: 3× кейс A + 2× кейс D, каждый повтор — свежий контейнер и свежий host-каталог монтирования | образ `1324d7bb…c8a3`, amd64; та же заглушка | 5/5 повторов без взаимного влияния | 500 на повтор (заглушка) | 0.63–0.96 с на повтор | пять разных container id, все подтверждённо удалены; `escape_shell.txt` не переживает свой повтор — изоляция доказана, а не предположена |
 | E008 | 2026-08-26 | см. карточку | Независимая проверка 18 task packages из M5 (Manus): 12 новых задач + 6 анти-overfit мутаций, reference-решение против verifier'а в изолированном контейнере | `python:3.12-slim`, WSL2 `ozon`, endpoint не вызывался | — | — | секунды на пакет | 18/18 `reward=1`, совпало с заявленным Manus; агент на фикстурах не запускался |
+| E009 | 2026-08-26 | `2b5fd26` | **Первый прогон против настоящей модели**: 18 локальных пакетов, контракт Harbor воспроизведён (cwd — каталог агента, три переменные, таймаут задачи навязан снаружи и агенту не сообщён) | `qwen2.5-coder:7b` Q4_K_M на CPU, ollama в контейнере; образы задач `python:3.12-slim` | **0/18** | 47 440 (по строкам, где агент успел отчитаться) | 2 558 с на сьют | решаемость впервые измерена: ноль. 11 задач убиты по таймауту, 6 — агент отчитался solved=True при reward=0, 1 — stuck |
 
 ## Per-task результаты
 
@@ -458,6 +459,77 @@ endpoint появиться и нечему.
   экранирование и несколько секунд выполнялся неверный `cp -r /.` — пойман и
   остановлен, детали в `verdict-local-task-fixtures.md` §2; исправлено переносом
   команд в файлы скриптов.
+
+### E009 — первый baseline решаемости на настоящей модели
+
+- Date/time (MSK): 2026-08-26, 17:12–17:55
+- Commit / dirty state: `2b5fd26`, worktree чистый; в `agent/` состояние идентично `09bf54b`
+  (коммит добавлял только `scripts/eval/`). Архив заморожен как `build/submission-baseline.zip`
+- Image tag + digest: задачи — `python:3.12-slim` (`sha256:7a8b475003c4…`), собранные из
+  `environment/Dockerfile` каждого пакета; целевой `secureintelligent/acp` в этом прогоне
+  **не участвует** — пакеты объявляют свой базовый образ сами
+- Model and sampling params: `qwen2.5-coder:latest` (7.6B, Q4_K_M, context 32768),
+  `ollama/ollama` в контейнере, хранилище моделей смонтировано только на чтение;
+  `temperature: 0`, `max_output_tokens` 2048. CPU-only, 8 ядер, GPU нет.
+  Прогретая скорость генерации — ~6 токенов/с
+- Hypothesis: агент решает какую-то часть задач; распределение нулей по классам покажет,
+  какой шлюз чинить первым
+- Command:
+
+  ```sh
+  sh scripts/eval/start_model.sh
+  python3 scripts/build_submission.py
+  python3 scripts/eval/run_suite.py --model qwen2.5-coder:latest \
+      --base-url http://sber-model:11434/v1 --api-key ollama \
+      --label E009-baseline --out build/eval-E009
+  ```
+
+- Environment/budgets: сеть `sber-eval` создана `--internal` — из контейнера задачи
+  достижим только контейнер модели, интернета нет (проверено прямым запросом).
+  Экспортируются ровно `LOCAL_AGENT_MODEL`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`;
+  `AGENT_TIMEOUT_S` **не передаётся**, как и у Harbor, поэтому агент живёт на
+  `DEFAULT_TASK_TIMEOUT_S=600` и чекпоинте `EARLY_DELIVERABLE_DEADLINE_S=90`, а реальный
+  предел (95 или 180 с из `task.toml`) навязывает внешний `timeout`. Лимиты контейнера
+  задачи — `cpus` и `memory_mb` из пакета
+- Raw log path + SHA-256: `build/eval-E009/` (`results.tsv`, `suite.json`, `logs/`) —
+  не коммитится, воспроизводится командой выше
+- Submission zip SHA-256 + size: `8fe23ab91adc31cce86b24a02ba78b17293911919479344ee8a81a4abd27ffe3`,
+  53 160 байт
+- Result: **solved 0/18**, 47 440 токенов (сумма по строкам, где агент успел напечатать
+  итог), 2 558 с суммарного wall time
+
+| Класс | Задач | Что это значит |
+|---|---:|---|
+| `timeout` | 11 | прогон убит внешним таймаутом раньше, чем появился артефакт |
+| `verification` | 6 | агент отчитался `solved=True`, верификатор задачи дал `reward=0` |
+| `reasoning` | 1 | детектор `stuck`: повтор одного и того же действия |
+
+- Per-task failures: `timeout` — audit-hardcoded-token, audit-parser-trust-boundary,
+  ctf-duplicate-parameter, fix-cache-key-scope, fix-zip-slip-extract,
+  forensics-sharded-exfil, forensics-ssh-bruteforce, forensics-webshell-chain,
+  mut-audit-query-gate, mut-forensics-egress-ledger, mut-salutation-beacon;
+  `verification` — audit-path-normalization, ctf-signed-cookie, fix-redirect-scheme,
+  mut-fix-inventory-filter, mut-fix-session-lookup, mut-greeting-farewell;
+  `reasoning` — ctf-header-override
+- Найденные дефекты (каждый закрыт отдельным коммитом с воспроизводящим тестом):
+  1. `7bab094` — убитый прогон терял **весь** stdout: pipe буферизуется блоками, SIGTERM
+     буфер не сбрасывает. Одиннадцать строк таблицы остались без workspace, шагов и токенов;
+  2. `12a4b75` — `mut-greeting-farewell` показал цепочку целиком: `WORKDIR` образа не `/app`,
+     workspace выродился в каталог самого агента, запрет записи вне workspace отправил
+     артефакт туда же, self-verify его там нашёл, отчёт — `solved=True` при `reward=0`;
+  3. `617b774` — правки к (2), найденные независимым критиком, включая дыру, которую
+     открыла первая версия самой правки
+- Conclusion: шлюз C впервые измерен и **не закрыт**. Оба класса нулей имеют разную
+  природу и разную цену: `timeout` на этой машине — свойство железа (7B на CPU даёт
+  10–25 с на шаг, значит в 95 с помещается 4–6 шагов), `verification` — свойство агента
+  и переносится на любой endpoint
+- Limitations: **ни одно число отсюда нельзя переносить на закрытый набор.**
+  Модель оценки неизвестна и почти наверняка не эта; 18 фикстур сгенерированы нами
+  (M5) и строже публичных в формулировках (`audit-path-normalization` требует точной
+  строки `export_store.py:open_export`, которой в инструкции нет); один повтор на задачу,
+  хотя `temperature: 0` делает прогон почти детерминированным; целевой образ
+  `secureintelligent/acp` в этом прогоне не участвовал
+
 
 ## Запланированные абляции токен-экономии (M8)
 
