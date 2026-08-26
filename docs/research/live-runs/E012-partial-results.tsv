@@ -1,0 +1,6 @@
+task	repeat	reward	tokens	ep_tokens	ep_calls	ep_late	wall_s	steps	stop	claim	failure	note
+audit-hardcoded-token	1	0	?	10850	10	0	180.0	?	killed	-	timeout	
+audit-parser-trust-boundary	1	0	6009	7150	7	1	66.6	6	stuck	False	reasoning	
+audit-path-normalization	1	0	4501	5607	5	0	74.3	4	stuck	False	reasoning	
+ctf-duplicate-parameter	1	0	?	10554	9	0	95.0	?	killed	-	timeout	
+ctf-header-override	1	0	8962	11230	10	1	140.8	9	stuck	False	reasoning	
