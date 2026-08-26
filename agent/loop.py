@@ -63,24 +63,6 @@ class Outcome:
     observations: tuple[str, ...] = field(default=())
 
 
-PRODUCE_NOW = (
-    "[бюджет] на диске нет проверяемого результата. "
-    "Запиши лучший вариант через write_file сейчас, улучшишь потом."
-)
-"""Said once when the run is out of time, and once when it is out of ideas.
-
-Two triggers, one instruction, because the situation is the same one: the run has
-nothing a verifier could read, and every step from here is worth less than an answer.
-"""
-
-STUCK_GRACE_STEPS = 3
-"""Steps the run gets to act on that instruction before the detector may end it.
-
-The detector fires on the shape of the last four actions and needs nothing new to fire
-again, so one step of grace is one action. Three is not generosity -- reading a file,
-then writing the answer, is an ordinary way to comply."""
-
-
 def run(
     state: AgentState,
     llm: LlmPort,
@@ -94,7 +76,6 @@ def run(
     observations: list[str] = []
     llm_failures = 0
     blocks_in_a_row = 0
-    production_forced_at = 0
     last_verdict: VerifyResult | None = None
     stop_reason = ""
     summary = ""
@@ -103,7 +84,10 @@ def run(
         step = state.budget.start_step()
 
         if state.budget.past_early_deadline() and not state.artifacts:
-            observations.append(PRODUCE_NOW)
+            observations.append(
+                "[бюджет] времени осталось мало, а на диске нет проверяемого результата. "
+                "Запиши лучший вариант через write_file сейчас, улучшишь потом."
+            )
 
         reply = llm.complete_structured(
             prompt.build_messages(system, observations),
@@ -183,12 +167,6 @@ def run(
             state.record("budget", signal.name, signal.detail)
             observations.append(f"[step {step}] {signal.detail}")
             if blocks_in_a_row >= limits.REPEAT_FAILURE_BLOCK:
-                if not production_forced_at and not state.artifacts:
-                    production_forced_at = step
-                    blocks_in_a_row = 0
-                    state.record("budget", "forced-production", signal.detail)
-                    observations.append(PRODUCE_NOW)
-                    continue
                 stop_reason = "stuck"
                 summary = signal.detail
                 break
@@ -217,27 +195,9 @@ def run(
 
         signal = detectors.stuck(state)
         if signal is not None:
-            state.record("budget", signal.name, signal.detail)
-            if not production_forced_at and not state.artifacts:
-                # Measured in E010: eight of eighteen runs stopped here between the
-                # fourth and the ninth step, with sixty to a hundred and twenty seconds
-                # of budget left and nothing on disk -- the loop killed them before its
-                # own early-deliverable checkpoint could. Being out of ideas is a reason
-                # to stop exploring, which is what the checkpoint already says; it is
-                # not a reason to hand back a zero while there is time to write an
-                # answer. Once, and only while nothing has been produced: a run that is
-                # still going in circles after this really has nothing left to spend on.
-                production_forced_at = step
-                observations.append(PRODUCE_NOW)
-                continue
-            if 0 < production_forced_at and step - production_forced_at < STUCK_GRACE_STEPS:
-                # The instruction to produce arrived one step ago and the detector
-                # needs no new evidence to fire again, so without this the run gets
-                # exactly one action to act on it. Two is not generosity: reading a
-                # file before writing the answer is an ordinary way to comply.
-                continue
             stop_reason = "stuck"
             summary = signal.detail
+            state.record("budget", signal.name, signal.detail)
             break
 
     if not stop_reason:
