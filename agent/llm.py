@@ -387,8 +387,10 @@ class HttpLlm:
           string;
         * TGI: `tool_calls` is a single object and the payload sits in
           `function.parameters` as an object already;
-        * llama.cpp: the entry is flat, `name` and `arguments` sit at the top level
-          with no `function` wrapper;
+        * a flat entry: `name` and `arguments` at the top level with no `function`
+          wrapper. llama.cpp documents this shape, though the server built at the
+          commit that documents it returns the wrapped one (E010); accepted here
+          because the endpoint is unknown by definition and the branch costs nothing;
         * a parser failure on vLLM or LM Studio: `tool_calls` is empty and the call is
           left in `message.content`, which the caller then salvages.
 
@@ -411,7 +413,8 @@ class HttpLlm:
             return None
         function = calls[0].get("function")
         if not isinstance(function, dict):
-            # llama.cpp puts name and arguments directly on the entry.
+            # A flat entry carries name and arguments itself. Documented by
+            # llama.cpp, not observed from it -- see the docstring.
             function = calls[0]
 
         arguments = function.get("arguments")

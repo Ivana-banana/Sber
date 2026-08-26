@@ -552,11 +552,12 @@ def test_a_wrong_primitive_type_is_caught() -> None:
     assert "schema" in result.reason
 
 
-def test_the_llama_cpp_flat_tool_call_shape_is_accepted() -> None:
-    # llama.cpp documents finish_reason "tool" and tool_calls entries carrying name and
-    # arguments at the top level, without the OpenAI "function" wrapper. Reading only
-    # the wrapped shape would call every native call unusable and cost a rung on the
-    # one server we can actually run locally.
+def test_the_flat_tool_call_shape_is_accepted() -> None:
+    # finish_reason "tool" and a tool_calls entry carrying name and arguments at the
+    # top level, without the OpenAI "function" wrapper. llama.cpp documents this shape;
+    # the server built at that same commit returns the wrapped one instead (E010), so
+    # this guards an unknown endpoint rather than a known server. Reading only the
+    # wrapped shape would call such a call unusable and cost a rung.
     payload = json.dumps(
         {
             "choices": [

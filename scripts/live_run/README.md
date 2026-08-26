@@ -27,14 +27,18 @@ sh /root/airi/run_case.sh script 8731 120 caseA   # полный путь до v
 sh /root/airi/run_case.sh shape  8732 120 caseC   # endpoint отвергает native tools
 sh /root/airi/run_case.sh hang   8733 600 caseB   # endpoint не отвечает никогда
 sh /root/airi/run_case.sh escape 8734 120 caseD   # попытка выйти из workspace
-sh /root/airi/run_case.sh flat   8735 120 caseE   # llama.cpp: плоский tool call
+sh /root/airi/run_case.sh flat   8735 120 caseE   # плоский tool call
 ```
 
-Режим `flat` отвечает в диалекте llama.cpp — `finish_reason: "tool"` и
+Режим `flat` отвечает в плоской форме — `finish_reason: "tool"` и
 `tool_calls[].{name, arguments}` без обёртки `function`. Он нужен, чтобы проверять
 `_read_tool_call` на боевом пути, а не только юнит-тестом: без поддержки этой формы
 клиент не падает, а молча уходит с native tools на `json_schema` и остаётся там до
 конца задачи.
+
+Эту форму документирует llama.cpp, но сервер, собранный на том самом коммите,
+отдаёт каноническую обёртку `function` (E010). То есть режим проверяет стойкость к
+**неизвестному** endpoint, а не совместимость с llama.cpp.
 
 `run_case.sh` жёстко привязан к `/root/airi` — это каталог прогона, а не часть
 контракта. Он вызывает `run.sh` из распакованного архива с `cwd`, равным каталогу

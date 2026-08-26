@@ -84,9 +84,10 @@ class Handler(BaseHTTPRequestHandler):
 
         finish = "stop"
         if shape == "tools" and mode == "flat":
-            # llama.cpp's documented shape: finish_reason "tool", and name/arguments
-            # on the entry itself with no "function" wrapper. See
-            # docs/function-calling.md at c1d0e7a (the v0.3.0 bump).
+            # The flat shape: finish_reason "tool", and name/arguments on the entry
+            # itself with no "function" wrapper. Documented by llama.cpp in
+            # docs/function-calling.md at c1d0e7a, but the server built at that commit
+            # returns the wrapped shape (E010). Kept as an unknown-endpoint probe.
             message = {
                 "role": "assistant",
                 "content": None,
