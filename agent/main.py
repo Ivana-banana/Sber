@@ -68,7 +68,7 @@ def resolve_workspace(
     # A runner that starts us inside the task -- a manual run, a different harness, a
     # future contract without Harbor -- already knows the answer, and review caught the
     # first version of this overruling it with a guess.
-    if cwd.resolve() != agent_dir.resolve():
+    if paths.plausible_workspace(cwd, agent_dir):
         return cwd, "runner cwd"
 
     # Measured in E009: under the Harbor contract cwd *is* our own install directory,
@@ -90,10 +90,12 @@ def build_state(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> Agent
     agent_dir = Path(__file__).resolve().parent.parent
     workspace, reason = resolve_workspace(env, cwd, agent_dir, argv[1])
 
+    named = paths.writable_paths(argv[1], agent_dir)
     state = AgentState(
         instruction=argv[1],
         workspace=workspace,
-        named_paths=paths.writable_paths(argv[1], agent_dir),
+        named_paths=named,
+        baseline=paths.snapshot(named),
         budget=Budget.from_env(env),
         secrets=redact.secrets_from_env(env),
     )

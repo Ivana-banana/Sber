@@ -49,8 +49,12 @@ def test_truncation_never_invents_a_shorter_path() -> None:
     from agent import paths
 
     filler = "x " * (paths.SCAN_LIMIT_CHARS // 2)
-    found = named_paths(f"{filler}/srv/bootstrap/marker.txt")
-    assert all("srv" not in str(path) or str(path).endswith("marker.txt") for path in found)
+    inside = "/srv/bootstrap/marker.txt"
+    found = named_paths(f"{inside} {filler}/opt/late/tail.txt")
+
+    assert Path(inside) in found, "a path before the cut must survive it"
+    assert Path("/srv") not in found and Path("/srv/boot") not in found
+    assert all(str(path).startswith(inside[:5]) for path in found)
 
 
 # --- which of them could be a workspace -------------------------------------
@@ -186,12 +190,12 @@ def test_a_real_home_directory_is_not_a_workspace() -> None:
     so it passed through the "must exist" rule and never touched the rule it claimed
     to test. Review caught it; on the same machine `/home/<user>` was selected.
     """
+    import pytest
+
     home = Path("/home")
-    if not home.is_dir():
-        return  # not a Linux layout; the target image is, and CI on it covers this
-    existing = [child for child in home.iterdir() if child.is_dir()]
+    existing = [child for child in home.iterdir() if child.is_dir()] if home.is_dir() else []
     if not existing:
-        return
+        pytest.skip("no /home/<user> on this machine; the target image has one")
     agent_dir = Path("/opt/harbor/local-agent")
 
     assert workspace_candidates(f"The case files are in {existing[0]}/case", agent_dir) == []
@@ -258,3 +262,72 @@ def test_a_deliverable_in_a_directory_that_does_not_exist_yet_is_writable(tmp_pa
     assert writable_paths(f"Write {base}/reports/summary.json", agent_dir) == (
         base / "reports" / "summary.json",
     )
+
+
+# --- the two refusals that do not depend on the workspace -------------------
+
+
+def test_a_system_path_is_refused_however_the_workspace_was_chosen(tmp_path: Path) -> None:
+    """A bad workspace must not become permission to write anywhere.
+
+    Review reached this through the runner's cwd: `/` and `/opt/harbor` were both
+    accepted as workspaces, and the workspace branch then allowed their whole subtree.
+    """
+    assert not permits(Path("/etc/hosts"), Path("/"), ())
+    assert not permits(Path("/usr/bin/python3"), Path("/usr"), ())
+
+
+def test_the_agents_own_archive_is_refused_however_the_workspace_was_chosen() -> None:
+    from agent import paths
+
+    inside = paths.AGENT_ROOT / "agent" / "verify.py"
+
+    assert not permits(inside, paths.AGENT_ROOT, (inside,))
+    assert not permits(inside, Path("/"), (inside,))
+
+
+def test_a_symlink_made_during_the_run_cannot_widen_the_policy(tmp_path: Path) -> None:
+    """The policy is computed once at startup; the link can appear afterwards.
+
+    "Create the report directory and write there" passes the filter while the directory
+    does not exist yet. `run_shell` is not confined, so the run can then make that name
+    a link to somewhere else -- and in the target image it is root.
+    """
+    import os
+
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    named = tmp_path / "reports"
+    policy = (named,)
+    os.symlink("/etc", named)
+
+    assert not permits((named / "hosts").resolve(), workspace, policy)
+
+
+def test_the_runner_cwd_is_held_to_the_same_rules(tmp_path: Path) -> None:
+    from agent.paths import plausible_workspace
+
+    agent_dir = tmp_path / "opt" / "harbor" / "local-agent"
+    agent_dir.mkdir(parents=True)
+
+    assert not plausible_workspace(Path("/"), agent_dir)
+    assert not plausible_workspace(tmp_path / "opt" / "harbor", agent_dir), "one level up"
+    assert not plausible_workspace(Path("/usr/bin"), agent_dir)
+    assert plausible_workspace(tmp_path / "opt", agent_dir) is False, "ancestor of our tree"
+
+    task = tmp_path / "srv" / "task"
+    task.mkdir(parents=True)
+    assert plausible_workspace(task, agent_dir)
+
+
+def test_a_digest_tells_changed_from_untouched(tmp_path: Path) -> None:
+    from agent.paths import digest
+
+    target = tmp_path / "report.json"
+    assert digest(target) == "", "absent files have no digest"
+    target.write_text("a", encoding="utf-8")
+    before = digest(target)
+    target.write_text("b", encoding="utf-8")
+
+    assert before != ""
+    assert digest(target) != before

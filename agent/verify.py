@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from agent.paths import permits
+from agent.paths import digest, permits
 from agent.redact import redact
 from agent.state import AgentState
 from agent.tools import run_shell
@@ -39,12 +39,19 @@ STAGE_NON_EMPTY = "non-empty"
 STAGE_COMMAND = "command"
 STAGE_UNVERIFIED = "unverified"
 
-STALE_GRACE_S = 2.0
-"""How far before the run's start a deliverable's mtime may sit and still count.
+def _untouched(state: AgentState, deliverable: Path) -> bool:
+    """Is this exactly the file that was already there when the run began?
 
-Not zero: a filesystem's mtime resolution, a container clock and the moment the state
-object is built are all slightly apart, and a two-second grace costs nothing while a
-strict comparison would fail a file the run really did write."""
+    Positive evidence only. A file the run wrote through `write_file` is known to be
+    its own work; a file whose bytes match the snapshot taken at startup is known not
+    to be. Anything else -- a path nobody snapshotted, a file created by `run_shell` --
+    is left alone rather than judged on a guess, because the direction of a wrong
+    answer here is a correct deliverable rejected.
+    """
+    if any(artifact.resolve() == deliverable for artifact in state.artifacts):
+        return False
+    before = state.baseline.get(str(deliverable))
+    return bool(before) and before == digest(deliverable)
 
 
 @dataclass(frozen=True)
@@ -118,28 +125,23 @@ def verify(state: AgentState, *, deliverable: Path, command: str) -> VerifyResul
         )
     deliverable = resolved
 
-    try:
-        modified = deliverable.stat().st_mtime
-    except OSError as exc:
-        return VerifyResult(
-            ok=False, stage=STAGE_EXISTENCE, detail=f"{deliverable}: {exc.__class__.__name__}"
-        )
-    if modified < state.started_wall - STALE_GRACE_S:
-        # The task's own input file is a file that exists and is non-empty, so without
-        # this the cheapest way to "solve" anything is to point `finish` at something
-        # that was already there. Widening the write policy to paths the task names
-        # made that cheaper still: any existing file the text mentions would do.
-        return VerifyResult(
-            ok=False,
-            stage=STAGE_STALE,
-            detail=f"{deliverable} predates this run; it is not something this run produced",
-        )
-
     if deliverable.stat().st_size == 0:
         return VerifyResult(
             ok=False,
             stage=STAGE_NON_EMPTY,
             detail=f"{deliverable} exists but is empty",
+        )
+
+    if _untouched(state, deliverable):
+        # The task's own input file exists and is non-empty, so without this the
+        # cheapest way to "solve" anything is to point `finish` at something that was
+        # already there -- and widening the write policy to the paths the task names
+        # made that cheaper still. Checked after `non-empty` so an empty stale file is
+        # still diagnosed as empty, which is the more useful thing to be told.
+        return VerifyResult(
+            ok=False,
+            stage=STAGE_STALE,
+            detail=f"{deliverable} is byte-for-byte what it was before this run started",
         )
 
     stripped = command.strip()

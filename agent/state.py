@@ -210,11 +210,13 @@ class AgentState:
     workspace: Path
     budget: Budget
 
-    started_wall: float = field(default_factory=time.time)
-    """When this run began, in wall clock, so a deliverable can be dated against it.
+    baseline: dict[str, str] = field(default_factory=dict)
+    """What the paths the task named contained before this run started.
 
-    Monotonic time is the right clock for budgets and the wrong one here: a file's
-    mtime is wall clock, and the two cannot be compared.
+    So that `finish` cannot hand back an untouched input file as the answer. Content
+    and not timestamps: archives restore mtimes and `touch` rewrites them, and both
+    mistakes are one-directional -- a real deliverable called stale, or an untouched
+    file called solved.
     """
 
     named_paths: tuple[Path, ...] = ()

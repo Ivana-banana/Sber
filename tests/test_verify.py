@@ -217,21 +217,19 @@ def test_a_deliverable_nobody_named_is_still_refused(tmp_path: Path) -> None:
     assert result.stage == "refused"
 
 
-def test_a_file_that_predates_the_run_is_not_a_deliverable(tmp_path: Path) -> None:
+def test_an_untouched_input_file_is_not_a_deliverable(tmp_path: Path) -> None:
     """The cheapest way to fake success is to point `finish` at the task's own input.
 
-    Every input file exists and is non-empty, which is all the earlier stages asked
-    for. Widening the write policy to paths the task names made it cheaper still: any
+    Every input file exists and is non-empty, which is all the earlier stages ask for.
+    Widening the write policy to paths the task names made it cheaper still: any
     existing file the text mentions would have passed.
     """
-    import os
-    import time
+    from agent.paths import snapshot
 
     stale = tmp_path / "input.py"
     stale.write_text("def add(a, b): return a - b\n", encoding="utf-8")
-    long_ago = time.time() - 3600
-    os.utime(stale, (long_ago, long_ago))
     state = make_state(tmp_path)
+    state.baseline = snapshot((stale,))
 
     result = verify(state, deliverable=stale, command="")
 
@@ -239,12 +237,77 @@ def test_a_file_that_predates_the_run_is_not_a_deliverable(tmp_path: Path) -> No
     assert result.stage == "stale"
 
 
-def test_a_file_this_run_wrote_is_accepted(tmp_path: Path) -> None:
-    fresh = tmp_path / "report.json"
-    fresh.write_text('{"findings": []}', encoding="utf-8")
+def test_touching_an_input_file_does_not_make_it_a_deliverable(tmp_path: Path) -> None:
+    """Provenance is decided by content, not by timestamps.
+
+    The first version of this rule compared mtime against the run's start, which both
+    a `touch` on an input and a `tar -xf` of real evidence could defeat -- in opposite
+    directions.
+    """
+    import os
+    import time
+
+    from agent.paths import snapshot
+
+    stale = tmp_path / "input.py"
+    stale.write_text("unchanged\n", encoding="utf-8")
     state = make_state(tmp_path)
+    state.baseline = snapshot((stale,))
+    later = time.time() + 60
+    os.utime(stale, (later, later))
+
+    result = verify(state, deliverable=stale, command="")
+
+    assert result.stage == "stale"
+
+
+def test_an_artifact_restored_with_its_old_timestamp_still_counts(tmp_path: Path) -> None:
+    """`tar -xf`, `cp -p` and `unzip` restore mtimes, and forensic tasks unpack evidence.
+
+    A deliverable that looks older than the run is not thereby someone else's work.
+    """
+    import os
+    import time
+
+    from agent.paths import snapshot
+
+    target = tmp_path / "incident_report.txt"
+    state = make_state(tmp_path)
+    state.baseline = snapshot((target,))  # absent at start
+    target.write_text("findings\n", encoding="utf-8")
+    long_ago = time.time() - 86400
+    os.utime(target, (long_ago, long_ago))
+
+    result = verify(state, deliverable=target, command="")
+
+    assert result.ok is True
+    assert result.stage == "unverified"
+
+
+def test_a_file_this_run_wrote_is_accepted(tmp_path: Path) -> None:
+    from agent.paths import snapshot
+
+    fresh = tmp_path / "report.json"
+    state = make_state(tmp_path)
+    state.baseline = snapshot((fresh,))
+    fresh.write_text('{"findings": []}', encoding="utf-8")
 
     result = verify(state, deliverable=fresh, command="")
 
     assert result.ok is True
     assert result.stage == "unverified"
+
+
+def test_an_empty_stale_file_is_diagnosed_as_empty(tmp_path: Path) -> None:
+    # Ordering: being told a file is empty is more actionable than being told it is
+    # unchanged, and an empty file is unchanged in every run that did not write it.
+    from agent.paths import snapshot
+
+    empty = tmp_path / "report.json"
+    empty.touch()
+    state = make_state(tmp_path)
+    state.baseline = snapshot((empty,))
+
+    result = verify(state, deliverable=empty, command="")
+
+    assert result.stage == "non-empty"

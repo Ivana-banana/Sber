@@ -30,6 +30,7 @@ So the two questions are answered separately here:
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -77,6 +78,15 @@ and `/root` selectable. It was inverted against where tasks actually live. What 
 listed here is the OS's own binaries, libraries and kernel interfaces; `/home` is here
 because no task package ships in someone's home directory, and briefing one into the
 model's context would be a leak, not a workspace.
+"""
+
+AGENT_ROOT = Path(__file__).resolve().parent.parent
+"""Where this archive is unpacked. Known from the module's own location, not guessed.
+
+Nothing writes here, whatever the workspace turns out to be. Review found two ways in:
+a runner whose cwd is our parent directory makes the whole tree the workspace, and a
+symlink created *during* the run can point a directory the task named at our source --
+`run_shell` is not confined, and in the target image the agent is root.
 """
 
 MIN_WORKSPACE_DEPTH = 2
@@ -227,13 +237,48 @@ def writable_paths(instruction: str, agent_dir: Path) -> tuple[Path, ...]:
     return tuple(allowed)
 
 
+def plausible_workspace(candidate: Path, agent_dir: Path) -> bool:
+    """Could this directory be the task's, judged by the same rules as the task text?
+
+    The runner's cwd used to be accepted on one condition -- that it was not literally
+    our install directory. Review walked straight past that: a cwd of `/opt/harbor` is
+    the same defect one directory up, and a cwd of `/` or `/tmp` made the entire
+    filesystem the workspace. The rules that filter a directory named by the task are
+    not weaker rules; they apply here too.
+    """
+    try:
+        resolved = candidate.resolve()
+        agent_root = agent_dir.resolve()
+    except OSError:
+        return False
+    if len(resolved.parts) - 1 < MIN_WORKSPACE_DEPTH or _is_system(resolved, candidate):
+        return False
+    return not (
+        resolved == agent_root
+        or agent_root in resolved.parents
+        or resolved in agent_root.parents
+    )
+
+
 def permits(target: Path, workspace: Path, permitted: tuple[Path, ...]) -> bool:
     """May the run write to `target`?
 
     True inside the workspace, and true for a path the task itself named -- exactly
     that file, or anything under a directory it named. Everything else is either a
     mistake or the environment steering the run, and both are refused.
+
+    `target` is expected already resolved by the caller, which is what makes the two
+    absolute refusals below hold against symlinks: a link created mid-run pointing at
+    `/etc` or at this archive resolves to the real place before it is judged. Those two
+    refusals come first and are not conditional on the workspace, because the workspace
+    is a guess -- review showed a runner cwd of `/` or `/opt/harbor` turning the first
+    branch into permission to write anywhere.
     """
+    if _is_system(target):
+        return False
+    if target == AGENT_ROOT or AGENT_ROOT in target.parents:
+        return False
+
     root = workspace.resolve()
     if target == root or root in target.parents:
         return True
@@ -247,3 +292,43 @@ def permits(target: Path, workspace: Path, permitted: tuple[Path, ...]) -> bool:
         if named.is_dir() and named in target.parents:
             return True
     return False
+
+
+DIGEST_BYTES = 1 << 20
+"""How much of a file is hashed to tell "changed" from "untouched".
+
+A prefix, not the whole file: forensic evidence runs to hundreds of megabytes, and this
+is asked once per path the task names. A deliverable that differs from its starting
+state differs near the front of the file in every shape these tasks take -- a report, a
+flag, a marker, a patched source.
+"""
+
+
+def digest(path: Path) -> str:
+    """A short fingerprint of a file's current content, or "" if there is no file.
+
+    Content and not mtime. Review showed why: `tar -xf`, `cp -p` and `unzip` restore
+    timestamps, so a file the run really produced can look older than the run, and a
+    `touch` on an untouched input makes it look produced. Neither mistake is possible
+    when the question is what the bytes are.
+    """
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(DIGEST_BYTES)
+        size = path.stat().st_size
+    except OSError:
+        return ""
+    return f"{size}:{hashlib.sha256(head).hexdigest()[:16]}"
+
+
+def snapshot(candidates: tuple[Path, ...]) -> dict[str, str]:
+    """What the paths the task named looked like before the run touched anything."""
+    seen: dict[str, str] = {}
+    for path in candidates:
+        try:
+            resolved = str(path.resolve())
+        except OSError:
+            continue
+        if resolved not in seen:
+            seen[resolved] = digest(path)
+    return seen
