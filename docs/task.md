@@ -81,7 +81,17 @@ EOF
   тестами и иногда reference solution.
 
 Проверенный upstream commit:
-`71f90810d7a608677bbcf44f409f0aefded38340` от 09.07.2026.
+`b95c62fec81656e338af54045efa688fd4979615` от 26.08.2026. Предыдущая точка —
+`71f90810d7a608677bbcf44f409f0aefded38340` от 09.07.2026; между ними ровно один
+коммит, см. `docs/research/verdict-upstream-watch-2026-08-26.md`.
+
+Единственное функциональное изменение в этом коммите: verifier
+`local_task/incident-log-forensics/tests/test.sh` снимает завершающий `\r` с каждой
+строки и сортирует в `LC_ALL=C`, то есть CRLF в `/app/incident_report.txt` перестал
+давать `0`. Это **публичная локальная** задача; про закрытый evaluator из этого
+ничего не следует, поэтому наше требование к выводу агента прежнее — LF, ровно
+четыре строки `key=value`, без пробелов вокруг `=`. Там же добавлен `.gitattributes`
+(`*.sh`, `*.txt` → `eol=lf`).
 
 На 24.08.2026 в публичном наборе **шесть оцениваемых task packages**:
 `bye-file`, `hello-file`, `find-sqli-login`, `fix-sqli-login`, `fix-sqli-search`,
