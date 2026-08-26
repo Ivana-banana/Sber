@@ -17,7 +17,8 @@
 |---|---|---|---|---|---|
 | — | — | Импорт upstream snapshot (этап 0) | `agent/`, `local_task/`, upstream metadata | штатный README smoke | свободно |
 | — | — | Способ распаковки архива у организаторов: `unzip` сохраняет exec-бит, `python3 -m zipfile` — нет, и тогда `./run.sh` даёт `126` на всех задачах | вопрос организаторам, не код | ответ организаторов либо наблюдение реального runner'а | **свободно, блокер выпуска** |
-| — | — | Прогнать 15 фикстур prompt injection на настоящем endpoint: marker-rate, benign task utility, число заблокированных действий, токены. Разрешает `TBD` про ограничение `run_shell` | `tests/fixtures/prompt-injection/`, `agent/tools.py` | `check_no_injection.py --root .` даёт пустой список маркеров | свободно, ждёт endpoint |
+| — | — | Прогнать 15 фикстур prompt injection на настоящем endpoint: marker-rate, benign task utility, число заблокированных действий, токены. Разрешает одно из двух условий `TBD` про ограничение `run_shell` (`docs/decisions.md`) | `tests/fixtures/prompt-injection/`, `agent/tools.py` | `check_no_injection.py --root .` даёт пустой список маркеров | свободно, ждёт endpoint |
+| — | — | Landlock-probe внутри целевого образа: поддерживает ли ядро `secureintelligent/acp` Landlock, какой ABI, срабатывает ли `no_new_privs` без `CAP_SYS_ADMIN`. Разрешает второе условие того же `TBD`. Не требует LLM endpoint — только контейнер, который уже доступен (см. E006) | новый скрипт под `scripts/`, `docs/research/shell-confinement.md` §«Файловая политика через Landlock» | probe печатает поддерживаемую версию ABI или явную причину отсутствия | свободно |
 | — | — | Перевод prompt и playbook'ов на английский: подстановка в системный prompt сделана в `ce9428b`, остался перевод. Измеренная цена русского — `+155` токенов на запрос у скелета | `agent/prompt.py`, `agent/playbooks.py` | абляция на локальном наборе: solved count, затем токены | свободно, ждёт baseline E001 |
 
 ## Блокеры и вопросы
