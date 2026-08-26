@@ -82,7 +82,18 @@ class Handler(BaseHTTPRequestHandler):
         arguments = json.dumps(action)
         log("request #%d -> %s" % (n, action["tool"]))
 
-        if shape == "tools":
+        finish = "stop"
+        if shape == "tools" and mode == "flat":
+            # llama.cpp's documented shape: finish_reason "tool", and name/arguments
+            # on the entry itself with no "function" wrapper. See
+            # docs/function-calling.md at c1d0e7a (the v0.3.0 bump).
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"name": "emit_action", "arguments": arguments}],
+            }
+            finish = "tool"
+        elif shape == "tools":
             message = {
                 "role": "assistant",
                 "content": None,
@@ -97,7 +108,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {
             "id": "stub-%d" % n,
             "object": "chat.completion",
-            "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+            "choices": [{"index": 0, "message": message, "finish_reason": finish}],
             "usage": {"prompt_tokens": 100 + n, "completion_tokens": 20 + n,
                       "total_tokens": 120 + 2 * n},
         })
@@ -106,7 +117,8 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, required=True)
-    ap.add_argument("--mode", choices=["script", "hang", "shape", "escape"], default="script")
+    ap.add_argument("--mode", choices=["script", "hang", "shape", "escape", "flat"],
+                    default="script")
     ap.add_argument("--escape-dir", default="/root/airi",
                     help="directory outside the workspace the escape probe aims at")
     args = ap.parse_args()

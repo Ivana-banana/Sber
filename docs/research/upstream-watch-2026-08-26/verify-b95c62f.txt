@@ -1,0 +1,84 @@
+Independent re-verification of upstream-watch-2026-08-26.md
+Done 2026-08-26 by Claude, not by Manus. Fetched directly from the GitHub and
+Docker Hub public APIs; the report itself was not used as a source here.
+
+--- GET /repos/SecureIntelligent/UniversalAgenticCompetitionPublic/commits?per_page=5
+
+b95c62fec81656e338af54045efa688fd4979615  author 2026-08-26T12:28:02Z  commit 2026-08-26T12:41:24Z
+    Enforced LF line endings for shell scripts
+71f90810d7a608677bbcf44f409f0aefded38340  author 2026-07-09T16:03:14Z  commit 2026-07-09T16:04:14Z
+    Fix SQLi task reference solutions
+bdccc1d8636d3dc39b363df59af536b734c1af58  2026-07-08  Fix local agent stream events
+0bd8969bd50382f1bfeac3d085d496e94a15f1de  2026-07-08  Merge pull request #1 from SecureIntelligent/fix/log_sqli
+ecc594cf9842fa95d7abfd66090fb781af1cbae7  2026-07-08  fix local task fixtures and entrypoint startup
+
+--- GET /compare/71f90810...HEAD
+
+status=ahead  ahead_by=1  behind_by=0  total_commits=1
+files:
+  .gitattributes                                    added     +2 -0
+  README.md                                         modified  +2 -1
+  local_task/incident-log-forensics/tests/test.sh   modified  +7 -2
+
+--- .gitattributes at b95c62f (whole file)
+
+*.sh text eol=lf
+*.txt text eol=lf
+
+--- b95c62f.patch, hunk for local_task/incident-log-forensics/tests/test.sh
+
+@@ -32,8 +32,13 @@ done <"$REPORT"
+ TMP_GOT=$(mktemp)
+ TMP_EXP=$(mktemp)
+ trap 'rm -f "$TMP_GOT" "$TMP_EXP"' EXIT
+-sort "$REPORT" -o "$TMP_GOT"
+-sort "$EXPECTED" -o "$TMP_EXP"
++
++normalize_and_sort() {
++  sed 's/\r$//' "$1" | LC_ALL=C sort
++}
++
++normalize_and_sort "$REPORT" >"$TMP_GOT"
++normalize_and_sort "$EXPECTED" >"$TMP_EXP"
+ if diff -q "$TMP_GOT" "$TMP_EXP" >/dev/null; then
+   echo 1 >"$REWARD"
+ else
+
+--- b95c62f.patch, hunks for README.md
+
+@@ -8,6 +8,8 @@ This repository is not the final benchmark. The tasks in `local_task/` are provi
+
+ ## Updates
+
++2026-08-26: Enforced LF line endings for shell scripts and incident report fixtures, and made incident report verification tolerant of CRLF input.
++
+ 2026-07-09: Fixed `fix-sqli-search` and `fix-sqli-login` reference solutions to match current source files and wait for the local service before running regression tests.
+
+@@ -160,4 +162,3 @@ When Harbor starts a task, it installs the `agent/` directory into the environme
+ ```sh
+ ./run.sh "<task instruction>"
+ ```
+-
+
+--- GET /repos/SecureIntelligent/UniversalAgenticCompetitionPublic
+
+default_branch=main
+pushed_at=2026-08-26T12:41:25Z
+updated_at=2026-08-26T12:44:58Z
+has_discussions=false
+has_issues=true
+open_issues_count=0
+size=495
+
+--- GET hub.docker.com/v2/namespaces/secureintelligent/repositories/acp/tags?page_size=100
+
+count=2
+
+latest         last_updated=2026-07-02T14:57:25.825344Z
+harbor-0.16.1  last_updated=2026-07-02T15:00:01.357552Z
+
+both tags -> manifest list sha256:1324d7bb140422a9929f5bc538f55ec0480d2731742effee02bf67604130c8a3
+  linux/amd64  sha256:5a93249d3dfd44dbf2e83806f89ce2662a3e575c8ad0fb5c54feb03ec5626132
+  linux/arm64  sha256:60f32b3e722fcfdd6dc3a5f42f8e2a1860cc5c390583616cbfaa45785bf530a3
+  attestations sha256:29c9423dad7932d7756e8d556f193e29410c80bac760a5d2f27921b35239e138
+               sha256:05b1d10e12649a7a13c33f776d8f177244f00ef3f8a3628d70cf56511d8fa9f0
