@@ -65,7 +65,7 @@ cmake --build build --config Release --target llama-server -j6
 2. Прогнать `python scripts/probe_endpoint.py` и записать, на какой ступени
    лестницы оказался прогон.
 3. Прогнать 18 фикстур из `local_task_extra/tasks/` через настоящий `run.sh`.
-4. Записать карточку E010 в `docs/experiments.md` **двумя раздельными метриками** —
+4. Записать карточку E011 в `docs/experiments.md` **двумя раздельными метриками** —
    protocol pass rate по каждой ступени и semantic tool correctness. Не усреднять:
    grammar на стороне сервера поднимает первую, почти не трогая вторую.
 
