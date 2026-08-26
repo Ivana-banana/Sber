@@ -24,13 +24,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import zipfile
 from collections.abc import Mapping
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -53,8 +55,16 @@ DIAGNOSTIC_LABEL = "cold start diagnostic"
 """Two different questions, so two different labels. See `check_cold_start`."""
 
 CRLF = b"\r\n"
+BOM = b"\xef\xbb\xbf"
 """Named rather than inline so this file survives being edited by tooling that
 rewrites its own line endings -- which is the very defect being checked for."""
+
+UTF8_NAME_FLAG = 0x800
+"""APPNOTE 4.4.4 bit 11 (\"language encoding flag\"): the central directory says a
+name is UTF-8 only when this is set. Unset, the bytes are whatever the writer's
+local codepage was, and a non-ASCII name decodes differently on every reader."""
+
+DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:")
 
 FORBIDDEN_PARTS = frozenset({".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".env"})
 FORBIDDEN_SUFFIXES = (".pyc", ".pyo", ".log", ".key", ".pem")
@@ -120,6 +130,48 @@ class Report:
         self.passed.append(message)
 
 
+def _unsafe_path_reason(name: str) -> str | None:
+    """Reason a member's name is unsafe to ever hand to a filesystem call, or None.
+
+    Names in a zip's central directory are POSIX paths regardless of the platform
+    that built or is checking the archive (APPNOTE 4.4.17.1). Parsing one with the
+    platform `Path` -- `WindowsPath` on this checker's own machine -- treats a
+    leading drive letter as harmless, when a POSIX extractor (or a *nix-built archive
+    read on Linux, where nothing strips it first) would see one hostile path segment.
+    `PurePosixPath` reads the name the way the format actually specifies it. The
+    backslash check exists for the same reason even though `zipfile` itself already
+    normalises `os.sep` out of every name it parses on a Windows machine: this
+    function has to give one verdict regardless of which platform runs the check.
+    """
+    if "\\" in name:
+        return "contains a backslash"
+    if DRIVE_LETTER_RE.match(name):
+        return "starts with a drive letter"
+    if name.startswith("/"):
+        return "is an absolute path"
+    if ".." in PurePosixPath(name).parts:
+        return "contains a parent-directory segment"
+    return None
+
+
+def _entry_type_reason(info: zipfile.ZipInfo) -> str | None:
+    """Reason a Unix-origin member's declared type is unacceptable, or None.
+
+    Only `S_IFREG` and `S_IFDIR` are ever legitimate in this archive. A symlink lets a
+    member point anywhere the extracting process can read or -- through a mode applied
+    later -- write; nothing else (device, fifo, socket) belongs in a code submission.
+    A DOS-origin entry carries no Unix type bits at all and is judged elsewhere.
+    """
+    if info.create_system != UNIX_HOST:
+        return None
+    mode = info.external_attr >> 16
+    if stat.S_ISLNK(mode):
+        return "declares a symlink"
+    if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+        return f"declares an unexpected type (mode {mode:o})"
+    return None
+
+
 def check_archive(path: Path, report: Report) -> zipfile.ZipFile | None:
     """Structural checks that do not need the contents extracted."""
     size = path.stat().st_size
@@ -147,13 +199,30 @@ def check_archive(path: Path, report: Report) -> zipfile.ZipFile | None:
         return archive
 
     for name in names:
-        if name.startswith("/") or ".." in Path(name).parts:
-            report.fail(f"unsafe path in archive: {name}")
-        parts = set(Path(name).parts)
+        unsafe = _unsafe_path_reason(name)
+        if unsafe is not None:
+            report.fail(f"unsafe path in archive: {name} ({unsafe})")
+        parts = set(PurePosixPath(name).parts)
         if parts & FORBIDDEN_PARTS:
             report.fail(f"archive contains an excluded path: {name}")
         if name.endswith(FORBIDDEN_SUFFIXES):
             report.fail(f"archive contains an excluded file type: {name}")
+
+    for info in archive.infolist():
+        # `archive.getinfo(name)` resolves duplicate names through `NameToInfo`, which
+        # collapses to one entry -- a shadowed duplicate would never be inspected. This
+        # loop walks the central directory directly instead, so every member is seen.
+        type_reason = _entry_type_reason(info)
+        if type_reason is not None:
+            report.fail(f"archive member {info.filename} {type_reason}")
+        if info.file_size > limits.MAX_SUBMISSION_BYTES:
+            report.fail(
+                f"archive member is {info.file_size} bytes uncompressed, over the "
+                f"{limits.MAX_SUBMISSION_BYTES} byte limit even though the archive is "
+                f"small: {info.filename}"
+            )
+        if any(ord(ch) > 127 for ch in info.filename) and not info.flag_bits & UTF8_NAME_FLAG:
+            report.fail(f"non-ASCII name without the UTF-8 flag (0x800): {info.filename}")
 
     if ENTRYPOINT not in names:
         # The one open question in the packaging contract: the README requires the
@@ -184,8 +253,14 @@ def check_archive(path: Path, report: Report) -> zipfile.ZipFile | None:
     # the machines that have it.
     if CRLF in entrypoint:
         report.fail(f"{ENTRYPOINT} has CRLF line endings; the target shell will not start it")
+    elif b"\r" in entrypoint:
+        # Old Mac Classic style: a bare CR with no following LF. `CRLF in entrypoint`
+        # does not see this, and it is just as fatal to the target shell.
+        report.fail(f"{ENTRYPOINT} has a lone CR line ending; the target shell will not start it")
 
-    if not entrypoint.startswith(b"#!"):
+    if entrypoint.startswith(BOM):
+        report.fail(f"{ENTRYPOINT} starts with a UTF-8 BOM before the shebang; the target shell will not start it")
+    elif not entrypoint.startswith(b"#!"):
         report.fail(f"{ENTRYPOINT} has no shebang")
 
     return archive

@@ -9,12 +9,14 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
+import struct
 import zipfile
 from pathlib import Path
 
 import pytest
 
 from agent import limits
+from scripts import check_submission
 from scripts.build_submission import ROOT, build
 from scripts.check_submission import CONTRACT_LABEL, apply_declared_modes, check
 
@@ -97,6 +99,65 @@ def test_missing_source_file_is_an_error_not_an_empty_archive(tmp_path: Path) ->
 
 
 # --- the checker ------------------------------------------------------------
+
+
+def clear_utf8_flag(data: bytes, name: str) -> bytes:
+    """Turn off the UTF-8 name flag (bit 0x800) for one entry, in the raw zip bytes.
+
+    `zipfile`'s writer always sets this flag itself the moment a name is not pure
+    ASCII (`ZipInfo._encodeFilenameFlags`), so there is no way to ask it to write a
+    non-compliant archive -- the very thing this check exists for. The only way to
+    produce one is to patch the bytes after writing, at the fixed offsets APPNOTE
+    defines for the local file header (flag at +6) and the central directory file
+    header (flag at +8), located by walking back from the encoded name.
+    """
+    patched = bytearray(data)
+    name_bytes = name.encode("utf-8")
+    start = 0
+    while True:
+        idx = patched.find(name_bytes, start)
+        if idx == -1:
+            break
+        start = idx + 1
+        local = idx - 30
+        if local >= 0 and bytes(patched[local : local + 4]) == b"PK\x03\x04":
+            flag_off = local + 6
+            flags = struct.unpack_from("<H", patched, flag_off)[0]
+            struct.pack_into("<H", patched, flag_off, flags & ~0x800)
+        central = idx - 46
+        if central >= 0 and bytes(patched[central : central + 4]) == b"PK\x01\x02":
+            flag_off = central + 8
+            flags = struct.unpack_from("<H", patched, flag_off)[0]
+            struct.pack_into("<H", patched, flag_off, flags & ~0x800)
+    return bytes(patched)
+
+
+def inflate_declared_size(data: bytes, name: str, size: int) -> bytes:
+    """Set one entry's declared uncompressed size, in the raw zip bytes, to `size`.
+
+    `ZipFile.writestr()` unconditionally sets `zinfo.file_size = len(data)` right
+    before writing, clobbering any size set on the `ZipInfo` beforehand -- so there is
+    no way to ask it to write a member that claims a size its compressed data does not
+    have. The only way to produce one is to patch the bytes after writing, at the
+    fixed offsets APPNOTE defines for the local file header (uncompressed size at +22)
+    and the central directory file header (uncompressed size at +24), the same
+    approach `clear_utf8_flag` uses for the flag field.
+    """
+    patched = bytearray(data)
+    name_bytes = name.encode("utf-8")
+    start = 0
+    while True:
+        idx = patched.find(name_bytes, start)
+        if idx == -1:
+            break
+        start = idx + 1
+        local = idx - 30
+        if local >= 0 and bytes(patched[local : local + 4]) == b"PK\x03\x04":
+            struct.pack_into("<I", patched, local + 22, size)
+        central = idx - 46
+        if central >= 0 and bytes(patched[central : central + 4]) == b"PK\x01\x02":
+            struct.pack_into("<I", patched, central + 24, size)
+    return bytes(patched)
 
 
 def repack(source: Path, target: Path, *, transform) -> Path:
@@ -326,3 +387,141 @@ def test_a_missing_shebang_fails(archive: Path, tmp_path: Path) -> None:
     report = check(headless, SMOKE_PARENT_ENV)
 
     assert any("shebang" in message for message in report.failures)
+
+
+# --- §2 of verdict-packaging-pitfalls.md: what the checker used to miss --------
+
+
+def test_a_backslash_in_a_name_is_unsafe() -> None:
+    # Not an end-to-end archive test like its neighbours: on a machine where
+    # `os.sep == "\\"`, `zipfile`'s own reader normalises every backslash to `/`
+    # while parsing the central directory (`ZipInfo.__init__`, invoked from
+    # `_RealGetContents`) before `check_archive` ever sees a name -- there is no way
+    # to build a real archive that round-trips a backslash through `zipfile.ZipFile`
+    # on this platform. On Linux, where `os.sep == "/"`, nothing normalises it, and
+    # `Path(name).parts` (the old, platform-dependent parser) would have missed it.
+    # The helper itself has to reject a backslash regardless of which platform
+    # happens to be running the check.
+    assert check_submission._unsafe_path_reason("agent\\evil.py") is not None
+
+
+def test_a_clean_posix_name_is_safe() -> None:
+    assert check_submission._unsafe_path_reason("agent/main.py") is None
+
+
+def test_a_drive_letter_prefixed_name_is_unsafe_not_a_crash(
+    archive: Path, tmp_path: Path
+) -> None:
+    # The defect this used to be: `apply_declared_modes` does
+    # `(dest / info.filename).chmod(mode)` with no sanitising. `dest / "C:/evil.txt"`
+    # collapses to an absolute path on Windows, so an untrusted archive controlled a
+    # filesystem operation outside the extraction directory. It must never reach that
+    # code at all -- `check_archive` has to reject the name first.
+    hostile = tmp_path / "drive.zip"
+    with zipfile.ZipFile(archive) as src, zipfile.ZipFile(hostile, "w") as dst:
+        for info in src.infolist():
+            dst.writestr(info, src.read(info.filename))
+        # A Unix host byte with a real mode, the way an archive actually built on
+        # Linux would declare it -- `writestr(name, bytes)` on this (Windows) machine
+        # would default to a DOS host byte and never reach `apply_declared_modes` at
+        # all, silently failing to exercise the vulnerable path.
+        evil = zipfile.ZipInfo("C:/evil.txt")
+        evil.create_system = 3
+        evil.external_attr = 0o644 << 16
+        dst.writestr(evil, b"x")
+
+    report = check(hostile, SMOKE_PARENT_ENV)
+    assert any("evil.txt" in message for message in report.failures)
+    assert not any("evil.txt" in message for message in report.skipped)
+
+
+def test_a_symlink_member_is_rejected(archive: Path, tmp_path: Path) -> None:
+    hostile = tmp_path / "symlink.zip"
+    with zipfile.ZipFile(archive) as src, zipfile.ZipFile(hostile, "w") as dst:
+        for info in src.infolist():
+            dst.writestr(info, src.read(info.filename))
+        link = zipfile.ZipInfo("agent/escape")
+        link.create_system = 3
+        link.external_attr = (stat.S_IFLNK | 0o777) << 16
+        dst.writestr(link, b"/etc/passwd")
+
+    report = check(hostile, SMOKE_PARENT_ENV)
+    assert any("agent/escape" in message for message in report.failures)
+
+
+def test_an_oversized_member_is_caught_even_in_a_small_archive(
+    archive: Path, tmp_path: Path, monkeypatch
+) -> None:
+    # A member can declare a huge uncompressed size while compressing to almost
+    # nothing (e.g. a run of zeros), so the whole-archive size check alone misses it.
+    # Patched directly into the raw bytes (see inflate_declared_size) -- setting
+    # file_size on a ZipInfo before writestr() is silently overwritten.
+    monkeypatch.setattr(limits, "MAX_SUBMISSION_BYTES", 1024)
+
+    bomb = tmp_path / "bomb.zip"
+    bomb.write_bytes(inflate_declared_size(archive.read_bytes(), "run.sh", 11 * 1024 * 1024))
+    report = check(bomb, SMOKE_PARENT_ENV)
+
+    assert any("uncompressed" in message for message in report.failures)
+
+
+def test_a_non_ascii_name_without_the_utf8_flag_is_caught(
+    archive: Path, tmp_path: Path
+) -> None:
+    name = "agent/nаme.py"  # Cyrillic а
+    with zipfile.ZipFile(archive) as src, zipfile.ZipFile(
+        tmp_path / "efs-source.zip", "w"
+    ) as dst:
+        for info in src.infolist():
+            dst.writestr(info, src.read(info.filename))
+        dst.writestr(name, b"x")
+
+    hostile = tmp_path / "efs.zip"
+    hostile.write_bytes(clear_utf8_flag((tmp_path / "efs-source.zip").read_bytes(), name))
+
+    report = check(hostile, SMOKE_PARENT_ENV)
+    assert any("UTF-8" in message for message in report.failures)
+
+
+def test_a_non_ascii_name_with_the_utf8_flag_is_accepted(
+    archive: Path, tmp_path: Path
+) -> None:
+    clean = tmp_path / "efs-ok.zip"
+    with zipfile.ZipFile(archive) as src, zipfile.ZipFile(clean, "w") as dst:
+        for info in src.infolist():
+            dst.writestr(info, src.read(info.filename))
+        info = zipfile.ZipInfo("agent/nаme.py")
+        info.flag_bits |= 0x800
+        dst.writestr(info, b"x")
+
+    report = check(clean, SMOKE_PARENT_ENV)
+    assert not any("UTF-8" in message for message in report.failures)
+
+
+def test_a_lone_cr_in_the_entrypoint_fails(archive: Path, tmp_path: Path) -> None:
+    # Old Mac Classic line endings: a bare CR with no following LF. `CRLF in data`
+    # does not see it, so it used to slip through as if the file had Unix endings.
+    def to_lone_cr(info, data):
+        if info.filename == "run.sh":
+            data = data.replace(b"\n", b"\r")
+        return info, data
+
+    classic = repack(archive, tmp_path / "classic-mac.zip", transform=to_lone_cr)
+    report = check(classic, SMOKE_PARENT_ENV)
+
+    assert any("CR" in message for message in report.failures)
+
+
+def test_a_bom_before_the_shebang_is_named_not_reported_as_missing(
+    archive: Path, tmp_path: Path
+) -> None:
+    def add_bom(info, data):
+        if info.filename == "run.sh":
+            data = b"\xef\xbb\xbf" + data
+        return info, data
+
+    bommed = repack(archive, tmp_path / "bom.zip", transform=add_bom)
+    report = check(bommed, SMOKE_PARENT_ENV)
+
+    assert any("BOM" in message for message in report.failures)
+    assert not any("no shebang" in message for message in report.failures)
