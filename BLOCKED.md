@@ -19,6 +19,11 @@ Not blockers for tonight's coding work — recorded so the human doesn't lose th
   Mitigated by restarting each time it is noticed; if the gaps keep shrinking, this
   stops being a reliable mitigation and needs a human decision (e.g. a scheduled task
   instead of a harness-tracked background process).
+- Update ~12:40: after an hour-long stable run, the kill interval collapsed again —
+  three restarts in quick succession around 12:35-12:40. Still mitigating by
+  restarting on each notification, but this now looks less like noise and more like
+  the machine's actual power state changing (screen lock / user activity) around
+  midday. Worth checking on wake whether the laptop was touched.
 - `afk-watch` shells out to `systemd-run`, also absent on Windows. No watchdog is
   running tonight: if this session's process dies outright (crash, terminal closed),
   nothing will restart it. Mitigation in place instead: small, frequent commits per
