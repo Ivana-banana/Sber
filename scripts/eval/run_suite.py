@@ -100,6 +100,10 @@ class TaskResult:
     could report its own total, which is most of them."""
 
     endpoint_requests: int | None = None
+    endpoint_late: int | None = None
+    """Replies that arrived after their task was killed. Non-zero means the previous
+    task outlived its deadline at the endpoint, not that this one misbehaved."""
+
     note: str = ""
     log: str = ""
 
@@ -336,6 +340,7 @@ class Runner:
             if counters:
                 base.endpoint_tokens = counters.get("total_tokens")  # type: ignore[assignment]
                 base.endpoint_requests = counters.get("requests")  # type: ignore[assignment]
+                base.endpoint_late = counters.get("late_responses")  # type: ignore[assignment]
             base.wall_s = round(wall, 1)
             output = "" if proc is None else (proc.stdout or "") + (proc.stderr or "")
             log_file = self.logs / f"{spec.name}.r{repeat}.log"
@@ -389,7 +394,7 @@ def write_report(out: Path, suite: SuiteResult) -> None:
         json.dumps(asdict(suite), indent=2, ensure_ascii=False), encoding="utf-8"
     )
     lines = [
-        "task\trepeat\treward\ttokens\tep_tokens\tep_calls\twall_s\tsteps\tstop\tclaim\tfailure\tnote"
+        "task\trepeat\treward\ttokens\tep_tokens\tep_calls\tep_late\twall_s\tsteps\tstop\tclaim\tfailure\tnote"
     ]
     for row in suite.rows:
         lines.append(
@@ -401,6 +406,7 @@ def write_report(out: Path, suite: SuiteResult) -> None:
                     "?" if row.tokens is None else row.tokens,
                     "?" if row.endpoint_tokens is None else row.endpoint_tokens,
                     "?" if row.endpoint_requests is None else row.endpoint_requests,
+                    "?" if row.endpoint_late is None else row.endpoint_late,
                     row.wall_s,
                     "?" if row.steps is None else row.steps,
                     row.stop_reason, row.solved_claim, row.failure_mode, row.note,

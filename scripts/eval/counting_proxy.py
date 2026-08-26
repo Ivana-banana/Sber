@@ -49,11 +49,24 @@ gives up first would be recorded as an endpoint failure the endpoint never had."
 class Counters:
     def __init__(self) -> None:
         self.lock = threading.Lock()
+        self.epoch = 0
+        """Bumped on every reset, so a reply outliving its task cannot be charged to
+        the next one.
+
+        A task killed at its deadline leaves a request in flight: the agent process is
+        gone, but the model keeps generating and the proxy's thread is still waiting.
+        That answer arrives seconds later, after the harness has already reset the
+        counters for the following task, and without this it is counted -- and traced --
+        as if the next task had made it. Measured on E011: two calls attributed to
+        `fix-redirect-scheme` were byte-for-byte the answer `fix-cache-key-scope` was
+        still working on when it was killed.
+        """
         self._zero()
 
     def _zero(self) -> None:
         self.exchanges: list[dict[str, object]] = []
         self.requests = 0
+        self.late_responses = 0
         self.input_tokens = 0
         self.output_tokens = 0
         self.total_tokens = 0
@@ -62,10 +75,14 @@ class Counters:
 
     def reset(self) -> None:
         with self.lock:
+            self.epoch += 1
             self._zero()
 
-    def record(self, payload: bytes) -> None:
+    def record(self, payload: bytes, epoch: int) -> None:
         with self.lock:
+            if epoch != self.epoch:
+                self.late_responses += 1
+                return
             self.requests += 1
             try:
                 usage = json.loads(payload).get("usage") or {}
@@ -105,8 +122,11 @@ class Counters:
             }
         )
 
-    def error(self) -> None:
+    def error(self, epoch: int) -> None:
         with self.lock:
+            if epoch != self.epoch:
+                self.late_responses += 1
+                return
             self.requests += 1
             self.upstream_errors += 1
 
@@ -119,6 +139,7 @@ class Counters:
                 "total_tokens": self.total_tokens,
                 "responses_without_usage": self.responses_without_usage,
                 "upstream_errors": self.upstream_errors,
+                "late_responses": self.late_responses,
             }
 
 
@@ -159,6 +180,8 @@ class Handler(BaseHTTPRequestHandler):
         self._forward(self.rfile.read(length) if length else b"")
 
     def _forward(self, body: bytes) -> None:
+        with COUNTERS.lock:
+            epoch = COUNTERS.epoch
         headers = {
             key: value
             for key, value in self.headers.items()
@@ -182,13 +205,13 @@ class Handler(BaseHTTPRequestHandler):
             payload = exc.read()
             status = exc.code
             content_type = exc.headers.get("Content-Type", "application/json")
-            COUNTERS.error()
+            COUNTERS.error(epoch)
         except OSError as exc:
-            COUNTERS.error()
+            COUNTERS.error(epoch)
             self._json({"error": f"upstream unreachable: {exc}"}, status=502)
             return
         else:
-            COUNTERS.record(payload)
+            COUNTERS.record(payload, epoch)
 
         self.send_response(status)
         self.send_header("Content-Type", content_type)
