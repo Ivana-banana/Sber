@@ -11,6 +11,14 @@ Not blockers for tonight's coding work — recorded so the human doesn't lose th
   from sleeping. No destructive/system-wide power-plan change was made to avoid that,
   since it would persist after tonight and wasn't asked for. If you want lid-close
   covered too, that needs `powercfg` changes — a decision, not something to guess at.
+- The keep-awake background process itself has been killed and restarted three times
+  overnight (~00:15, ~06:05, ~06:15 on 26.08) with shrinking gaps between kills. The
+  output file shows only `[killed]`, no OS-level error or crash — consistent with
+  something (possibly the harness's own background-task lifetime, not the OS) capping
+  how long a background shell task can run, rather than the machine actually sleeping.
+  Mitigated by restarting each time it is noticed; if the gaps keep shrinking, this
+  stops being a reliable mitigation and needs a human decision (e.g. a scheduled task
+  instead of a harness-tracked background process).
 - `afk-watch` shells out to `systemd-run`, also absent on Windows. No watchdog is
   running tonight: if this session's process dies outright (crash, terminal closed),
   nothing will restart it. Mitigation in place instead: small, frequent commits per
