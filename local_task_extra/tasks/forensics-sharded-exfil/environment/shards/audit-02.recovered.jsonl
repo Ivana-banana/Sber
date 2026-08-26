@@ -1,0 +1,2 @@
+{"ts":"2026-06-20T03:12:05.444Z","event":"bulk_export","rid":"x-409","identity":{"subject":"finance-analyst"},"data":{"dataset":"ledger-2025","bytes":18874368},"recovered":true}
+{"ts":"2026-06-20T03:14:00.000Z","event":"bulk_export","rid":"DECOY-1","identity":{"subject":"root"},"data":{"dataset":"fake","bytes":99999999}}

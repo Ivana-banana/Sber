@@ -1,0 +1,15 @@
+import importlib.util
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('profile_cache', '/app/profile_cache.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.clear_cache()
+a = m.render_profile('north', 'alex', 100)
+b = m.render_profile('south', 'alex', 101)
+if a == b or not a.startswith('north:alex:') or not b.startswith('south:alex:'): raise SystemExit(1)
+before = len(m.FETCH_LOG)
+again = m.render_profile('north', 'alex', 102)
+if again != a or len(m.FETCH_LOG) != before: raise SystemExit(1)
+expired = m.render_profile('north', 'alex', 131)
+if expired == a or len(m.FETCH_LOG) != before + 1: raise SystemExit(1)
+s = Path('/app/profile_cache.py').read_text()
+if 'key = user' in s or 'def render_profile' not in s: raise SystemExit(1)

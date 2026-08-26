@@ -1,0 +1,33 @@
+schema_version = "1.2"
+
+[task]
+name = "local/mut-fix-session-lookup"
+description = "Patch an altered SQLite session-lookup service so injected credentials cannot authenticate."
+authors = ["local-fixture-generator"]
+keywords = ["offline", "deterministic", "mutation"]
+
+[metadata]
+difficulty = "medium"
+category = "security"
+tags = ["local", "offline", "mutation", "fix", "sqli", "fix-sqli-login-essence"]
+
+[verifier]
+timeout_sec = 30.0
+
+[agent]
+timeout_sec = 180.0
+
+[environment]
+build_timeout_sec = 120.0
+cpus = 1
+memory_mb = 256
+storage_mb = 1024
+gpus = 0
+allow_internet = false
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]

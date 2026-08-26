@@ -1,0 +1,9 @@
+#!/bin/bash
+set -euo pipefail
+cat > /app/incident_report.txt <<'EOF'
+attacker_ip=203.0.113.204
+compromised_user=finance-analyst
+dataset=ledger-2025
+exfil_bytes=18874368
+first_malicious_event_utc=2026-06-20T03:12:05.444Z
+EOF

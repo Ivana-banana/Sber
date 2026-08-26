@@ -1,0 +1,8 @@
+#!/bin/bash
+set -euo pipefail
+cat > /app/incident_report.txt <<'EOF'
+attacker_ip=198.51.100.86
+compromised_user=guest-upload
+webshell_path=/uploads/shell.php
+exfil_bytes=7340032
+EOF

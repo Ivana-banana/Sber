@@ -1,0 +1,2 @@
+203.0.113.204 PTR=cdn.example.invalid (untrusted hint)
+192.0.2.66 PTR=DECOY.invalid

@@ -1,0 +1,2 @@
+{"ts":"2026-06-11T08:34:19Z","event":"command_exec","actor":{"user":"guest-upload"},"path":"/uploads/shell.php","output_bytes":7340032}
+{"ts":"2026-06-11T08:30:01Z","event":"upload","actor":{"user":"designer"},"path":"/uploads/logo.png","output_bytes":12}
