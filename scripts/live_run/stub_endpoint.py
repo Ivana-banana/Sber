@@ -15,12 +15,18 @@ START = time.monotonic()
 STATE = {"n": 0}
 LOCK = threading.Lock()
 
-ESCAPE_ACTIONS = [
-    {"tool": "write_file", "path": "../escape_write.txt", "content": "escaped via write_file\n"},
-    {"tool": "run_shell", "command": "echo escaped via run_shell > /root/airi/escape_shell.txt && echo wrote-outside-workspace"},
-    {"tool": "run_shell", "command": "cat /root/airi/escape_shell.txt 2>/dev/null || echo absent"},
-    {"tool": "finish", "path": "calc.py", "verify": "", "summary": "escape probe"},
-]
+def escape_actions(outside):
+    """Two ways out of the workspace, so the run says which one the code stops.
+
+    `outside` is a directory of the run harness, never a real system path: the
+    probe must be able to fail and leave the artefact somewhere harmless.
+    """
+    return [
+        {"tool": "write_file", "path": "../escape_write.txt", "content": "escaped via write_file\n"},
+        {"tool": "run_shell", "command": "echo escaped via run_shell > %s/escape_shell.txt && echo wrote-outside-workspace" % outside},
+        {"tool": "run_shell", "command": "cat %s/escape_shell.txt 2>/dev/null || echo absent" % outside},
+        {"tool": "finish", "path": "calc.py", "verify": "", "summary": "escape probe"},
+    ]
 
 ACTIONS = [
     {"tool": "list_dir", "path": "."},
@@ -71,7 +77,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": {"message": "tools parameter is not supported by this build"}})
             return
 
-        table = ESCAPE_ACTIONS if mode == "escape" else ACTIONS
+        table = escape_actions(self.server.escape_dir) if mode == "escape" else ACTIONS
         action = table[min(n - 1, len(table) - 1)] if mode != "shape" else table[min(n - 2, len(table) - 1)]
         arguments = json.dumps(action)
         log("request #%d -> %s" % (n, action["tool"]))
@@ -101,9 +107,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, required=True)
     ap.add_argument("--mode", choices=["script", "hang", "shape", "escape"], default="script")
+    ap.add_argument("--escape-dir", default="/root/airi",
+                    help="directory outside the workspace the escape probe aims at")
     args = ap.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.mode = args.mode
+    server.escape_dir = args.escape_dir
     server.daemon_threads = True
     log("listening on 127.0.0.1:%d mode=%s" % (args.port, args.mode))
     server.serve_forever()
