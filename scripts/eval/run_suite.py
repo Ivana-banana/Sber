@@ -26,6 +26,11 @@ baseline:
 because the hardware is slow and a run killed because the agent went in circles are
 different failures, and reporting them as one number would be a lie. Scale 1.0 is the
 contract; anything above it is a separate, separately labelled measurement.
+
+It moves the external kill and nothing else. The agent is still told no budget, so it
+still assumes the outer bound and still writes its early deliverable on the same
+schedule -- the only thing that varies is how many steps fit before the kill, which is
+what a faster endpoint would change too.
 """
 
 from __future__ import annotations
@@ -249,10 +254,12 @@ class Runner:
             "-e", f"OPENAI_BASE_URL={self.args.base_url}",
             "-e", f"OPENAI_API_KEY={self.args.api_key}",
         ]
-        if self.args.timeout_scale != 1.0:
-            # Only when the measurement is deliberately off-contract: tell the agent
-            # about the budget it actually has, so a scaled run measures reasoning
-            # rather than a deadline the agent cannot see.
+        if self.args.tell_agent_budget:
+            # Off by default, and off in every scaled run: Harbor tells the agent
+            # nothing about the deadline, so telling it here would change two things at
+            # once. `--timeout-scale` is meant to vary how much time the run actually
+            # gets, with the agent behaving exactly as it does on the real endpoint --
+            # assuming the outer bound and producing its early deliverable on schedule.
             env += ["-e", f"AGENT_TIMEOUT_S={budget:.0f}"]
 
         cmd = [
@@ -407,6 +414,10 @@ def main() -> int:
     )
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--timeout-scale", type=float, default=1.0)
+    parser.add_argument(
+        "--tell-agent-budget", action="store_true",
+        help="also export AGENT_TIMEOUT_S; off by default because the runner never does",
+    )
     parser.add_argument("--label", default="unlabelled")
     parser.add_argument("--archive", default=str(ROOT / "build" / "submission.zip"))
     args = parser.parse_args()
