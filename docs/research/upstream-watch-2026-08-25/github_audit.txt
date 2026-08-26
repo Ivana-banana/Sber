@@ -1,0 +1,76 @@
+ISSUES_API
+[]
+PULLS_API
+[
+  {
+    "number": 3,
+    "state": "closed",
+    "title": "Fix SQLi task reference solutions",
+    "created_at": "2026-07-09T16:04:05Z",
+    "updated_at": "2026-07-09T16:04:14Z",
+    "closed_at": "2026-07-09T16:04:14Z",
+    "merged_at": "2026-07-09T16:04:14Z",
+    "html_url": "https://github.com/SecureIntelligent/UniversalAgenticCompetitionPublic/pull/3",
+    "body": null,
+    "user": "Kaktusava",
+    "merge_commit_sha": "71f90810d7a608677bbcf44f409f0aefded38340"
+  },
+  {
+    "number": 2,
+    "state": "closed",
+    "title": "Fix local agent stream events",
+    "created_at": "2026-07-08T16:18:51Z",
+    "updated_at": "2026-07-08T16:19:41Z",
+    "closed_at": "2026-07-08T16:19:41Z",
+    "merged_at": "2026-07-08T16:19:41Z",
+    "html_url": "https://github.com/SecureIntelligent/UniversalAgenticCompetitionPublic/pull/2",
+    "body": null,
+    "user": "Kaktusava",
+    "merge_commit_sha": "bdccc1d8636d3dc39b363df59af536b734c1af58"
+  },
+  {
+    "number": 1,
+    "state": "closed",
+    "title": "fix local task fixtures and entrypoint startup",
+    "created_at": "2026-07-08T11:39:29Z",
+    "updated_at": "2026-07-08T11:40:44Z",
+    "closed_at": "2026-07-08T11:39:40Z",
+    "merged_at": "2026-07-08T11:39:40Z",
+    "html_url": "https://github.com/SecureIntelligent/UniversalAgenticCompetitionPublic/pull/1",
+    "body": null,
+    "user": "Kaktusava",
+    "merge_commit_sha": "0bd8969bd50382f1bfeac3d085d496e94a15f1de"
+  }
+]
+DISCUSSIONS_API
+HTTP/2 410 
+date: Tue, 25 Aug 2026 07:01:13 GMT
+content-type: application/json; charset=utf-8
+content-length: 182
+x-github-media-type: github.v3; format=json
+x-github-api-version-selected: 2022-11-28
+access-control-expose-headers: ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning
+access-control-allow-origin: *
+strict-transport-security: max-age=31536000; includeSubdomains; preload
+x-frame-options: deny
+x-content-type-options: nosniff
+x-xss-protection: 0
+referrer-policy: origin-when-cross-origin, strict-origin-when-cross-origin
+content-security-policy: default-src 'none'
+vary: Accept-Encoding, Accept, X-Requested-With
+server: github.com
+x-ratelimit-limit: 60
+x-ratelimit-remaining: 51
+x-ratelimit-used: 9
+x-ratelimit-resource: core
+x-ratelimit-reset: 1787642237
+x-github-request-id: 8286:3871A3:3414D6A:AE4DA2C:6A8D3DB9
+x-github-edge-region: iad
+
+{
+  "message": "Discussions are disabled for this repo",
+  "documentation_url": "https://docs.github.com/rest/repos/discussions#list-discussions-for-repository",
+  "status": "410"
+}
+EVENTS
+[]

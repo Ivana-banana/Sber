@@ -1,0 +1,82 @@
+DOCKERHUB_TAGS
+{
+  "count": 2,
+  "results": [
+    {
+      "name": "latest",
+      "last_updated": "2026-07-02T14:57:25.825344Z",
+      "digest": "sha256:1324d7bb140422a9929f5bc538f55ec0480d2731742effee02bf67604130c8a3",
+      "images": [
+        {
+          "architecture": "amd64",
+          "os": "linux",
+          "digest": "sha256:5a93249d3dfd44dbf2e83806f89ce2662a3e575c8ad0fb5c54feb03ec5626132",
+          "size": 633598038,
+          "status": "active"
+        },
+        {
+          "architecture": "arm64",
+          "os": "linux",
+          "digest": "sha256:60f32b3e722fcfdd6dc3a5f42f8e2a1860cc5c390583616cbfaa45785bf530a3",
+          "size": 616159751,
+          "status": "active"
+        },
+        {
+          "architecture": "unknown",
+          "os": "unknown",
+          "digest": "sha256:29c9423dad7932d7756e8d556f193e29410c80bac760a5d2f27921b35239e138",
+          "size": 1410,
+          "status": "active"
+        },
+        {
+          "architecture": "unknown",
+          "os": "unknown",
+          "digest": "sha256:05b1d10e12649a7a13c33f776d8f177244f00ef3f8a3628d70cf56511d8fa9f0",
+          "size": 1410,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "name": "harbor-0.16.1",
+      "last_updated": "2026-07-02T15:00:01.357552Z",
+      "digest": "sha256:1324d7bb140422a9929f5bc538f55ec0480d2731742effee02bf67604130c8a3",
+      "images": [
+        {
+          "architecture": "amd64",
+          "os": "linux",
+          "digest": "sha256:5a93249d3dfd44dbf2e83806f89ce2662a3e575c8ad0fb5c54feb03ec5626132",
+          "size": 633598038,
+          "status": "active"
+        },
+        {
+          "architecture": "arm64",
+          "os": "linux",
+          "digest": "sha256:60f32b3e722fcfdd6dc3a5f42f8e2a1860cc5c390583616cbfaa45785bf530a3",
+          "size": 616159751,
+          "status": "active"
+        },
+        {
+          "architecture": "unknown",
+          "os": "unknown",
+          "digest": "sha256:29c9423dad7932d7756e8d556f193e29410c80bac760a5d2f27921b35239e138",
+          "size": 1410,
+          "status": "active"
+        },
+        {
+          "architecture": "unknown",
+          "os": "unknown",
+          "digest": "sha256:05b1d10e12649a7a13c33f776d8f177244f00ef3f8a3628d70cf56511d8fa9f0",
+          "size": 1410,
+          "status": "active"
+        }
+      ]
+    }
+  ]
+}
+REGISTRY_TAGS
+{"errors":[{"code":"UNAUTHORIZED","message":"authentication required","detail":[{"Type":"repository","Class":"","Name":"secureintelligent/acp","Action":"pull"}]}]}
+
+MANIFEST latest
+content-type: application/json
+{"errors":[{"code":"UNAUTHORIZED","message":"authentication required","detail":[{"Type":"repository","Class":"","Name":"secureintelligent/acp","Action":"pull"}]}]}
