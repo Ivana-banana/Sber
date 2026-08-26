@@ -93,7 +93,7 @@ def run(
             prompt.build_messages(system, observations),
             schema=prompt.ACTION_SCHEMA,
             max_output_tokens=limits.LLM_MAX_OUTPUT_TOKENS,
-            timeout_s=min(limits.LLM_TIMEOUT_S, max(1.0, state.budget.spendable_s())),
+            timeout_s=max(1.0, state.budget.llm_timeout_s()),
         )
 
         if isinstance(reply, LlmError):

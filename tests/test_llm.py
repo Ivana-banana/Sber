@@ -313,6 +313,89 @@ def test_no_time_left_means_no_call() -> None:
     assert endpoint.bodies == []
 
 
+def test_a_logical_call_cannot_outlive_its_deadline_across_retries() -> None:
+    """A hung transport must not be retried past the deadline the caller gave.
+
+    Before this fix, `budget_s` bounded each attempt's own timeout, not the call as
+    a whole: three attempts at the full ceiling (120s) plus backoff (1+3s) added up
+    to 364s against a 120s deadline -- almost four times over.
+    """
+    clock = {"t": 0.0}
+    attempts: list[float] = []
+
+    def hanging_transport(url, body, headers, timeout_s):
+        attempts.append(timeout_s)
+        clock["t"] += timeout_s  # the request runs right up to its own timeout
+        raise TimeoutError("simulated hang")
+
+    def fake_sleep(seconds: float) -> None:
+        clock["t"] += seconds  # backoff moves the same clock
+
+    client = llm.HttpLlm(
+        settings=llm.LlmSettings.from_env(ENV),
+        transport=hanging_transport,
+        sleep=fake_sleep,
+        clock=lambda: clock["t"],
+    )
+
+    result = client.complete([], max_output_tokens=16, timeout_s=120.0)
+
+    assert isinstance(result, LlmError)
+    assert attempts == [120.0], "the first attempt already spends the whole deadline"
+    assert clock["t"] == 120.0, "no retry may run once the caller's deadline is gone"
+
+
+def test_a_fast_failing_transport_still_gets_its_configured_retries() -> None:
+    # The fix above must not come at the cost of genuine retries when attempts fail
+    # quickly and there is still budget left -- only a slow attempt should eat into
+    # the schedule.
+    clock = {"t": 0.0}
+
+    def fast_fail_transport(url, body, headers, timeout_s):
+        raise TimeoutError("fails immediately, far under its own budget")
+
+    def fake_sleep(seconds: float) -> None:
+        clock["t"] += seconds
+
+    client = llm.HttpLlm(
+        settings=llm.LlmSettings.from_env(ENV),
+        transport=fast_fail_transport,
+        sleep=fake_sleep,
+        clock=lambda: clock["t"],
+    )
+
+    result = client.complete([], max_output_tokens=16, timeout_s=120.0)
+
+    assert isinstance(result, LlmError)
+    assert clock["t"] == sum(limits.LLM_RETRY_BACKOFF_S), "the backoff schedule still runs in full"
+
+
+def test_backoff_never_sleeps_past_the_deadline() -> None:
+    # A fast failure against a small deadline: the retry schedule (1.0s, then 3.0s)
+    # is wider than what is left after the first backoff. `_backoff` used to be a
+    # binary gate -- sleep the full rung, or not at all -- rather than a clamp, so
+    # the second backoff slept its full 3.0s even though only 1.0s remained.
+    clock = {"t": 0.0}
+
+    def fast_fail_transport(url, body, headers, timeout_s):
+        raise TimeoutError("fails immediately")
+
+    def fake_sleep(seconds: float) -> None:
+        clock["t"] += seconds
+
+    client = llm.HttpLlm(
+        settings=llm.LlmSettings.from_env(ENV),
+        transport=fast_fail_transport,
+        sleep=fake_sleep,
+        clock=lambda: clock["t"],
+    )
+
+    result = client.complete([], max_output_tokens=16, timeout_s=2.0)
+
+    assert isinstance(result, LlmError)
+    assert clock["t"] <= 2.0, "backoff must never sleep past the deadline it was given"
+
+
 def test_fallback_can_be_switched_off_for_measurement() -> None:
     client, endpoint, events = make_client([(400, b"no tools")])
     client.allow_fallback = False

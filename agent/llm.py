@@ -270,6 +270,7 @@ class HttpLlm:
     single rung works, and silent recovery would hide exactly that answer."""
 
     sleep: Callable[[float], None] = field(default=time.sleep, repr=False)
+    clock: Callable[[], float] = field(default=time.monotonic, repr=False)
     on_event: Callable[[str, str], None] | None = field(default=None, repr=False)
     """Called as (kind, detail) for protocol downgrades and retries, so the loop can
     put them in the audit trail. Never receives secrets: text is redacted first."""
@@ -475,6 +476,13 @@ class HttpLlm:
         if budget_s <= 0:
             return LlmError(reason="no time left for an llm call", retryable=False)
 
+        # `budget_s` bounds the whole logical call -- retries, fallback demotions and
+        # backoff sleeps included -- not each attempt's own transport timeout. The
+        # deadline is fixed once; every attempt after the first is given whatever is
+        # left of it. Attempt 0 uses `budget_s` directly, without an extra clock()
+        # read, so a caller asking for an exact timeout gets exactly that value.
+        deadline = self.clock() + budget_s
+
         url = f"{self.settings.base_url}/chat/completions"
         headers = self.settings.headers()
 
@@ -482,14 +490,18 @@ class HttpLlm:
         retries_at_style = 0
 
         for attempt in range(limits.LLM_MAX_ATTEMPTS):
+            remaining = budget_s if attempt == 0 else deadline - self.clock()
+            if remaining <= 0:
+                return last
+
             body = self._build_body(messages, schema, max_output_tokens)
             try:
                 status, raw = self.transport(
-                    url, json.dumps(body).encode("utf-8"), headers, budget_s
+                    url, json.dumps(body).encode("utf-8"), headers, remaining
                 )
             except Exception as exc:  # transport failure of any kind
                 last = LlmError(reason=f"transport failed: {type(exc).__name__}", retryable=True)
-                if not self._backoff(attempt):
+                if not self._backoff(attempt, deadline):
                     return last
                 continue
 
@@ -510,7 +522,7 @@ class HttpLlm:
                     # One retry at the current rung. A server error that survives it is
                     # more likely a deterministic parser failure than an outage, so the
                     # second response is to change the request shape, not repeat it.
-                    if retries_at_style == 0 and self._backoff(attempt):
+                    if retries_at_style == 0 and self._backoff(attempt, deadline):
                         retries_at_style += 1
                         continue
                     if schema is not None and self._demote(f"persistent http {status}"):
@@ -527,7 +539,7 @@ class HttpLlm:
                 payload = json.loads(raw.decode("utf-8", "replace"))
             except json.JSONDecodeError:
                 last = LlmError(reason="endpoint reply was not json", retryable=True)
-                if not self._backoff(attempt):
+                if not self._backoff(attempt, deadline):
                     return last
                 continue
 
@@ -552,11 +564,17 @@ class HttpLlm:
 
         return last
 
-    def _backoff(self, attempt: int) -> bool:
-        """Wait before the next attempt. False when the schedule is exhausted."""
+    def _backoff(self, attempt: int, deadline: float) -> bool:
+        """Wait before the next attempt. False when the schedule or the deadline is
+        exhausted. The rung is clamped to what is actually left: sleeping the full
+        rung regardless would blow past a deadline narrower than the schedule --
+        a fast failure with little time left must not sleep 3s for a 1s budget."""
         if attempt >= len(limits.LLM_RETRY_BACKOFF_S):
             return False
-        delay = limits.LLM_RETRY_BACKOFF_S[attempt]
+        remaining = deadline - self.clock()
+        if remaining <= 0:
+            return False
+        delay = min(limits.LLM_RETRY_BACKOFF_S[attempt], remaining)
         self._note("retry", f"attempt {attempt + 1} failed, waiting {delay}s")
         self.sleep(delay)
         return True

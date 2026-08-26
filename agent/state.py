@@ -167,6 +167,19 @@ class Budget:
         """Timeout for one shell command: never long enough to eat the reserve."""
         return max(0.0, min(limits.TOOL_TIMEOUT_MAX_S, self.spendable_s()))
 
+    def llm_timeout_s(self) -> float:
+        """Ceiling for one logical LLM call: never longer than `LLM_TIMEOUT_S` or the
+        spendable time, and -- before the early checkpoint -- never long enough on
+        its own to run past it. `LLM_TIMEOUT_S` (120s) is wider than
+        `early_deadline_s` (90s by default); left uncapped, a single call could carry
+        the run past the point a deliverable was due before a runner with an
+        undeclared short timeout would have killed it.
+        """
+        ceiling = min(limits.LLM_TIMEOUT_S, self.spendable_s())
+        if not self.past_early_deadline():
+            ceiling = min(ceiling, self.early_deadline_s - self.elapsed_s())
+        return max(0.0, ceiling)
+
     def start_step(self) -> int:
         """Consume one step and return its number, starting at 1."""
         self.steps_used += 1

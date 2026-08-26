@@ -158,3 +158,45 @@ def test_a_budget_smaller_than_the_checkpoint_is_all_early_phase() -> None:
 
     clock.advance(budget.total_s - budget.verify_reserve_s)
     assert budget.past_early_deadline(), "a short run must not spend everything exploring"
+
+
+# --- the per-call ceiling ----------------------------------------------------
+
+
+def test_llm_timeout_is_bounded_by_the_early_deadline_from_the_very_first_call() -> None:
+    # LLM_TIMEOUT_S (120) is wider than EARLY_DELIVERABLE_DEADLINE_S (90). A single
+    # call left free to run the full per-call ceiling could, on its own, carry the
+    # run past the point a deliverable was due -- before a runner with an
+    # undeclared short timeout would have killed it, deliverable-less.
+    budget, _ = make_budget(600.0)
+    assert budget.llm_timeout_s() == budget.early_deadline_s
+
+
+def test_llm_timeout_shrinks_as_the_early_deadline_approaches() -> None:
+    budget, clock = make_budget(600.0)
+    clock.advance(budget.early_deadline_s - 10.0)
+    assert budget.llm_timeout_s() == 10.0
+
+
+def test_llm_timeout_reverts_to_the_full_ceiling_once_past_the_early_deadline() -> None:
+    budget, clock = make_budget(600.0)
+    clock.advance(budget.early_deadline_s + 1.0)
+    assert budget.llm_timeout_s() == limits.LLM_TIMEOUT_S
+
+
+def test_llm_timeout_never_exceeds_the_spendable_time() -> None:
+    budget, clock = make_budget(600.0)
+    clock.advance(600.0 - budget.verify_reserve_s - 5.0)
+    assert budget.past_early_deadline()
+    assert budget.llm_timeout_s() == 5.0
+
+
+def test_llm_timeout_is_never_negative() -> None:
+    budget, clock = make_budget(600.0)
+    clock.advance(600.0)
+    assert budget.llm_timeout_s() == 0.0
+
+
+def test_llm_timeout_on_a_short_task_still_respects_the_checkpoint() -> None:
+    budget, _ = make_budget(60.0)
+    assert budget.llm_timeout_s() == budget.early_deadline_s
