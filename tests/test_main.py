@@ -82,6 +82,131 @@ def test_the_image_workdir_is_not_used_when_it_is_our_own_directory(
     assert "cwd" in why
 
 
+# --- the workspace named by the task text -----------------------------------
+#
+# Measured, not imagined: E009 ran the archive against a real model on packages whose
+# image WORKDIR is not `/app`. With no `LOCAL_AGENT_WORKDIR`, no `/app`, and cwd equal
+# to the agent's own install directory (which is what Harbor gives us), the agent
+# concluded its own source tree was the task, wrote the deliverable there, verified it
+# there, and reported solved=True against a verifier that scored zero.
+
+
+def test_a_directory_named_by_the_task_beats_our_own_directory(tmp_path, monkeypatch) -> None:
+    task = tmp_path / "srv" / "bootstrap"
+    task.mkdir(parents=True)
+    agent_dir = tmp_path / "opt" / "harbor" / "local-agent"
+    agent_dir.mkdir(parents=True)
+    monkeypatch.setattr(limits, "IMAGE_WORKDIR", str(tmp_path / "absent"))
+
+    workspace, why = resolve_workspace(
+        {}, cwd=agent_dir, agent_dir=agent_dir,
+        instruction=f"Create the marker at `{task}/farewell.marker` with no newline.",
+    )
+
+    assert workspace == task, "the task named a real directory; our own tree is not it"
+    assert "task text" in why
+
+
+def test_a_file_that_does_not_exist_yet_still_names_its_directory(tmp_path, monkeypatch) -> None:
+    # The deliverable is the file the run has to create, so it is absent when the
+    # workspace is chosen. Its parent is the directory that matters.
+    task = tmp_path / "opt" / "runstate"
+    task.mkdir(parents=True)
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.setattr(limits, "IMAGE_WORKDIR", str(tmp_path / "absent"))
+
+    workspace, _ = resolve_workspace(
+        {}, cwd=agent_dir, agent_dir=agent_dir,
+        instruction=f"Write {task}/ready.signal so the wrapper proceeds.",
+    )
+
+    assert workspace == task
+
+
+def test_the_image_workdir_still_wins_over_the_task_text(tmp_path, monkeypatch) -> None:
+    # `/app` is a measurement about the target image, the task text is a hint. When
+    # both are available the measurement decides, so this cannot regress the layout
+    # every public task actually uses.
+    image_workdir = tmp_path / "app"
+    image_workdir.mkdir()
+    named = tmp_path / "var" / "log"
+    named.mkdir(parents=True)
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.setattr(limits, "IMAGE_WORKDIR", str(image_workdir))
+
+    workspace, why = resolve_workspace(
+        {}, cwd=agent_dir, agent_dir=agent_dir,
+        instruction=f"Read {named}/auth.log and report.",
+    )
+
+    assert workspace == image_workdir
+    assert "image workdir" in why
+
+
+def test_a_path_that_does_not_exist_is_not_a_workspace(tmp_path, monkeypatch) -> None:
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.setattr(limits, "IMAGE_WORKDIR", str(tmp_path / "absent"))
+
+    workspace, why = resolve_workspace(
+        {}, cwd=agent_dir, agent_dir=agent_dir,
+        instruction="Write /nowhere/at/all/report.json with the findings.",
+    )
+
+    assert workspace == agent_dir
+    assert "cwd" in why
+
+
+def test_system_directories_are_not_mistaken_for_the_task(tmp_path, monkeypatch) -> None:
+    # Instructions mention `/bin/sh`, `/usr/bin/python3` and `/etc/passwd` all the
+    # time. Naming a tool is not naming a workspace.
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.setattr(limits, "IMAGE_WORKDIR", str(tmp_path / "absent"))
+
+    workspace, _ = resolve_workspace(
+        {}, cwd=agent_dir, agent_dir=agent_dir,
+        instruction="Use /bin/sh and /usr/bin/python3; the password file is /etc/passwd.",
+    )
+
+    assert workspace == agent_dir
+
+
+def test_the_directory_the_task_names_most_wins(tmp_path, monkeypatch) -> None:
+    quiet = tmp_path / "quiet"
+    quiet.mkdir()
+    loud = tmp_path / "loud"
+    loud.mkdir()
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.setattr(limits, "IMAGE_WORKDIR", str(tmp_path / "absent"))
+
+    workspace, _ = resolve_workspace(
+        {}, cwd=agent_dir, agent_dir=agent_dir,
+        instruction=f"Read {quiet}/one.txt, then fix {loud}/a.py and {loud}/b.py "
+                    f"and write {loud}/report.json.",
+    )
+
+    assert workspace == loud
+
+
+def test_the_agents_own_tree_is_never_the_answer_even_when_named(tmp_path, monkeypatch) -> None:
+    # Untrusted text must not be able to point the run at its own source.
+    agent_dir = tmp_path / "agent"
+    (agent_dir / "agent").mkdir(parents=True)
+    monkeypatch.setattr(limits, "IMAGE_WORKDIR", str(tmp_path / "absent"))
+
+    workspace, why = resolve_workspace(
+        {}, cwd=agent_dir, agent_dir=agent_dir,
+        instruction=f"Edit {agent_dir}/agent/loop.py and {agent_dir}/agent/limits.py.",
+    )
+
+    assert workspace == agent_dir
+    assert "cwd" in why, "chosen as the last resort, not because the text asked"
+
+
 def test_resolution_always_lands_somewhere_real(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(limits, "IMAGE_WORKDIR", str(tmp_path / "definitely-absent"))
     workspace, _ = resolve_workspace({}, cwd=tmp_path, agent_dir=tmp_path)

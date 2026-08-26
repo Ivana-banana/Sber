@@ -39,3 +39,7 @@ submission.zip
 .vscode/
 .DS_Store
 Thumbs.db
+
+# AFK critic notes, not part of the project record
+.afk-critic-*.md
+.afk/

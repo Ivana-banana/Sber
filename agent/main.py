@@ -12,6 +12,7 @@ to report its own status, and must not raise on a malformed argument list.
 from __future__ import annotations
 
 import hashlib
+import re
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -39,7 +40,67 @@ def fingerprint(instruction: str) -> str:
     return hashlib.sha256(instruction.encode("utf-8")).hexdigest()[:FINGERPRINT_CHARS]
 
 
-def resolve_workspace(env: Mapping[str, str], cwd: Path, agent_dir: Path) -> tuple[Path, str]:
+SYSTEM_ROOTS: tuple[str, ...] = (
+    "/bin", "/sbin", "/usr", "/lib", "/lib32", "/lib64", "/etc", "/proc", "/sys",
+    "/dev", "/run", "/boot", "/opt/harbor",
+)
+"""Directories a task text names without meaning "the task lives here".
+
+Instructions mention `/bin/sh`, `/usr/bin/python3` and `/etc/passwd` constantly. A
+tool is not a workspace, and treating one as such would point the whole run at the
+image's own system tree.
+"""
+
+INSTRUCTION_SCAN_CHARS = 4000
+PATH_TOKEN = re.compile(r"/[A-Za-z0-9._+-]+(?:/[A-Za-z0-9._+-]+)*")
+
+
+def directories_named_by(instruction: str, agent_dir: Path) -> list[Path]:
+    """Existing directories the task text points at, most-mentioned first.
+
+    Why the task text is allowed to decide anything at all. It is untrusted input and
+    is never followed as instructions -- but the deliverable path in it *is* the task,
+    and when the image has no `/app` there is nothing else that knows where the task
+    lives. The rule is deliberately narrow: a candidate must already exist on disk, so
+    nothing here creates or reaches anywhere new, and the choice is recorded in the
+    trace.
+
+    A named file that does not exist yet still counts through its parent, because the
+    deliverable is by definition the file the run has not written yet.
+    """
+    counts: dict[Path, int] = {}
+    for match in PATH_TOKEN.finditer(instruction[:INSTRUCTION_SCAN_CHARS]):
+        token = match.group().rstrip("./-")
+        if not token or token == "/":
+            continue
+        candidate = Path(token)
+        if not candidate.is_dir():
+            candidate = candidate.parent
+        if not candidate.is_dir() or candidate == Path(candidate.root):
+            continue
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if any(
+            resolved == Path(root) or Path(root) in resolved.parents
+            for root in SYSTEM_ROOTS
+        ):
+            continue
+        # Our own tree is never the task, whether the text names it by mistake or on
+        # purpose. Ancestors of it are excluded for the same reason: `/opt` is not a
+        # workspace just because we were installed under it.
+        agent_root = agent_dir.resolve()
+        if resolved == agent_root or agent_root in resolved.parents or resolved in agent_root.parents:
+            continue
+        counts[resolved] = counts.get(resolved, 0) + 1
+
+    return sorted(counts, key=lambda path: -counts[path])
+
+
+def resolve_workspace(
+    env: Mapping[str, str], cwd: Path, agent_dir: Path, instruction: str = ""
+) -> tuple[Path, str]:
     """Find the directory the task actually lives in. Returns (path, why).
 
     The obvious answer -- "wherever the runner started us" -- is wrong here. Harbor
@@ -62,13 +123,22 @@ def resolve_workspace(env: Mapping[str, str], cwd: Path, agent_dir: Path) -> tup
     if image_workdir.is_dir() and image_workdir.resolve() != agent_dir.resolve():
         return image_workdir, f"image workdir {limits.IMAGE_WORKDIR}"
 
+    # Measured in E009: when the image WORKDIR is not `/app`, the two candidates above
+    # both miss and cwd is our own install directory. The run then writes its
+    # deliverable into the agent's source tree, verifies it there and reports success
+    # against a verifier that scores zero. The task text is the only remaining thing
+    # that knows where the task is.
+    named = directories_named_by(instruction, agent_dir)
+    if named:
+        return named[0], f"directory named by the task text ({named[0]})"
+
     return cwd, "runner cwd (no better candidate)"
 
 
 def build_state(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> AgentState:
     """Assemble the run's state. Separate from `main` so tests do not need a shell."""
     agent_dir = Path(__file__).resolve().parent.parent
-    workspace, reason = resolve_workspace(env, cwd, agent_dir)
+    workspace, reason = resolve_workspace(env, cwd, agent_dir, argv[1])
 
     state = AgentState(
         instruction=argv[1],

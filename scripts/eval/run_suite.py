@@ -90,6 +90,11 @@ class TaskResult:
     solved_claim: str
     workspace: str
     failure_mode: str
+    endpoint_tokens: int | None = None
+    """What the endpoint counter saw. Present even when the run was killed before it
+    could report its own total, which is most of them."""
+
+    endpoint_requests: int | None = None
     note: str = ""
     log: str = ""
 
@@ -166,6 +171,31 @@ class Runner:
         self.unpacked = unpacked
         self.logs = Path(args.out) / "logs"
         self.logs.mkdir(parents=True, exist_ok=True)
+
+    def counter_call(self, path: str, method: str) -> dict[str, int] | None:
+        """Talk to the counting proxy through `docker exec`, not over the network.
+
+        The proxy lives on an `--internal` network and the host firewall drops traffic
+        from docker bridges to the host, so the reliable channel to it is the one that
+        does not use IP routing at all.
+        """
+        if not self.args.counter_container:
+            return None
+        script = (
+            "import json,urllib.request;"
+            f"r=urllib.request.Request('http://127.0.0.1:8000{path}',method='{method}');"
+            "print(urllib.request.urlopen(r,timeout=30).read().decode())"
+        )
+        answered = run(
+            ["docker", "exec", self.args.counter_container, "python3", "-c", script],
+            timeout=60.0,
+        )
+        if answered.returncode != 0:
+            return None
+        try:
+            return json.loads(answered.stdout)
+        except ValueError:
+            return None
 
     def image_tag(self, spec: TaskSpec) -> str:
         return f"sber-eval/{spec.name}:latest"
@@ -252,6 +282,24 @@ class Runner:
         except ValueError:
             return None, f"unreadable reward {reward.stdout.strip()!r}"
 
+    def post_mortem(self, container: str, spec: TaskSpec, deliverable: str, repeat: int) -> None:
+        """Keep what a failed run left behind, before the container goes away."""
+        listing = run(
+            ["docker", "exec", container, "sh", "-c",
+             f"ls -la {spec.workdir} 2>&1; echo '--- agent dir ---'; ls -la {AGENT_DIR} 2>&1"],
+            timeout=60.0,
+        )
+        parts = [f"# workspace listing ({spec.workdir})", listing.stdout or listing.stderr]
+        if deliverable and deliverable != "none":
+            shown = run(
+                ["docker", "exec", container, "sh", "-c", f"cat {deliverable} 2>&1 | head -c 4000"],
+                timeout=60.0,
+            )
+            parts += [f"\n# claimed deliverable: {deliverable}", shown.stdout or shown.stderr]
+        (self.logs / f"{spec.name}.r{repeat}.post").write_text(
+            "\n".join(parts), encoding="utf-8"
+        )
+
     def one(self, spec: TaskSpec, repeat: int) -> TaskResult:
         base = TaskResult(
             task=spec.name, repeat=repeat, reward=None, agent_exit=None, wall_s=0.0,
@@ -275,7 +323,12 @@ class Runner:
                 base.note = f"install failed: {error}"
                 return base
 
+            self.counter_call("/__reset", "POST")
             proc, wall, killed = self.exec_agent(container, spec)
+            counters = self.counter_call("/__counters", "GET")
+            if counters:
+                base.endpoint_tokens = counters.get("total_tokens")
+                base.endpoint_requests = counters.get("requests")
             base.wall_s = round(wall, 1)
             output = "" if proc is None else (proc.stdout or "") + (proc.stderr or "")
             log_file = self.logs / f"{spec.name}.r{repeat}.log"
@@ -284,11 +337,13 @@ class Runner:
             base.agent_exit = None if proc is None else proc.returncode
 
             done = DONE_LINE.search(output)
+            deliverable = ""
             if done:
                 base.tokens = int(done["tokens"])
                 base.steps = int(done["steps"])
                 base.stop_reason = done["stop"]
                 base.solved_claim = done["solved"]
+                deliverable = done["deliverable"]
             elif killed:
                 base.stop_reason = "killed"
             ready = READY_LINE.search(output)
@@ -297,6 +352,12 @@ class Runner:
 
             reward, note = self.verify(container, spec)
             base.reward = reward
+            if reward != 1:
+                # The container is about to be destroyed, and a zero cannot be
+                # diagnosed from a reward file alone: what the run actually wrote is
+                # the evidence. Kept only for failures, so a green suite leaves no
+                # clutter behind.
+                self.post_mortem(container, spec, deliverable, repeat)
             if note:
                 base.note = note
             base.failure_mode = classify_failure(base, killed=killed)
@@ -309,7 +370,9 @@ def write_report(out: Path, suite: SuiteResult) -> None:
     (out / "suite.json").write_text(
         json.dumps(asdict(suite), indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    lines = ["task\trepeat\treward\ttokens\twall_s\tsteps\tstop\tclaim\tfailure\tnote"]
+    lines = [
+        "task\trepeat\treward\ttokens\tep_tokens\tep_calls\twall_s\tsteps\tstop\tclaim\tfailure\tnote"
+    ]
     for row in suite.rows:
         lines.append(
             "\t".join(
@@ -318,6 +381,8 @@ def write_report(out: Path, suite: SuiteResult) -> None:
                     row.task, row.repeat,
                     "?" if row.reward is None else row.reward,
                     "?" if row.tokens is None else row.tokens,
+                    "?" if row.endpoint_tokens is None else row.endpoint_tokens,
+                    "?" if row.endpoint_requests is None else row.endpoint_requests,
                     row.wall_s,
                     "?" if row.steps is None else row.steps,
                     row.stop_reason, row.solved_claim, row.failure_mode, row.note,
@@ -336,6 +401,10 @@ def main() -> int:
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--api-key", default="not-a-real-key")
     parser.add_argument("--network", default="sber-eval")
+    parser.add_argument(
+        "--counter-container", default="",
+        help="name of a running counting_proxy container; empty disables the counter",
+    )
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--timeout-scale", type=float, default=1.0)
     parser.add_argument("--label", default="unlabelled")
@@ -389,11 +458,14 @@ def main() -> int:
             write_report(out, suite)
 
     solved = sum(1 for row in suite.rows if row.reward == 1)
-    tokens = sum(row.tokens or 0 for row in suite.rows)
+    tokens = sum(
+        row.endpoint_tokens if row.endpoint_tokens is not None else (row.tokens or 0)
+        for row in suite.rows
+    )
     wall = sum(row.wall_s for row in suite.rows)
     print(
         f"\n{args.label}: solved {solved}/{len(suite.rows)}  "
-        f"tokens {tokens} (known rows only)  wall {wall:.0f}s"
+        f"tokens {tokens}  wall {wall:.0f}s"
     )
     print(f"report: {out / 'results.tsv'}")
     return 0
