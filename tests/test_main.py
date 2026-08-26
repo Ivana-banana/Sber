@@ -8,6 +8,7 @@ tests exist so it cannot come back.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from agent import limits
@@ -207,3 +208,75 @@ def test_an_unclassifiable_task_is_routed_to_the_general_playbook(tmp_path: Path
 
     assert choice.playbook is playbooks.GENERAL
     assert choice.reason, "the reason is what main puts in the trace"
+
+
+# --- diagnostics survive the kill that ends every timed-out task -------------
+
+
+def test_the_status_line_is_readable_before_the_process_is_killed(tmp_path: Path) -> None:
+    """A run killed at its deadline must still have said what it understood.
+
+    E009 measured the alternative: stdout is a pipe, Python buffers it in blocks, the
+    runner ends a task with a signal, and the buffer dies unwritten. Every timed-out
+    task produced an empty log, which is exactly the run that needs a log most.
+
+    The endpoint here accepts the connection and never answers, which is what makes
+    the agent sit long enough to be killed mid-run.
+    """
+    import socket
+    import subprocess
+    import sys
+    import threading
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    accepted: list[socket.socket] = []
+
+    def hold() -> None:
+        try:
+            conn, _ = listener.accept()
+            accepted.append(conn)  # accepted and then ignored, on purpose
+        except OSError:
+            pass
+
+    thread = threading.Thread(target=hold, daemon=True)
+    thread.start()
+
+    process = subprocess.Popen(
+        [sys.executable, "-m", "agent.main", "make /tmp/x say ok"],
+        cwd=str(Path(__file__).resolve().parent.parent),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        env={
+            "PATH": os.environ.get("PATH", ""),
+            "LOCAL_AGENT_MODEL": "small-local",
+            "OPENAI_BASE_URL": f"http://127.0.0.1:{port}/v1",
+            "OPENAI_API_KEY": "not-a-real-key-0123456789",
+            "AGENT_TIMEOUT_S": "300",
+        },
+    )
+    # Read on a thread with a deadline. A buffered status line does not arrive late,
+    # it does not arrive at all until the process exits -- so a plain readline() here
+    # would hang the suite instead of failing it.
+    first: list[str] = []
+
+    def read_one() -> None:
+        assert process.stdout is not None
+        first.append(process.stdout.readline())
+
+    reader = threading.Thread(target=read_one, daemon=True)
+    reader.start()
+    reader.join(timeout=20.0)
+
+    try:
+        assert first, "no status line arrived while the run was alive: stdout is buffered"
+        assert first[0].startswith("agent ready:")
+    finally:
+        process.kill()
+        process.wait(timeout=30)
+        for conn in accepted:
+            conn.close()
+        listener.close()

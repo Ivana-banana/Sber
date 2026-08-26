@@ -106,6 +106,12 @@ def main(
     # Status only, and deliberately terse: this line exists so a packaging smoke can
     # tell "started and understood its inputs" from "started". It carries no secrets
     # and no task content.
+    #
+    # Flushed because stdout is a pipe here, not a terminal, so Python buffers it in
+    # blocks -- and the runner ends a task by killing the process at its deadline,
+    # which drops the buffer unwritten. E009 measured the cost: a task killed at 180 s
+    # produced an empty log, so the run that most needed diagnosing was the one with
+    # none. Nothing about scoring changes; no public verifier reads our stdout.
     print(
         f"agent ready: workspace={state.workspace} "
         f"({state.audit[0].detail}) "
@@ -113,7 +119,8 @@ def main(
         f"budget={state.budget.total_s:.0f}s "
         f"reserve={state.budget.verify_reserve_s:.0f}s "
         f"steps={state.budget.max_steps} "
-        f"endpoint={'configured' if not missing else 'missing:' + ','.join(missing)}"
+        f"endpoint={'configured' if not missing else 'missing:' + ','.join(missing)}",
+        flush=True,
     )
 
     if missing:
@@ -147,7 +154,8 @@ def main(
         f"steps={state.budget.steps_used}/{state.budget.max_steps} "
         f"recovery={state.budget.recovery_passes_used} "
         f"tokens={state.budget.total_tokens}"
-        f"{'' if state.budget.usage_reported else ' (lower bound: endpoint omitted usage)'}"
+        f"{'' if state.budget.usage_reported else ' (lower bound: endpoint omitted usage)'}",
+        flush=True,
     )
     return EXIT_OK
 
