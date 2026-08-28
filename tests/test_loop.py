@@ -213,7 +213,9 @@ def test_output_that_is_not_json_is_answered_not_crashed_on(tmp_path: Path) -> N
     llm = StubLlm(
         replies=[
             LlmReply(text="Конечно! Сейчас посмотрю файлы."),
-            action("finish", path=str(tmp_path), verify="", summary="ok"),
+            # A file and not `tmp_path` itself: the subject here is the malformed
+            # reply, and a finish aimed at a directory is now refused on its own.
+            action("finish", path=str(tmp_path / "x"), verify="", summary="ok"),
         ]
     )
     (tmp_path / "x").write_text("x", encoding="utf-8")
@@ -460,3 +462,31 @@ def test_write_file_without_a_path_never_reaches_the_filesystem(tmp_path: Path) 
 
     assert any("write_file needs `path`" in text for text in outcome.observations)
     assert sorted(entry.name for entry in tmp_path.iterdir()) == before
+
+
+def test_finish_pointing_at_a_directory_is_refused_by_the_gate(tmp_path: Path) -> None:
+    # `_deliverable` asked only whether something exists at the path, so a directory
+    # walked through the gate and was handed to the verifier, which reported it as
+    # "not found" -- a wrong sentence about a path the model can see is there, and it
+    # cost the single recovery pass to say it. The shape of the claim belongs to the
+    # gate; only its content belongs to the verifier.
+    target = tmp_path / "report"
+    target.mkdir()
+    llm = StubLlm(
+        replies=[
+            action("finish", path=str(target), verify="", summary="сделано"),
+            action("write_file", path=str(tmp_path / "report.txt"), content="real"),
+            action("finish", path=str(tmp_path / "report.txt"), verify="", summary="сделано"),
+        ]
+    )
+    verify = FakeVerify((True, "existence", ""))
+    state = make_state(tmp_path)
+
+    outcome = run(state, llm, verify)
+
+    assert outcome.solved is True, "the run recovers once a real file is named"
+    assert state.budget.recovery_passes_used == 0, "a mis-shaped claim is not a failed check"
+    assert [call[0] for call in verify.calls] == [tmp_path / "report.txt"], (
+        "the directory never reaches the verifier"
+    )
+    assert any("directory" in text for text in outcome.observations)

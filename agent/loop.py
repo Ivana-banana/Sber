@@ -234,6 +234,12 @@ def _deliverable(act: dict[str, Any], state: AgentState) -> tuple[Path | None, s
     small model will announce success it has not achieved; every public verifier reads
     the environment instead of the announcement, so an absent file is simply a zero
     that arrived with a confident sentence attached.
+
+    A directory is refused here too, and the split is deliberate: the gate owns the
+    *shape* of the claim, `agent.verify` owns its *content*. Letting a directory
+    through cost the run its one recovery pass to be told "expected deliverable not
+    found" about a path the model can see is there -- a true verdict wrapped in a
+    false sentence, which is the worst kind of observation to hand a small model.
     """
     raw = str(act.get("path", "") or "").strip()
     if not raw:
@@ -244,6 +250,11 @@ def _deliverable(act: dict[str, Any], state: AgentState) -> tuple[Path | None, s
         candidate = state.workspace / candidate
     if not candidate.exists():
         return None, f"finish refused: {candidate} does not exist. Сначала создай файл."
+    if candidate.is_dir():
+        return None, (
+            f"finish refused: {candidate} is a directory, not a file. "
+            f"Назови файл с результатом."
+        )
     return candidate, ""
 
 
