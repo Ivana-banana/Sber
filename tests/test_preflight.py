@@ -8,6 +8,7 @@ that does not look the way we expected.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from agent import limits
@@ -112,6 +113,34 @@ def test_a_workspace_we_may_not_read_is_reported_not_raised(tmp_path: Path, monk
     brief = inspect_environment(workspace, ENV)
 
     assert "unreadable" in brief.render()
+
+
+def test_one_unreadable_subdirectory_does_not_blank_the_whole_tree(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The walk used to return on the first PermissionError wherever it happened, so a
+    # single root-owned or mode-000 subdirectory threw away every entry still queued
+    # and labelled the whole workspace unreadable. The brief is the only free map the
+    # model gets; losing it over one closed door is expensive and, worse, silent.
+    workspace = make_task(tmp_path)
+    closed = workspace / "private"
+    closed.mkdir()
+    (closed / "inside.txt").write_text("x", encoding="utf-8")
+    real_scandir = os.scandir
+
+    def selective(path: object, *args: object, **kwargs: object) -> object:
+        if Path(str(path)) == closed:
+            raise PermissionError("denied")
+        return real_scandir(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("agent.preflight.os.scandir", selective)
+
+    rendered = inspect_environment(workspace, ENV).render()
+
+    assert "state: unreadable" not in rendered, "the workspace itself is readable"
+    assert "README.md" in rendered, "entries queued behind the closed door survive"
+    assert "src/" in rendered
+    assert "private/ (unreadable)" in rendered, "and the model is told which door is shut"
 
 
 def test_nested_directories_are_summarised_but_not_walked_forever(tmp_path: Path) -> None:

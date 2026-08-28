@@ -133,6 +133,10 @@ def _walk(root: Path, budget: int) -> tuple[list[str], int, str]:
     Breadth-first on purpose. The files that identify a task -- `README`, `task.toml`,
     a source tree, an evidence log -- sit at the top, while depth is where a `.git`
     object store or a virtualenv will happily spend the whole budget.
+
+    Only an unreadable *root* ends the walk. A subdirectory we may not enter is marked
+    on its own line and stepped over, because the alternative -- what this did before
+    -- was to drop the rest of the queue and call the whole workspace unreadable.
     """
     listed: list[str] = []
     skipped = 0
@@ -144,7 +148,16 @@ def _walk(root: Path, budget: int) -> tuple[list[str], int, str]:
             with os.scandir(current) as scan:
                 children = sorted(scan, key=lambda item: (not item.is_dir(), item.name))
         except PermissionError:
-            return listed, skipped, "unreadable"
+            if current == root:
+                return listed, skipped, "unreadable"
+            # One closed door, not a closed workspace. Returning here threw away every
+            # entry still queued behind it and reported the whole tree as unreadable;
+            # the directory was already listed by its parent, so marking that line is
+            # both cheaper and more honest than losing the map.
+            shut = f"{current.relative_to(root).as_posix()}/"
+            if shut in listed:
+                listed[listed.index(shut)] = f"{shut} (unreadable)"
+            continue
         except OSError:
             continue
 
