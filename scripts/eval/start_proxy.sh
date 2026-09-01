@@ -2,7 +2,7 @@
 # Put a token counter between the agent and the model.
 #
 # The agent reports its own total on the last line it prints, and a run killed at its
-# deadline never prints it -- which in E009 was most rows. The counter does not depend
+# deadline never prints it -- which in E011 was most rows. The counter does not depend
 # on how the run ends, and disagreement between the two numbers is itself a finding.
 set -eu
 

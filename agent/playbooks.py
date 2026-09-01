@@ -41,9 +41,12 @@ class Playbook:
     token_count: int
     """cl100k_base tokens of `body`, measured externally with tiktoken on 2026-08-25.
 
-    tiktoken is not present in the target image, so this is a recorded measurement
-    rather than something computed at import time. The line count is what regresses
-    locally; see `tests/test_playbooks.py`.
+    tiktoken 0.13.0 is in fact installed in the target image -- probed there directly
+    on 2026-08-26 -- but it is unusable: `get_encoding("cl100k_base")` downloads the
+    BPE file from `openaipublic.blob.core.windows.net`, and under `--network none` it
+    raises `ConnectionError`. So this stays a recorded measurement rather than
+    something computed at import time. The line count is what regresses locally; see
+    `tests/test_playbooks.py`.
     """
 
 

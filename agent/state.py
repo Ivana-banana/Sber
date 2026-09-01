@@ -224,7 +224,7 @@ class AgentState:
 
     The write policy, not a suggestion: a path the task itself names is part of the
     task's contract, and refusing to write there turns a correct action into a wrong
-    artifact (measured in E009). Nothing the *environment* says reaches this tuple --
+    artifact (measured in E011). Nothing the *environment* says reaches this tuple --
     file contents, logs and command output are not the task text.
     """
 

@@ -84,7 +84,7 @@ def test_the_image_workdir_is_not_used_when_it_is_our_own_directory(
 
 # --- the workspace named by the task text -----------------------------------
 #
-# Measured, not imagined: E009 ran the archive against a real model on packages whose
+# Measured, not imagined: E011 ran the archive against a real model on packages whose
 # image WORKDIR is not `/app`. With no `LOCAL_AGENT_WORKDIR`, no `/app`, and cwd equal
 # to the agent's own install directory (which is what Harbor gives us), the agent
 # concluded its own source tree was the task, wrote the deliverable there, verified it
@@ -259,7 +259,7 @@ def test_resolution_always_lands_somewhere_real(tmp_path: Path, monkeypatch) -> 
 
 def test_the_paths_the_task_names_reach_the_state(tmp_path: Path, monkeypatch) -> None:
     # The write policy lives on the state and is read by the tool and the verifier.
-    # If it is never populated, both fall back to workspace-only confinement and E009
+    # If it is never populated, both fall back to workspace-only confinement and E011
     # comes straight back.
     monkeypatch.setattr(limits, "IMAGE_WORKDIR", str(tmp_path / "absent"))
     state = build_state(
@@ -397,7 +397,7 @@ def test_an_unclassifiable_task_is_routed_to_the_general_playbook(tmp_path: Path
 def test_the_status_line_is_readable_before_the_process_is_killed(tmp_path: Path) -> None:
     """A run killed at its deadline must still have said what it understood.
 
-    E009 measured the alternative: stdout is a pipe, Python buffers it in blocks, the
+    E011 measured the alternative: stdout is a pipe, Python buffers it in blocks, the
     runner ends a task with a signal, and the buffer dies unwritten. Every timed-out
     task produced an empty log, which is exactly the run that needs a log most.
 

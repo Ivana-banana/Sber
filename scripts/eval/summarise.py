@@ -2,7 +2,7 @@
 
 Development tool. Reads `results.tsv` files written by `run_suite.py`.
 
-    python3 scripts/eval/summarise.py build/eval-E009 build/eval-E010
+    python3 scripts/eval/summarise.py build/eval-E011 build/eval-E012
 
 With two or more runs it prints the per-task comparison as well, because the rule in
 CLAUDE.md is that an optimisation is accepted only when the solved count did not

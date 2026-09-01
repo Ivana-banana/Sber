@@ -174,7 +174,7 @@ def test_secrets_configured_on_the_state_do_not_reach_the_detail(tmp_path: Path)
 def test_a_deliverable_the_task_named_verifies_outside_the_workspace(tmp_path: Path) -> None:
     """Write policy and verification have to agree on where the answer may live.
 
-    E009: the workspace was resolved to the agent's own directory, so a deliverable
+    E011: the workspace was resolved to the agent's own directory, so a deliverable
     written where the task asked for it would have been refused here for existing in
     the right place. The two guards read the same policy now.
     """

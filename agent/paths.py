@@ -2,7 +2,7 @@
 
 Two different questions, and conflating them is what the first live baseline caught.
 
-E009 ran the archive against a real model on a package whose image `WORKDIR` is not
+E011 ran the archive against a real model on a package whose image `WORKDIR` is not
 `/app`. With no `LOCAL_AGENT_WORKDIR` and no `/app`, the workspace fell back to the
 runner's cwd -- which the Harbor contract sets to the agent's own install directory.
 The run then wrote its deliverable into the agent's source tree, verified it there, and

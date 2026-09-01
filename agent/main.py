@@ -71,7 +71,7 @@ def resolve_workspace(
     if paths.plausible_workspace(cwd, agent_dir):
         return cwd, "runner cwd"
 
-    # Measured in E009: under the Harbor contract cwd *is* our own install directory,
+    # Measured in E011: under the Harbor contract cwd *is* our own install directory,
     # so with no `/app` the run wrote its deliverable into the agent's source tree,
     # verified it there and reported success against a verifier that scored zero. The
     # task text is the only remaining thing that knows where the task is.
@@ -132,7 +132,7 @@ def main(
     #
     # Flushed because stdout is a pipe here, not a terminal, so Python buffers it in
     # blocks -- and the runner ends a task by killing the process at its deadline,
-    # which drops the buffer unwritten. E009 measured the cost: a task killed at 180 s
+    # which drops the buffer unwritten. E011 measured the cost: a task killed at 180 s
     # produced an empty log, so the run that most needed diagnosing was the one with
     # none. Nothing about scoring changes; no public verifier reads our stdout.
     print(

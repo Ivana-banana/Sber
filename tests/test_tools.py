@@ -331,7 +331,7 @@ def test_write_file_refuses_to_leave_the_workspace(tmp_path: Path) -> None:
 
 
 def test_write_file_accepts_a_path_the_task_named(tmp_path: Path) -> None:
-    """E009's zero, at the tool boundary.
+    """E011's zero, at the tool boundary.
 
     The workspace guess was the agent's own directory, the task named its deliverable
     by absolute path, and confining the write to the workspace put a correct answer in

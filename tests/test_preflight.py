@@ -8,6 +8,7 @@ that does not look the way we expected.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from agent import limits
@@ -114,6 +115,34 @@ def test_a_workspace_we_may_not_read_is_reported_not_raised(tmp_path: Path, monk
     assert "unreadable" in brief.render()
 
 
+def test_one_unreadable_subdirectory_does_not_blank_the_whole_tree(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The walk used to return on the first PermissionError wherever it happened, so a
+    # single root-owned or mode-000 subdirectory threw away every entry still queued
+    # and labelled the whole workspace unreadable. The brief is the only free map the
+    # model gets; losing it over one closed door is expensive and, worse, silent.
+    workspace = make_task(tmp_path)
+    closed = workspace / "private"
+    closed.mkdir()
+    (closed / "inside.txt").write_text("x", encoding="utf-8")
+    real_scandir = os.scandir
+
+    def selective(path: object, *args: object, **kwargs: object) -> object:
+        if Path(str(path)) == closed:
+            raise PermissionError("denied")
+        return real_scandir(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("agent.preflight.os.scandir", selective)
+
+    rendered = inspect_environment(workspace, ENV).render()
+
+    assert "state: unreadable" not in rendered, "the workspace itself is readable"
+    assert "README.md" in rendered, "entries queued behind the closed door survive"
+    assert "src/" in rendered
+    assert "private/ (unreadable)" in rendered, "and the model is told which door is shut"
+
+
 def test_nested_directories_are_summarised_but_not_walked_forever(tmp_path: Path) -> None:
     workspace = tmp_path / "app"
     deep = workspace
@@ -126,3 +155,46 @@ def test_nested_directories_are_summarised_but_not_walked_forever(tmp_path: Path
 
     assert "level0/" in rendered
     assert "level9" not in rendered, "depth is capped; the loop searches the rest on demand"
+
+
+def test_an_absent_tool_with_a_verified_substitute_names_it(tmp_path: Path, monkeypatch) -> None:
+    # Reporting `sqlite3: absent` only tells the model its first plan is dead. The
+    # substitutes below were run inside secureintelligent/acp on 2026-08-26, so the
+    # brief can hand it the second plan in the same breath instead of paying for a
+    # failed call and a recovery step.
+    workspace = make_task(tmp_path)
+    monkeypatch.setattr("agent.preflight.shutil.which", lambda name: None)
+
+    rendered = inspect_environment(workspace, ENV).render()
+
+    assert "instead:" in rendered
+    assert "od -A x -t x1z" in rendered, "xxd"
+    assert "tcpdump -nn -r" in rendered, "tshark"
+    assert "nc -z" in rendered, "nmap"
+    assert "objdump -d" in rendered, "gdb"
+
+
+def test_a_tool_that_is_present_is_never_offered_a_substitute(tmp_path: Path, monkeypatch) -> None:
+    # The substitution line is priced on every request. On an image where the real
+    # utilities exist it must disappear entirely, not degrade to advice nobody needs.
+    workspace = make_task(tmp_path)
+    monkeypatch.setattr("agent.preflight.shutil.which", lambda name: f"/usr/bin/{name}")
+
+    rendered = inspect_environment(workspace, ENV).render()
+
+    assert "absent:" not in rendered
+    assert "instead:" not in rendered
+
+
+def test_only_a_measured_substitute_is_offered(tmp_path: Path, monkeypatch) -> None:
+    # A tool absent with no verified replacement is reported absent and nothing more.
+    # Guessing a second plan is worse than admitting there is none.
+    workspace = make_task(tmp_path)
+    monkeypatch.setattr(
+        "agent.preflight.shutil.which", lambda name: None if name == "jq" else f"/usr/bin/{name}"
+    )
+
+    rendered = inspect_environment(workspace, ENV).render()
+
+    assert "absent: jq" in rendered
+    assert "instead:" not in rendered

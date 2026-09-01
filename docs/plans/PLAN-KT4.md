@@ -59,7 +59,7 @@ mutation suite и fallback protocol в одиночку за неделю опа
 
 | ID | Задача | Владелец-поток | Depends | Результат | Acceptance check | Commit prefix |
 |---|---|---|---|---|---|---|
-| S0.1 | импортировать upstream snapshot | runtime | — | `agent/`, `local_task/`, upstream SHA | tree совпадает с `71f9081`; чужой код отдельным commit | `infra:` |
+| S0.1 | импортировать upstream snapshot | runtime | — | `agent/`, `local_task/`, upstream SHA | tree совпадает с `b95c62f` (был `71f9081`, сдвинут 26.08 — см. `verdict-upstream-watch-2026-08-26.md`); чужой код отдельным commit | `infra:` |
 | S0.2 | отделить fixture от task packages | eval | S0.1 | manifest шести tasks | каждый manifest entry имеет `task.toml` | `eval:` |
 | S0.3 | проверить два zip layout | runtime | S0.1 | решение root vs wrapper dir | Harbor install smoke обоих, decision записан | `pack:` |
 | R0.1 | найти машину с Docker | runtime | — | owner + версии Docker/OS | `docker version`, место на диске | `infra:` |

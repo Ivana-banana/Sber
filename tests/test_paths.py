@@ -1,6 +1,6 @@
 """What the task text names, and what the run is therefore allowed to touch.
 
-E009 measured the failure this module exists to stop: on a package whose image
+E011 measured the failure this module exists to stop: on a package whose image
 `WORKDIR` is not `/app`, the run wrote its deliverable into the agent's own source
 tree, verified it there and reported success against a verifier that scored zero.
 
@@ -135,7 +135,7 @@ def test_our_own_tree_is_never_a_workspace(tmp_path: Path) -> None:
 
 
 def test_a_path_the_task_named_is_writable_even_outside_the_workspace(tmp_path: Path) -> None:
-    """The whole point. This is the E009 zero, in one assertion.
+    """The whole point. This is the E011 zero, in one assertion.
 
     The workspace guess was wrong, the task named the deliverable explicitly, and
     refusing the write turns a correct action into an artifact in the wrong place.

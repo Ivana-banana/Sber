@@ -246,7 +246,7 @@ def write_file(
     A quoting bug there produces a plausible-looking file with the wrong bytes.
 
     The write is confined to the workspace and to the paths the task text names.
-    `resolve_workspace` is a guess about where the task lives and E009 showed it can be
+    `resolve_workspace` is a guess about where the task lives and E011 showed it can be
     wrong, so confining to it alone refuses the one path the task actually asked for
     and leaves the answer in the wrong place. What stays refused is everything neither
     the workspace nor the task named: a file's contents, a log line or a command's

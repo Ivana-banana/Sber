@@ -213,7 +213,9 @@ def test_output_that_is_not_json_is_answered_not_crashed_on(tmp_path: Path) -> N
     llm = StubLlm(
         replies=[
             LlmReply(text="Конечно! Сейчас посмотрю файлы."),
-            action("finish", path=str(tmp_path), verify="", summary="ok"),
+            # A file and not `tmp_path` itself: the subject here is the malformed
+            # reply, and a finish aimed at a directory is now refused on its own.
+            action("finish", path=str(tmp_path / "x"), verify="", summary="ok"),
         ]
     )
     (tmp_path / "x").write_text("x", encoding="utf-8")
@@ -465,7 +467,7 @@ def test_write_file_without_a_path_never_reaches_the_filesystem(tmp_path: Path) 
 def test_the_loop_hands_the_write_policy_to_the_tool(tmp_path: Path) -> None:
     """Записанные в задаче пути должны доходить до `write_file`, а не оставаться в state.
 
-    Ровно этот провод и есть исправление E009: workspace был вычислен как собственный
+    Ровно этот провод и есть исправление E011: workspace был вычислен как собственный
     каталог агента, задача назвала артефакт абсолютным путём, и запрет записи вне
     workspace превращал верное действие в артефакт не в том месте. Без этого теста
     провод можно удалить, и весь сьют останется зелёным — проверено мутацией.
@@ -492,7 +494,7 @@ def test_the_loop_hands_the_write_policy_to_the_tool(tmp_path: Path) -> None:
 
 
 def test_a_fenced_function_call_is_read_as_an_action(tmp_path: Path) -> None:
-    """Измерено на трассах E011: 19 из 165 ответов (11.5%) приходили в этом виде.
+    """Измерено на трассах E013: 19 из 165 ответов (11.5%) приходили в этом виде.
 
     Каждый отбрасывался парсером за упаковку, хотя говорил ровно то, что нужно было
     сделать дальше. На этом endpoint шаг стоит 10–25 секунд.
@@ -558,3 +560,31 @@ def test_prose_around_the_json_is_still_refused(tmp_path: Path) -> None:
     outcome = run(make_state(tmp_path), llm, FakeVerify())
 
     assert any("was not json" in text for text in outcome.observations)
+
+
+def test_finish_pointing_at_a_directory_is_refused_by_the_gate(tmp_path: Path) -> None:
+    # `_deliverable` asked only whether something exists at the path, so a directory
+    # walked through the gate and was handed to the verifier, which reported it as
+    # "not found" -- a wrong sentence about a path the model can see is there, and it
+    # cost the single recovery pass to say it. The shape of the claim belongs to the
+    # gate; only its content belongs to the verifier.
+    target = tmp_path / "report"
+    target.mkdir()
+    llm = StubLlm(
+        replies=[
+            action("finish", path=str(target), verify="", summary="сделано"),
+            action("write_file", path=str(tmp_path / "report.txt"), content="real"),
+            action("finish", path=str(tmp_path / "report.txt"), verify="", summary="сделано"),
+        ]
+    )
+    verify = FakeVerify((True, "existence", ""))
+    state = make_state(tmp_path)
+
+    outcome = run(state, llm, verify)
+
+    assert outcome.solved is True, "the run recovers once a real file is named"
+    assert state.budget.recovery_passes_used == 0, "a mis-shaped claim is not a failed check"
+    assert [call[0] for call in verify.calls] == [tmp_path / "report.txt"], (
+        "the directory never reaches the verifier"
+    )
+    assert any("directory" in text for text in outcome.observations)

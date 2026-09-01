@@ -39,7 +39,7 @@ python3 scripts/build_submission.py
 python3 scripts/eval/run_suite.py \
     --model qwen2.5-coder:latest \
     --base-url http://sber-model:11434/v1 --api-key ollama \
-    --label E009-baseline --out build/eval-E009
+    --label E011-baseline --out build/eval-E011
 ```
 
 Полезные ключи: `--only <задача>…`, `--repeats N`, `--timeout-scale F`.

@@ -107,6 +107,11 @@ ALTERNATING_STOP = 6
 """Defaults read from the OpenHands agent SDK stuck detector at revision `041078f`:
 four identical action/observation pairs, six steps of an A-B-A-B cycle. Checked
 against their source rather than quoted from prose.
+
+Err toward these firing less often, not more, until measured: Lu et al. (2025)
+found extrinsic early-exit on every step collapsed success rate on an 8B model
+(11.7% -> 1.7% on PDDL) while cutting redundant steps, and the evaluation model's
+size is unknown. See `docs/research/verdict-budget-policy.md`.
 """
 
 NO_PROGRESS_STOP = 4
@@ -115,6 +120,8 @@ NO_PROGRESS_STOP = 4
 Conservative carry-over of the OpenHands window, not a measurement of our own loop.
 An action counts as progress when it yields a new result fingerprint or leaves a new
 artifact; anything else is the loop paying tokens to stand still.
+
+Same small-model caution as `ALTERNATING_STOP` above applies here.
 """
 
 # --- Tools ------------------------------------------------------------------

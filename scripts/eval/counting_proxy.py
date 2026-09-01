@@ -4,7 +4,7 @@ Development tool. `agent/` never imports it and it never enters the archive.
 
 Why it exists. Tokens are the second ranking criterion, and the agent reports its own
 total on the last line it prints -- which a run killed at its deadline never reaches.
-That is not a rare case: in E009 most rows were killed, so the metric was missing from
+That is not a rare case: in E011 most rows were killed, so the metric was missing from
 exactly the runs that were burning it. A counter in front of the endpoint does not care
 how the run ends.
 
@@ -12,7 +12,7 @@ It is also an independent check on the agent's own accounting. Two numbers that 
 are two measurements; one number is a claim.
 
 The same position makes it the only place the run's actions are visible without adding
-anything to the archive. E009 could say that eleven runs were killed with nothing on
+anything to the archive. E011 could say that eleven runs were killed with nothing on
 disk, and nothing at all about what they spent those steps doing -- the agent prints two
 status lines and no trace. Every request carries the whole conversation and every reply
 carries the action, so recording the last exchange of each call reconstructs the
@@ -57,7 +57,7 @@ class Counters:
         gone, but the model keeps generating and the proxy's thread is still waiting.
         That answer arrives seconds later, after the harness has already reset the
         counters for the following task, and without this it is counted -- and traced --
-        as if the next task had made it. Measured on E011: two calls attributed to
+        as if the next task had made it. Measured on E013: two calls attributed to
         `fix-redirect-scheme` were byte-for-byte the answer `fix-cache-key-scope` was
         still working on when it was killed.
         """

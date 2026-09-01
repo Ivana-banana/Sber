@@ -42,6 +42,13 @@ PROBED_TOOLS: tuple[str, ...] = (
     "patch",
     "diff",
     "openssl",
+    "tcpdump",
+    "objdump",
+    "readelf",
+    "nc",
+    "gdb",
+    "nmap",
+    "tshark",
 )
 """Utilities worth knowing about before the model guesses.
 
@@ -55,6 +62,29 @@ over a tree, `patch`/`diff` a hand-written edit. `xxd` and `sqlite3` are here fo
 opposite reason -- the same measurements found them absent, and a forensics playbook
 reaches for both by reflex, so the brief is cheaper reporting them missing once than
 paying for the failed call and the model's recovery from it.
+
+The last seven were added on 2026-08-26 after probing the image directly rather than
+reading a report about it (`docs/research/image-substitutions.md`). `tcpdump`,
+`objdump`, `readelf` and `nc` are present and worth naming: a model that does not know
+`tcpdump` is there will not invent it, and `tcpdump -nn -r` dissects a capture that
+`tshark` would have. `gdb`, `nmap` and `tshark` are the three a ctf or forensics
+playbook reaches for first and none of them exists here.
+"""
+
+SUBSTITUTES: dict[str, str] = {
+    "xxd": "od -A x -t x1z -v",
+    "sqlite3": "python3, stdlib sqlite3, connect('file:PATH?mode=ro', uri=True)",
+    "tshark": "tcpdump -nn -r",
+    "gdb": "objdump -d / readelf -Wl / nm / strings (static only)",
+    "nmap": "nc -z 127.0.0.1 PORT (loopback only)",
+}
+"""What to do instead, for the absences that would otherwise end a plan.
+
+Every command here was executed inside `secureintelligent/acp`
+(`sha256:1324d7bb…c8a3`) under `--network none` on 2026-08-26 and produced the output
+the substitution claims; the protocol is in `docs/research/image-substitutions.md`.
+Nothing is listed on a guess: a tool with no verified replacement is reported absent
+and nothing more, because a wrong second plan costs more than no second plan.
 """
 
 
@@ -87,6 +117,9 @@ class EnvironmentBrief:
         lines.append(f"tools: {', '.join(self.available[1:]) or 'none of the probed set'}")
         if self.absent:
             lines.append(f"absent: {', '.join(self.absent)}")
+            swaps = [f"{name}→{SUBSTITUTES[name]}" for name in self.absent if name in SUBSTITUTES]
+            if swaps:
+                lines.append(f"instead: {'; '.join(swaps)}")
 
         text = redact("\n".join(lines), self.secrets)
         if len(text) > limits.BRIEF_MAX_CHARS:
@@ -100,6 +133,10 @@ def _walk(root: Path, budget: int) -> tuple[list[str], int, str]:
     Breadth-first on purpose. The files that identify a task -- `README`, `task.toml`,
     a source tree, an evidence log -- sit at the top, while depth is where a `.git`
     object store or a virtualenv will happily spend the whole budget.
+
+    Only an unreadable *root* ends the walk. A subdirectory we may not enter is marked
+    on its own line and stepped over, because the alternative -- what this did before
+    -- was to drop the rest of the queue and call the whole workspace unreadable.
     """
     listed: list[str] = []
     skipped = 0
@@ -111,7 +148,16 @@ def _walk(root: Path, budget: int) -> tuple[list[str], int, str]:
             with os.scandir(current) as scan:
                 children = sorted(scan, key=lambda item: (not item.is_dir(), item.name))
         except PermissionError:
-            return listed, skipped, "unreadable"
+            if current == root:
+                return listed, skipped, "unreadable"
+            # One closed door, not a closed workspace. Returning here threw away every
+            # entry still queued behind it and reported the whole tree as unreadable;
+            # the directory was already listed by its parent, so marking that line is
+            # both cheaper and more honest than losing the map.
+            shut = f"{current.relative_to(root).as_posix()}/"
+            if shut in listed:
+                listed[listed.index(shut)] = f"{shut} (unreadable)"
+            continue
         except OSError:
             continue
 
