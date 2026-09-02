@@ -21,6 +21,7 @@
 | E011 | 2026-08-26 | `2b5fd26` | **Первый прогон против настоящей модели**: 18 локальных пакетов, контракт Harbor воспроизведён (cwd — каталог агента, три переменные, таймаут задачи навязан снаружи и агенту не сообщён) | `qwen2.5-coder:7b` Q4_K_M на CPU, ollama в контейнере; образы задач `python:3.12-slim` | **0/18** | 47 440 (по строкам, где агент успел отчитаться) | 2 558 с на сьют | решаемость впервые измерена: ноль. 11 задач убиты по таймауту, 6 — агент отчитался solved=True при reward=0, 1 — stuck |
 | E012 | 2026-08-26 | `617b774` | Один фактор к E011: политика путей (workspace по тексту задачи + разрешение записи по названным путям). Плюс счётчик токенов на endpoint и посмертный сбор артефактов | тот же `qwen2.5-coder:7b` на CPU, те же образы задач | **3/18** | 148 021 (счётчик endpoint, все строки) | 1 881 с на сьют | +3 задачи, 0 регрессий; класс отказов сместился с `timeout` (11→3) на `reasoning` (1→8) |
 | E013 | 2026-08-26 | `5aa0cea` (откачен `ffa51be`) | Один фактор к E012: детектор застревания переводит петлю в производство результата вместо остановки | тот же `qwen2.5-coder:7b` на CPU | 3/18 (**без изменений**) | 182 651 (**+23%**) | 2 546 с (**+35%**) | **отрицательный результат, изменение откачено**: 0 приобретено, 0 потеряно, дороже по обеим вторичным метрикам |
+| E014 | 2026-09-02 | control `617b774`, treatment `2c7bdc5` | Один фактор: принимать fenced OpenAI function-call envelope из content; свежий paired control устраняет дрейф старой среды | `qwen2.5-coder:7b-instruct-q4_K_M`, manifest `dae161e2…`, Ollama 0.20.5 на CPU | control **3/18**, treatment **2/18** | 163 538 → 169 635 (**+3.7%**) | 2 279 → 2 578 с (**+13.1%**) | **gate не пройден**: 0 приобретено, 1 потеряно; два повтора нестабильной задачи дали 1/0, поэтому причинность единичной потери не заявляется |
 
 ## Per-task результаты
 
@@ -755,6 +756,123 @@ endpoint появиться и нечему.
   ровно так же дороги, и именно токены ранжируются вторыми
 
 
+### E014 — конверт ответа: полный paired-прогон
+
+- Date/time (MSK): treatment 2026-09-02 21:59–22:44; диагностические повторы
+  22:46–22:51; current control 22:52–23:31.
+- Commit / dirty state: treatment archive собран из чистого detached worktree
+  `2c7bdc5`; control — из чистого `617b774`. Корневой worktree был на `bff1cb8` и
+  имел только автоматически добавленную `JOURNAL.md` строку сторожа, которая не входит
+  в allowlist архива. Между архивами в `agent/` только 27 строк `agent/loop.py`.
+- Upstream SHA: public upstream `b95c62fec81656e338af54045efa688fd4979615`;
+  измерялись 18 локальных M5-пакетов, а не public/closed leaderboard.
+- Image tag + digest: task base `python:3.12-slim`, current digest
+  `sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea`;
+  оба paired-прогона использовали одни и те же уже собранные task images.
+- Model and sampling params: `qwen2.5-coder:7b-instruct-q4_K_M`, manifest SHA-256
+  `dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364`, model layer
+  `sha256:60e05f2100071479f596b964f89f510f057ce397ea22f2833a0cfe029bfc2463`
+  (4 683 074 048 bytes), Ollama 0.20.5 image
+  `sha256:662109db8037f17257cfc6e816289c0d4c9ae8a2a4ff760b653d8d410e234ba0`;
+  `temperature=0`, max output 2048, CPU-only AMD Ryzen 7 4800H.
+- Hypothesis (one changed factor): 11.5% ответов в трассах E013 приходили как fenced
+  `{"name","arguments"}` и терялись. Снятие целого markdown fence и переименование
+  этого известного envelope в наше действие должно сэкономить шаги и добавить хотя бы
+  одну решённую задачу без потерь.
+- Command:
+
+  ```sh
+  sh scripts/eval/start_model.sh
+  sh scripts/eval/start_proxy.sh
+  treatment_src=$(mktemp -d /tmp/sber-e014-treatment.XXXXXX)
+  git worktree add --detach "$treatment_src" 2c7bdc5
+  python3 "$treatment_src/scripts/build_submission.py" \
+      --out "$PWD/build/eval-E014-source/submission.zip"
+  python3 "$treatment_src/scripts/check_submission.py" \
+      "$PWD/build/eval-E014-source/submission.zip"
+  git worktree remove "$treatment_src"
+  python3 scripts/eval/run_suite.py \
+      --model qwen2.5-coder:7b-instruct-q4_K_M \
+      --base-url http://sber-proxy:8000/v1 --api-key ollama \
+      --counter-container sber-proxy --timeout-scale 1.0 \
+      --label E014-response-envelope --out build/eval-E014-final \
+      --archive build/eval-E014-source/submission.zip
+  python3 scripts/eval/run_suite.py \
+      --model qwen2.5-coder:7b-instruct-q4_K_M \
+      --base-url http://sber-proxy:8000/v1 --api-key ollama \
+      --counter-container sber-proxy --timeout-scale 1.0 \
+      --label E014-mut-audit-reruns --out build/eval-E014-mut-audit-reruns \
+      --archive build/eval-E014-source/submission.zip \
+      --only mut-audit-query-gate --repeats 2
+  control_src=$(mktemp -d /tmp/sber-e014-control.XXXXXX)
+  git worktree add --detach "$control_src" 617b774
+  python3 "$control_src/scripts/build_submission.py" \
+      --out "$PWD/build/eval-E014-control-source/submission.zip"
+  python3 "$control_src/scripts/check_submission.py" \
+      "$PWD/build/eval-E014-control-source/submission.zip"
+  git worktree remove "$control_src"
+  python3 scripts/eval/run_suite.py \
+      --model qwen2.5-coder:7b-instruct-q4_K_M \
+      --base-url http://sber-proxy:8000/v1 --api-key ollama \
+      --counter-container sber-proxy --timeout-scale 1.0 \
+      --label E014-current-control --out build/eval-E014-control \
+      --archive build/eval-E014-control-source/submission.zip
+  python3 scripts/eval/summarise.py build/eval-E014-control build/eval-E014-final
+  ```
+
+- Environment/budgets: сеть `sber-eval` internal; task container видит только model
+  и proxy. Экспортированы ровно три Harbor-переменные; `AGENT_TIMEOUT_S` не передавался.
+  Внешние task deadlines из `task.toml` не масштабировались. Model container был один
+  и не перезапускался между treatment, повторами и control; control шёл вторым.
+- Raw log path + SHA-256: тяжёлые логи/trace — `build/eval-E014-final/`,
+  `build/eval-E014-mut-audit-reruns/` и `build/eval-E014-control/`, не коммитятся.
+  Детерминированный digest списков
+  `sha256sum` всех файлов в `logs/` (отсортированные пути): treatment
+  `194c7aee31e3822aa048c646481bcebda09b27e20824b7b7f5065b8e6af44f4c`, control
+  `57c69b2a42bd95fc03efd3ad1424c481412733b05f502c2895d55d1653b9a75b`, диагностические
+  повторы `594946f1fdab6d8242205e20521988c2543bf25757092aa9d1448271ac27e13b`.
+  Коммитятся таблицы:
+  `E014-results.tsv` — `c2ff99ddb3bac248ad3c536cceaaf64d70a9f2f995463a4767b58f5380059f4e`;
+  `E014-control-results.tsv` — `1498a42970f83eddab5560b937a055e61eb9f02432a4a56ffab63212ee00995f`;
+  `E014-mut-audit-reruns.tsv` — `10cd6e31c321eab935deeeffc6bbf68d4025721d20f01dd964d7bb12e628f2ca`.
+- Submission zip SHA-256 + size: treatment `9eb53d0df6209c9d9b0cc296ce69adbac9ed7dcc5acdf24d585c28fe349f4d23`,
+  61 189 bytes; control `62b4bcaa00bd513caa259663e124bff7666d4422509f609760d70b4261cb1885`,
+  60 644 bytes. Control hash побайтово совпал с карточкой E012; оба архива прошли
+  `scripts/check_submission.py` включая cold-start.
+- Result:
+
+| Метрика | Current control | E014 treatment | Дельта |
+|---|---:|---:|---:|
+| solved | 3/18 | 2/18 | −1 |
+| приобретено / потеряно | — | 0 / 1 (`ctf-header-override`) | gate fail |
+| endpoint tokens | 163 538 | 169 635 | +6 097 (+3.7%) |
+| wall time | 2 279 с | 2 578 с | +299 с (+13.1%) |
+| timeout / reasoning / verification | 9 / 4 / 2 | 13 / 2 / 1 | — |
+| false wins | 2 | 1 | −1 |
+
+  Новый путь не был мёртвым: первый ответ **18/18** treatment-задач пришёл в fenced
+  `{"name","arguments"}` и был принят. Несмотря на это, ни одной задачи не приобретено,
+  одна потеряна, а обе вторичные метрики хуже. По консервативному gate фактор не принят
+  и не должен переноситься из экспериментальной ветки в `main`.
+- Per-task failures: единственное различие reward в paired-сравнении —
+  `ctf-header-override` (control 1, treatment 0/timeout). Оба решили
+  `mut-greeting-farewell` и `mut-salutation-beacon`; остальные 15 дали 0 в обоих.
+  Два дополнительных treatment-повтора `mut-audit-query-gate` дали 1 и 0, хотя полный
+  treatment и current control дали 0.
+- Conclusion and next experiment: E014 как полный запуск закрыт, но гипотеза прироста
+  не подтверждена. Следующая абляция не должна начинаться поверх treatment. Если команде
+  нужна причинная оценка именно этого envelope, нужен заранее перемешанный paired repeat
+  с зафиксированными model manifest и task image digests; по текущему инженерному gate
+  оснований принимать код нет.
+- Limitations: модель оценки неизвестна, фикстуры локальные и строже public. Старый
+  E012 нельзя использовать как строгий control: его mutable `python:3.12-slim` имел
+  другой digest, а алиас `qwen2.5-coder:latest` не был сохранён с manifest digest и
+  теперь отсутствует. Поэтому добавлен свежий current control. Даже внутри нынешней
+  неизменной среды `mut-audit-query-gate` дал 1/0 на двух повторах при `temperature=0`;
+  единичную потерю нельзя честно объявлять устойчивым причинным эффектом. Control шёл
+  после treatment, а не в случайно перемешанном порядке.
+
+
 ## Запланированные абляции токен-экономии (M8)
 
 Приняты формой из `docs/research/token-economy.md`, разбор —
@@ -812,4 +930,3 @@ endpoint появиться и нечему.
 
 Если worktree был dirty, перечислить изменённые файлы; такой результат не считается
 контрольным baseline, пока не повторён на чистом commit.
-
