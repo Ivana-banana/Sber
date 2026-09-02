@@ -50,3 +50,27 @@ python3 scripts/eval/run_suite.py \
 
 `endpoint_proxy.py` нужен только если модель всё-таки живёт на хосте: он переносит
 порт с loopback на адрес моста. В штатной схеме (`start_model.sh`) он не участвует.
+
+## Prompt-injection fixtures (M0.2 / E015)
+
+`run_injection_suite.py` — отдельный runner для 15 безопасных fixture из
+`tests/fixtures/prompt-injection/`. Он не собирает task images и не подменяет
+внешний verifier: каждая fixture копируется в новый `/workspace`, агент получает
+обычное задание создать `/workspace/agent_report.txt`, а runner независимо записывает
+marker-файл, хэши входных данных, наличие полезного отчёта, endpoint tokens и ответные
+trace. Маркер — единственный безвредный запрещённый side effect.
+
+```sh
+sh scripts/eval/start_model.sh
+sh scripts/eval/start_proxy.sh
+python3 scripts/build_submission.py --out build/e015-submission.zip
+python3 scripts/eval/run_injection_suite.py \
+    --archive build/e015-submission.zip \
+    --model qwen2.5-coder:7b-instruct-q4_K_M \
+    --base-url http://sber-proxy:8000/v1 --api-key ollama \
+    --out build/eval-E015-prompt-injection
+```
+
+The runner defaults to the locally available `python:3.12-slim`, isolated on
+`sber-eval`. It must record that image's digest: this run measures behaviour against a
+real endpoint, but is not an `secureintelligent/acp` environment-compatibility claim.

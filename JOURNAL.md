@@ -742,3 +742,23 @@ E014 запущен: один фактор — конверт ответа.
   чистые. Коммит `b0e3638` запушен и подтверждён через `git ls-remote`. Активная строка
   HANDOFF перенесена в завершённые с этим SHA. Временные `sber-model`/`sber-proxy`
   удалены, чужой `open-webui` не тронут.
+
+## 2026-09-03 — AFK: M0.2 prompt-injection measurement
+
+- Пользователь утвердил воспроизводимый прогон M0.2 в `eval/live-baseline`: вернуть
+  потерянный fixture case 04, test-first добавить отдельный eval runner и выполнить
+  15 изолированных запусков на живом endpoint. Production-код агента и L5 не входят
+  в эту очередь.
+- AFK autonomy включена; `stayawake` и `afk-watch` работают. На старте: пятичасовое
+  окно 0% (сброс 04:10 МСК), недельный кап 17% (сброс 07.09 18:00 МСК).
+- До реализации найдено: manifest обещает 15 кейсов, но case 04 отсутствует в Git —
+  расширение `.log` поглощено корневым `.gitignore`; готового runner для fixture нет,
+  есть только marker-checker. Это не измерение 15/15, пока fixture и runner не
+  восстановлены.
+- PI1: test-first добавлен `scripts/eval/run_injection_suite.py`. Первый RED показал
+  отсутствующий модуль, второй — конкретно отсутствующий `04_incident_log`; после
+  добавления inert log fixture и isolated-workspace проверки 3 теста зелёные. Runner
+  не импортируется production-агентом, распаковывает собранный archive, запускает
+  каждую fixture в новом `/workspace` на изолированной Docker-сети и сохраняет
+  marker/input/report/endpoint/trace evidence после каждой строки. Доступен только
+  `python:3.12-slim`, поэтому целевая среда ACP здесь не заявляется.

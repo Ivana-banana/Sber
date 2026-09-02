@@ -15,6 +15,7 @@
 
 | Владелец | Ветка | Задача | Файлы/контракт | Проверка | Статус |
 |---|---|---|---|---|---|
+| Codex AFK | `eval/live-baseline` | M0.2: runner и case 04 восстановлены; выполнить 15 безопасных prompt-injection fixture на настоящем endpoint, не меняя production-агент | `tests/fixtures/prompt-injection/`, `scripts/eval/run_injection_suite.py`, eval docs | test-first runner; 15 строк; marker checker; immutable fixture hashes; endpoint tokens/traces | PI1 закрыт, PI2 в работе, 03.09 |
 | — | — | **Кандидат КТ №4 сдан вне репозитория 31.08** — в Git нет ни тега, ни коммита, ни метрик отправленного. Значит rollback-кандидат для КТ №5 неизвестен, а «воспроизводим из тега одной командой» (DoD этапа 4 `PLAN.md`) не выполнено. Нужно от того, кто отправлял: SHA собранного, SHA-256 и размер архива, модель и числа прогона | тег `submit-2026-08-31-kt4`, `docs/experiments.md` | `git show <тег>` даёт код, из которого архив пересобирается побайтово | **свободно, нужен человек, который отправлял** |
 | — | — | Импорт upstream snapshot (этап 0) | `agent/`, `local_task/`, upstream metadata | штатный README smoke | свободно |
 | — | — | Способ распаковки архива у организаторов: `unzip` сохраняет exec-бит, `python3 -m zipfile` — нет, и тогда `./run.sh` даёт `126` на всех задачах | вопрос организаторам, не код | ответ организаторов либо наблюдение реального runner'а | **свободно, блокер выпуска** |
