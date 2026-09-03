@@ -1,0 +1,66 @@
+E016 fresh compliance baseline raw summary
+Date: 2026-09-03 16:36–16:37 MSK
+Production commit: 435c17830fb93d0110976e053474a1ccd163497c
+Dirty paths during run: BLOCKED.md HANDOFF.md JOURNAL.md PLAN.md and docs/; builder excludes all of them
+
+Commands (run from repository root; no endpoint or network access):
+
+  suite_start=$(date +%s%N)
+  substitute_image='python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea'
+  t0=$(date +%s%N); python3 -m pytest -q; pytest_rc=$?; t1=$(date +%s%N)
+  awk -v a="$t0" -v b="$t1" -v r="$pytest_rc" 'BEGIN {printf "pytest_wall_s=%.3f pytest_rc=%d\n",(b-a)/1000000000,r}'
+  t0=$(date +%s%N); python3 scripts/build_submission.py --out build/tz-audit-submission.zip; build_rc=$?; t1=$(date +%s%N)
+  awk -v a="$t0" -v b="$t1" -v r="$build_rc" 'BEGIN {printf "build_wall_s=%.3f build_rc=%d\n",(b-a)/1000000000,r}'
+  t0=$(date +%s%N); python3 scripts/check_submission.py build/tz-audit-submission.zip; check_rc=$?; t1=$(date +%s%N)
+  awk -v a="$t0" -v b="$t1" -v r="$check_rc" 'BEGIN {printf "preflight_wall_s=%.3f preflight_rc=%d\n",(b-a)/1000000000,r}'
+  stat -c 'archive_size_bytes=%s' build/tz-audit-submission.zip
+  sha256sum build/tz-audit-submission.zip
+  docker version --format 'docker_client={{.Client.Version}} docker_server={{.Server.Version}}'
+  docker image inspect "$substitute_image" --format 'substitute={{index .RepoDigests 0}} image_id={{.Id}} arch={{.Architecture}} os={{.Os}}'
+  docker image inspect secureintelligent/acp@sha256:1324d7bb140422a9929f5bc538f55ec0480d2731742effee02bf67604130c8a3 --format '{{.Id}}'
+  audit_tmp=$(mktemp -d -p /tmp sber-e016.XXXXXX)
+  unzip -q build/tz-audit-submission.zip -d "$audit_tmp"
+  before=$(cd "$audit_tmp" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+  instruction=$(printf 'Audit line one\n"quoted" line two')
+  t0=$(date +%s%N); docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m -v "$audit_tmp:/opt/harbor/local-agent:ro" -w /opt/harbor/local-agent "$substitute_image" ./run.sh "$instruction"; nonempty_rc=$?; t1=$(date +%s%N)
+  awk -v a="$t0" -v b="$t1" -v r="$nonempty_rc" 'BEGIN {printf "nonempty_wall_s=%.3f nonempty_rc=%d\n",(b-a)/1000000000,r}'
+  t0=$(date +%s%N); docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m -v "$audit_tmp:/opt/harbor/local-agent:ro" -w /opt/harbor/local-agent "$substitute_image" ./run.sh ''; empty_rc=$?; t1=$(date +%s%N)
+  awk -v a="$t0" -v b="$t1" -v r="$empty_rc" 'BEGIN {printf "empty_wall_s=%.3f empty_rc=%d\n",(b-a)/1000000000,r}'
+  after=$(cd "$audit_tmp" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+  printf 'source_tree_before=%s\nsource_tree_after=%s\n' "$before" "$after"
+  sha256sum "Тз сбер.docx"
+  suite_end=$(date +%s%N); awk -v a="$suite_start" -v b="$suite_end" 'BEGIN {printf "e016_total_wall_s=%.3f\n",(b-a)/1000000000}'
+  rg -n -i "bye-file|hello-file|find-sqli-login|fix-sqli-login|fix-sqli-search|incident-log-forensics|bye\.txt|hello\.txt|security_report\.json|incident_report\.txt" agent run.sh
+  git grep -n -I -E 'OPENAI_API_KEY=|sk-[A-Za-z0-9_-]{12,}|Bearer [A-Za-z0-9._-]{12,}' -- agent run.sh
+  rg -n -i 'pip(3)? install|apt(-get)? install' agent run.sh
+
+Output:
+
+  319 passed in 5.66s
+  pytest_wall_s=5.961 pytest_rc=0
+  build_wall_s=0.062 build_rc=0
+  PASS size 62947 bytes (0.06 MiB), sha256 3a7bc412a94fa076cdc017b78967c06e586bfbed5bb9b20602d69a28a312e05c
+  PASS all entries decompress
+  PASS run.sh is present at the root, mode 100755
+  PASS cold start contract: run.sh ran from a clean directory on the mode the archive declared (755), nothing repaired first
+  PASS the instruction survived the shell intact, quotes and newline included
+  preflight_wall_s=0.211 preflight_rc=0
+  archive_size_bytes=62947
+  3a7bc412a94fa076cdc017b78967c06e586bfbed5bb9b20602d69a28a312e05c  build/tz-audit-submission.zip
+  docker_client=29.3.0 docker_server=29.3.0
+  substitute=python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea image_id=sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea arch=amd64 os=linux
+  Error response from daemon: No such image: secureintelligent/acp@sha256:1324d7bb140422a9929f5bc538f55ec0480d2731742effee02bf67604130c8a3
+  agent ready: workspace=/opt/harbor/local-agent (runner cwd (no better candidate)) instruction=32:8798f6d85618 budget=600s reserve=120s steps=30 endpoint=missing:LOCAL_AGENT_MODEL,OPENAI_BASE_URL
+  nonempty_wall_s=0.619 nonempty_rc=0
+  usage: run.sh "<task instruction>"
+  empty_wall_s=0.612 empty_rc=2
+  source_tree_before=bc32370a44864f387a2aaaf306b39e834f472dd6f1a30bb650bd16c6f38d3445
+  source_tree_after=bc32370a44864f387a2aaaf306b39e834f472dd6f1a30bb650bd16c6f38d3445
+  5835a7a79d97a7390b3daf4cbd60439be38df8062be2694765010a98f9bf6d9c  Тз сбер.docx
+  e016_total_wall_s=7.586
+  agent/playbooks.py:170:`bye-file`/`code-audit`-shaped skill to distil a "no assumptions yet" procedure from.
+  agent/verify.py:20:  `fix-sqli-login`'s reference check is `[ "$(cat bye.txt)" = "Bye" ]`-shaped, and a
+
+The production-only secret-value and runtime-install scans printed no lines. The two
+anti-overfit lines are failures to remove, not a clean scan. The exact ACP lookup is
+also a failed check; the successful substitute run is not relabelled as ACP proof.

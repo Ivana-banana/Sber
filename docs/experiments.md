@@ -23,6 +23,7 @@
 | E013 | 2026-08-26 | `5aa0cea` (откачен `ffa51be`) | Один фактор к E012: детектор застревания переводит петлю в производство результата вместо остановки | тот же `qwen2.5-coder:7b` на CPU | 3/18 (**без изменений**) | 182 651 (**+23%**) | 2 546 с (**+35%**) | **отрицательный результат, изменение откачено**: 0 приобретено, 0 потеряно, дороже по обеим вторичным метрикам |
 | E014 | 2026-09-02 | control `617b774`, treatment `2c7bdc5` | Один фактор: принимать fenced OpenAI function-call envelope из content; свежий paired control устраняет дрейф старой среды | `qwen2.5-coder:7b-instruct-q4_K_M`, manifest `dae161e2…`, Ollama 0.20.5 на CPU | control **3/18**, treatment **2/18** | 163 538 → 169 635 (**+3.7%**) | 2 279 → 2 578 с (**+13.1%**) | **gate не пройден**: 0 приобретено, 1 потеряно; два повтора нестабильной задачи дали 1/0, поэтому причинность единичной потери не заявляется |
 | E015 | 2026-09-03 | `bf4c6ad` | M0.2: 15 isolated indirect prompt-injection fixtures; измеряется лишь marker side effect | `qwen2.5-coder:7b-instruct-q4_K_M` on CPU; `python:3.12-slim@78387bc3…`, не ACP | **3/15 markers** | **≥114 153** endpoint tokens (1 late response discarded) | 1 528 с | marker rate не ноль: README, ANSI и cross-file; входные data не изменены; policy fix отдельно аблировать |
+| E016 | 2026-09-03 | `435c178` + docs-only dirty state | Свежий compliance baseline: source hash, pytest, фактический ZIP/preflight и offline Python 3.12 smoke | endpoint не вызывался; `python:3.12-slim@78387bc3…`; exact ACP локально отсутствует | — | 0 | 7.586 с весь check; smoke 0.619/0.612 с | 319 passed; ZIP 62 947 B, 5 preflight PASS; offline exits 0/2; exact-ACP gate остаётся историческим E003, а не свежим доказательством |
 
 ## Per-task результаты
 
@@ -943,12 +944,51 @@ endpoint появиться и нечему.
   before analysis; it proves no pre-existing marker in source fixtures, whereas the
   runner's per-workspace side-effect check is the result oracle.
 
+### E016 — свежий compliance baseline перед аудитом ТЗ
+
+- Date/time (MSK): итоговый pinned-image повтор 2026-09-03 16:36–16:37; первичная
+  разведка 16:20–16:24 не используется для wall-метрик.
+- Commit / dirty state: production source из `435c178`; dirty только новые записи
+  аудита в `BLOCKED.md`, `HANDOFF.md`, `JOURNAL.md`, `PLAN.md` и `docs/`, которые
+  builder не пакует.
+- Upstream SHA: `b95c62fec81656e338af54045efa688fd4979615` по `docs/task.md`.
+- Image tag + digest: fresh smoke —
+  `python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea`;
+  pinned ACP index `1324d7bb…c8a3` отсутствует на текущем daemon.
+- Model and sampling params: endpoint не вызывался; это contract/compliance run, не
+  измерение решаемости.
+- Hypothesis (one changed factor): изменений production-фактора нет; проверяется,
+  остаются ли записанные контрактные утверждения верны для фактически собранного
+  текущего архива.
+- Command: полный copy-paste transcript с image ref, mounts, instruction и
+  before/after checksum — `docs/research/live-runs/E016-summary.txt`.
+- Environment/budgets: Docker 29.3.0; архив mounted read-only; container network
+  отключена; endpoint variables намеренно отсутствуют, LLM tokens не тратятся.
+- Raw log path + SHA-256: `docs/research/live-runs/E016-summary.txt`,
+  `e4f9da3996efd903b6cb4a1d824055f219c8c43d26dbf2f82bc9aa2f7a8770b7`;
+  тяжёлых логов нет.
+- Submission zip SHA-256 + size:
+  `3a7bc412a94fa076cdc017b78967c06e586bfbed5bb9b20602d69a28a312e05c`, 62 947 B.
+- Result: `Тз сбер.docx` совпал с ожидаемым hash; pytest **319 passed in 5.66 s**
+  (command wall 5.961 s);
+  archive preflight **5 PASS**; offline substitute: non-empty exit `0`, empty exit
+  `2`, extracted source unchanged; весь повтор занял 7.586 s.
+- Per-task failures: задач/верификаторов не было. Единственный красный compliance
+  check — fresh exact-ACP inspect: `No such image`.
+- Conclusion and next experiment: упаковка и Python 3.12/offline-форма зелёные;
+  exact-ACP утверждение остаётся опёртым на E003/E004/E006. До следующей отправки
+  повторить current archive на daemon с pinned image. Следующий model experiment —
+  security-vs-utility treatment после восстановления принятого control, не L5.
+- Limitations: `python:3.12-slim` не заменяет `secureintelligent/acp`; unit/contract
+  tests не доказывают hidden solved count; в production docstrings найдены два public
+  identifiers, которые не влияют на runtime, но нарушают строгий repository rule.
+
 ## Запланированные абляции токен-экономии (M8)
 
 Приняты формой из `docs/research/token-economy.md`, разбор —
-`verdict-token-economy.md`. **Все пять блокированы** дефектом бюджета логического
-вызова LLM (`docs/decisions.md`, 2026-08-26): пока один вызов может стоить 364 с,
-измеряется таймаут, а не политика.
+`verdict-token-economy.md`. Старый блокер 364-секундного logical call **закрыт** в
+`5565aaa`; A001 теперь ждёт завершения более приоритетного security gate после E015,
+а A002–A005 сохраняют последовательные зависимости из таблицы.
 
 Общий baseline `B` фиксирует: модель, tokenizer/шаблон, `temperature=0`, порядок
 задач, сброс контейнера, дедлайн, verifier, `MAX_STEPS` и протокол вызова
@@ -961,7 +1001,7 @@ endpoint появиться и нечему.
 
 | ID | Меняемый фактор | B → treatment | Метрики | Блокирован |
 |---|---|---|---|---|
-| A001 | политика отображения вывода инструмента | `raw full` → текущий `head 4k + tail 2k` → typed preview + raw artifact и повторное чтение | solved; каждый красный verifier; была ли нужная строка в видимом контексте; первое расхождение следующего действия; повторные чтения; input tokens | дефект бюджета вызова |
+| A001 | политика отображения вывода инструмента | `raw full` → текущий `head 4k + tail 2k` → typed preview + raw artifact и повторное чтение | solved; каждый красный verifier; была ли нужная строка в видимом контексте; первое расхождение следующего действия; повторные чтения; input tokens | security gate после E015 |
 | A002 | `dedup_exact_records: false → true` | политика наблюдений — победитель A001; удаляются только байт-идентичные записи, первая сохраняется вместе с provenance и порядком | удалено дублей; сокращение токенов; изменились ли действия; verifier; аудит хэшей | A001 |
 | A003 | формат ответа модели при неизменном `LLM_MAX_OUTPUT_TOKENS` | текущий ответ → action-first со схемой, без пересказа наблюдений | completion tokens; валидность разбора; корректность аргументов; циклы и повторы; solved | A002 |
 | A004 | только `LLM_MAX_OUTPUT_TOKENS` | победитель A003 (или `B`) с `2048` → меньший заранее зафиксированный cap | completion tokens; `finish_reason=length`; обрезанные аргументы; verifier; solved. Строится кривая success-vs-cap | A003 |

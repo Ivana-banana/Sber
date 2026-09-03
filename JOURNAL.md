@@ -786,3 +786,55 @@ E014 запущен: один фактор — конверт ответа.
 - 01:12 — сторож: работа поднята заново (сессия молчит 47 мин), сессия 9738247b
 
 - 01:27 — сторож: подъём не помогает: поднятая сессия молчит. Проверь «afk-autonomy --status» и подними работу сам
+
+## 2026-09-03 — AFK: аудит ТЗ и оставшиеся прогоны
+
+- 16:16 — пользователь поручил продолжить хакатон автономно, проверить все пункты
+  ТЗ и выполнить оставшиеся прогоны. `afk-autonomy --on`, `stayawake` и
+  `afk-watch --start` выполнены; рабочее дерево чистое, ветка
+  `eval/live-baseline` совпадает с `origin/eval/live-baseline`.
+- Лимиты на старте: пятичасовое окно 10%, сброс 18:10 МСК; недельный кап 20%,
+  сброс 07.09 18:00 МСК.
+- Цель: матрица соответствия каждому нормативному требованию, свежий unit/archive/
+  offline baseline, затем ближайшая абляция только при зелёных шлюзах A/B.
+  Проверка: source hash, `pytest -q`, фактический zip preflight, pinned-image smoke,
+  anti-hardcode/secret scan и полный paired model run, если он остаётся обоснован.
+  Граница: `main`, отправка организаторам, runtime-зависимости и неизвестные метрики
+  уже отправленного КТ №4 не затрагиваются.
+- РЕШЕНИЕ: выполнить план inline в этой ветке — AFK не допускает ожидания выбора
+  человека, а ветка специально создана для live-baseline экспериментов. Откат —
+  обычный `git revert` отдельных маленьких коммитов; опубликованную историю не
+  переписывать.
+- 16:20–16:24 — E016 compliance baseline. Source DOCX hash совпал; `pytest -q` —
+  319 passed in 6.80 s; архив 62 947 B, SHA-256 `3a7bc412…05c`, preflight 5 PASS.
+  Fresh offline запуск на доступном `python:3.12-slim@78387bc3…`: non-empty exit 0,
+  empty exit 2, read-only source не изменён.
+- Разбор красного exact-image check: текущий Docker 29.3.0 не содержит ref или слоёв
+  `secureintelligent/acp@1324d7bb…`; E003 выполнялся на другом daemon 29.6.1 в WSL2.
+  Все сохранённые `sber-eval/*` образы построены от `python:3.12-slim`, поэтому не
+  выдаю их за ACP. Интернет/pull правилами проекта запрещён; код тут ни при чём.
+- Строгий anti-overfit scan нашёл public identifiers в двух runtime docstring —
+  `agent/playbooks.py` и `agent/verify.py`. Ветвления/ответов под них нет, но файлы
+  входят в ZIP: аудит ставит `PARTIAL`, правка будет отдельным behaviour-neutral
+  коммитом.
+- РЕШЕНИЕ: после E015 ближайший эксперимент — security-vs-utility, не перевод prompt.
+  Причина: E015 дал 3/15 marker side effects, а таблица M8 ставит static prompt
+  compression после A005. Откат — вернуть старый порядок очереди в `PLAN.md`; код
+  этим решением пока не меняется.
+- Независимый критик отверг первую редакцию аудита по восьми пунктам. Приняты все:
+  token hard-cap отсутствует; E014 всё ещё активен; E016 не имел raw command/output;
+  будущий runner мог взять stale archive без `--archive`; пропущены evaluator/
+  calendar requirements; статусы двух планов расходились; M8 ссылался на уже закрытый
+  budget blocker; hardcode-долг включал не только имена, но path/answer. Отклонённых
+  претензий нет.
+- Первый повтор точного E016 попытался использовать `/usr/bin/time`, которого здесь
+  нет, и поэтому не исполнил три первые команды. Причина установлена по shell error;
+  повтор выполнен с `date +%s%N` и проверкой всех exit codes: 319 passed, build 0.062 s,
+  preflight 0.211 s, non-empty smoke 0.619 s/exit 0, empty 0.612 s/exit 2, весь check
+  7.586 s. Raw summary `docs/research/live-runs/E016-summary.txt`, SHA-256
+  `e4f9da39…770b7`.
+- РЕШЕНИЕ: внедрение security treatment ночью не начинать. Разбор E015 показывает,
+  что ограничение новых unnamed files может убрать markers, но меняет полномочия shell
+  и способно сломать CTF/forensics; обязательный brainstorming требует явного design
+  approval. Продолжаю уже принятое и обратимое: убрать проигравший E014 и измерить
+  свежий E017 utility baseline. Security варианты оставлю человеку с exact gates.

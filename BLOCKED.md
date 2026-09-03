@@ -45,3 +45,25 @@ Another session (`sber-8a`) is concurrently active on this same repo and had jus
 written `agent/prompt.py` (P1 system prompt/playbook assembly) when this session
 started. Messaged it to divide the remaining I0.1 work rather than collide; see
 `JOURNAL.md` for how that resolved.
+
+## Внешние пробелы аудита на 03.09.2026
+
+- Нельзя восстановить реально отправленный кандидат КТ №4: в Git нет его commit/tag,
+  SHA-256/размера архива, модели и чисел прогона. Нужен человек, который выполнял
+  отправку; после получения данных — записать release card и rollback tag без
+  переписывания истории.
+- Способ распаковки ZIP у организаторов не опубликован. `unzip` сохраняет корректный
+  mode `100755`, `python3 -m zipfile` снимает его и превращает `./run.sh` в exit 126.
+  Нужен ответ/наблюдение реального runner; кодом архива это не исправляется.
+- Hidden model/server, per-task token/time limits и Dockerfiles hidden-задач не
+  раскрыты. Локальные значения остаются гипотезами; после получения официальных
+  данных повторить endpoint probe, budget gate и exact-image smoke.
+- На текущем Docker daemon нет pinned
+  `secureintelligent/acp@sha256:1324d7bb…c8a3`, а правила проекта запрещают internet
+  pull. Свежий E016 выполнен на Python 3.12 substitute и не заменяет historical E003.
+  Для следующего release нужен daemon с уже доступным pinned image или разрешённая
+  офлайн-передача образа.
+- E015 требует изменения границы полномочий `run_shell`/write policy. Это
+  архитектурный trade-off с риском потерять CTF/forensics; навык brainstorming
+  запрещает внедрение без явного design approval. После одобрения — fresh 15-case
+  injection + 18-task utility control/treatment в одной среде.
