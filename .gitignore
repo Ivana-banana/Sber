@@ -44,3 +44,4 @@ Thumbs.db
 .afk-critic-*.md
 .afk/
 .claude/
+.worktrees/
