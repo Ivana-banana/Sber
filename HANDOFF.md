@@ -15,6 +15,7 @@
 
 | Владелец | Ветка | Задача | Файлы/контракт | Проверка | Статус |
 |---|---|---|---|---|---|
+| Codex / SDD | `eval/e020-phase-baseline` | E020: пофазный control на 18 локальных задачах и выбор одного следующего фактора | `scripts/eval/run_suite.py`, `scripts/eval/summarise.py`, `tests/test_eval_suite.py`, `docs/research/live-runs/E020-summary.txt`, `docs/experiments.md`, `docs/decisions.md`, `PLAN.md`, `HANDOFF.md` | task-scoped pytest, полный `pytest -q`, archive preflight, telemetry completeness gate, whole-branch review | в работе; намеренно не меняются `agent/` и budget-константы |
 | — | — | **Кандидат КТ №4 сдан вне репозитория 31.08** — в Git нет ни тега, ни коммита, ни метрик отправленного. Значит rollback-кандидат для КТ №5 неизвестен, а «воспроизводим из тега одной командой» (DoD этапа 4 `PLAN.md`) не выполнено. Нужно от того, кто отправлял: SHA собранного, SHA-256 и размер архива, модель и числа прогона | тег `submit-2026-08-31-kt4`, `docs/experiments.md` | `git show <тег>` даёт код, из которого архив пересобирается побайтово | **свободно, нужен человек, который отправлял** |
 | — | — | Импорт upstream snapshot (этап 0) | `agent/`, `local_task/`, upstream metadata | штатный README smoke | свободно |
 | — | — | Способ распаковки архива у организаторов: `unzip` сохраняет exec-бит, `python3 -m zipfile` — нет, и тогда `./run.sh` даёт `126` на всех задачах | вопрос организаторам, не код | ответ организаторов либо наблюдение реального runner'а | **свободно, блокер выпуска** |
