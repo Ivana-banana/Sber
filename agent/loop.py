@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import Any
 
 import json
-import re
 
 from agent import detectors, limits, prompt, tools
 from agent.playbooks import Playbook
@@ -210,45 +209,19 @@ def run(
 # --- pieces small enough to read in one sitting -------------------------------
 
 
-FENCE = re.compile(r"^\s*```[A-Za-z0-9_+-]*\s*\n(?P<body>.*?)\n?\s*```\s*$", re.DOTALL)
-
-
 def _parse(text: str) -> tuple[dict[str, Any], str]:
     """Turn a reply into an action, or into the sentence the model needs to read.
 
     `agent.llm` already validates structured replies against the schema, so this is
     the second line of defence and exists for the rungs where it cannot: a text-mode
     endpoint, or a stub. It never raises.
-
-    Two envelopes are accepted besides ours, for the same reason `agent.llm` keeps a
-    ladder of request formats: the dialect is the endpoint's choice, not ours, and a
-    reply we refuse to read costs a whole step. Measured on the E013 traces -- 19 of
-    165 replies, 11.5%, arrived as a function call wrapped in a markdown fence, and
-    every one was thrown away for its packaging while saying exactly what the run
-    needed to do next. On this endpoint a step is ten to twenty-five seconds.
-
-    What is *not* relaxed: the action still has to name one of our tools and still goes
-    through `_arguments` for validation. This reads a different envelope, not a
-    different contract.
     """
-    fenced = FENCE.match(text or "")
-    if fenced:
-        text = fenced.group("body")
     try:
         parsed = json.loads(text)
     except (json.JSONDecodeError, TypeError):
         return {}, "reply was not json: send one JSON object with a `tool` field and nothing else"
     if not isinstance(parsed, dict):
         return {}, "reply was not a json object: send one object with a `tool` field"
-
-    if "tool" not in parsed and isinstance(parsed.get("arguments"), dict):
-        # `{"name": ..., "arguments": {...}}` is the OpenAI function-call shape. The
-        # model reaches for it because that is what it was trained on; flattening it
-        # is a rename, not a reinterpretation.
-        flattened = dict(parsed["arguments"])
-        flattened["tool"] = parsed.get("name", "")
-        parsed = flattened
-
     if not parsed.get("tool"):
         return {}, "action had no `tool` field"
     return parsed, ""
