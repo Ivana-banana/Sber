@@ -116,3 +116,11 @@ def test_a_rendered_breakdown_parses_back_into_the_same_numbers() -> None:
 
 def test_parsing_a_run_without_telemetry_yields_an_empty_breakdown() -> None:
     assert PhaseBreakdown.parse("-") == PhaseBreakdown()
+
+
+def test_parsing_skips_unowned_and_malformed_legacy_tokens() -> None:
+    rendered = "legacy=1/2 legacy=value inspect=0.004/1 plan=bad/2 open=plan@3"
+
+    assert PhaseBreakdown.parse(rendered) == PhaseBreakdown(
+        seconds={"inspect": 0.004}, completed={"inspect": 1}, open_phase="plan@3"
+    )

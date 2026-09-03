@@ -111,12 +111,19 @@ class PhaseBreakdown:
         breakdown = cls()
         for token in rendered.split():
             name, _, value = token.partition("=")
-            if name == "open":
+            if name == "open" and value:
                 breakdown.open_phase = value
-            elif value:
+            elif name in PHASE_ORDER and value:
                 seconds, _, count = value.partition("/")
-                breakdown.seconds[name] = float(seconds)
-                breakdown.completed[name] = int(count)
+                if not seconds or not count:
+                    continue
+                try:
+                    parsed_seconds = float(seconds)
+                    parsed_count = int(count)
+                except ValueError:
+                    continue
+                breakdown.seconds[name] = parsed_seconds
+                breakdown.completed[name] = parsed_count
         return breakdown
 
 
