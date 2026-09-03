@@ -424,3 +424,33 @@ digest `sha256:1324d7bb…`, и главное — есть **живой лок�
 Параллельный нулевой-risk долг public docstrings закрыт `402622b`: archive-level
 regression, 316 passed, ZIP/preflight green. Security treatment остаётся отдельным
 архитектурным выбором после observability и требует paired injection + utility gates.
+
+## Ночная очередь AFK 03→04.09.2026 — прогоны latency
+
+Цель ночи: максимум живых прогонов при минимуме токенов. Вход — deep research
+`docs/prompts/deadline-latency-research.md` + отчёт в транскрипте; сверка с кодом
+дала два кандидата и один снятый вопрос (verifier вызывается после kill
+безусловно, `scripts/eval/run_suite.py:432` — sanity fixture не нужен).
+
+- [ ] **N1. Код E020.** Task 1–2 плана `docs/superpowers/plans/2026-09-03-e020-phase-baseline.md`:
+      `PhaseBreakdown.parse` + агрегация фаз в `summarise.py`. Живая модель не
+      стартует, пока тесты не зелёные.
+- [ ] **N2. E020 control.** 18 задач на текущем HEAD, `--timeout-scale 1.0`.
+      Acceptance: нет; это control. Читаем распределение шагов и долю `plan`.
+- [ ] **N3. Выбор фактора по числам E020.** Если типичная задача умирает раньше
+      9-го observation, окно `OBSERVATION_WINDOW=8` ни разу не сдвигается и
+      append-only history не может ничего изменить — тогда фактор N4 отпадает
+      автоматически, идём сразу на N5.
+- [ ] **N4. E021 treatment (условный): append-only history.** Единственная правка —
+      `prompt.build_messages`: вся история вместо окна 8, без `[N more…]`.
+      Acceptance: ни одна задача, решённая E020, не стала нулём.
+- [ ] **N5. E022 treatment: материализация по состоянию.** Триггер раннего
+      артефакта — не «прошло 90 с», а «есть первый конкретный кандидат».
+      Обоснование: при ~10 с на `plan` и внешнем kill 95 с подсказка на 90-й
+      секунде не успевает сработать ни разу.
+      Acceptance: ни одна задача, решённая E020, не стала нулём.
+- [ ] **N6. Карточки и сводка.** Каждый прогон — строка в `docs/experiments.md`,
+      сырой summary в `docs/research/live-runs/`.
+
+Граница ночи: `main` не трогать, зависимостей не добавлять, `agent/limits.py`
+числа не менять (это отдельный approval из OT3), архив организаторам не отправлять.
