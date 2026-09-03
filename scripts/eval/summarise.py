@@ -12,8 +12,15 @@ task and loses a different one shows up as a flat total and must not.
 
 from __future__ import annotations
 
+import statistics
 import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.eval.run_suite import PhaseBreakdown  # noqa: E402
 
 FAILURE_ORDER = (
     "startup", "packaging", "endpoint", "tool", "reasoning", "verification",
@@ -35,6 +42,67 @@ def number(value: str) -> int:
     return 0 if value in {"?", "", "-"} else int(float(value))
 
 
+def phase_report(rows: list[dict[str, str]]) -> list[str]:
+    """Aggregate the per-task `phases` column into the three timeout questions.
+
+    E018 answered them for one fixture by hand. Across eighteen tasks the same
+    arithmetic is the difference between "the model is slow" and "the agent takes
+    too many steps", and those two have opposite fixes.
+    """
+    parsed = [(item, PhaseBreakdown.parse(item.get("phases", "-"))) for item in rows]
+    timed = [(item, phases) for item, phases in parsed if phases.seconds and float(item["wall_s"]) > 0]
+    if not timed:
+        return []
+
+    shares = sorted(
+        (phases.seconds.get("plan", 0.0) / float(item["wall_s"]) * 100, item["task"])
+        for item, phases in timed
+    )
+    lines = [
+        f"phase plan  median {statistics.median(share for share, _ in shares):.1f}% of wall, "
+        f"min {shares[0][0]:.1f}% ({shares[0][1]}), max {shares[-1][0]:.1f}% ({shares[-1][1]})"
+    ]
+
+    calls = sum(phases.completed.get("plan", 0) for _, phases in timed)
+    seconds = sum(phases.seconds.get("plan", 0.0) for _, phases in timed)
+    if calls:
+        dearest = max(
+            (phases.seconds["plan"] / phases.completed["plan"], item["task"])
+            for item, phases in timed
+            if phases.completed.get("plan")
+        )
+        lines.append(
+            f"phase cost  {calls} plan calls, mean {seconds / calls:.1f} s; "
+            f"dearest {dearest[1]} at {dearest[0]:.1f} s/call"
+        )
+    else:
+        lines.append("phase cost  no plan call completed anywhere")
+
+    killed: dict[str, int] = {}
+    for _, phases in timed:
+        killed[phases.open_phase.partition("@")[0] or "none"] = (
+            killed.get(phases.open_phase.partition("@")[0] or "none", 0) + 1
+        )
+    deepest = max(
+        (
+            (int(phases.open_phase.partition("@")[2]), item["task"])
+            for item, phases in timed
+            if phases.open_phase
+        ),
+        default=(0, "-"),
+    )
+    lines.append(
+        "phase kill  "
+        + ", ".join(f"{name} {count}" for name, count in sorted(killed.items()))
+        + f"; deepest step {deepest[0]} ({deepest[1]})"
+    )
+
+    missing = len(rows) - len(timed)
+    if missing:
+        lines.append(f"phase gaps  {missing} row(s) without telemetry")
+    return lines
+
+
 def summarise(label: str, rows: list[dict[str, str]]) -> None:
     solved = [row for row in rows if row["reward"] == "1"]
     # Prefer the endpoint's own count: the agent cannot report its total from a run
@@ -53,6 +121,8 @@ def summarise(label: str, rows: list[dict[str, str]]) -> None:
         counts[row["failure"]] = counts.get(row["failure"], 0) + 1
     ordered = sorted(counts.items(), key=lambda kv: FAILURE_ORDER.index(kv[0]) if kv[0] in FAILURE_ORDER else 99)
     print("failures    " + ", ".join(f"{name} {count}" for name, count in ordered))
+    for line in phase_report(rows):
+        print(line)
 
     claimed = [row for row in rows if row.get("claim") == "True" and row["reward"] != "1"]
     if claimed:
