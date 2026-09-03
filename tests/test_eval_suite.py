@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 from scripts.eval.run_suite import (
@@ -158,3 +160,30 @@ def test_a_run_killed_inside_its_first_plan_reports_no_completed_call() -> None:
 def test_a_run_without_any_telemetry_adds_no_lines() -> None:
     """E017-era directories must keep summarising exactly as before."""
     assert phase_report([row("t1", 95.1, "-")]) == []
+
+
+def test_a_corrupt_open_step_does_not_crash_the_phase_report() -> None:
+    lines = phase_report([row("t1", 1.0, "plan=1.000/1 open=plan@unknown")])
+
+    assert lines[-1] == "phase kill  plan 1; deepest step 0 (-)"
+
+
+def test_e017_table_remains_compatible_with_direct_summary_script(tmp_path: Path) -> None:
+    """The old committed table must stay readable through the real CLI entrypoint."""
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / "results.tsv").write_bytes(
+        (root / "docs/research/live-runs/E017-results.tsv").read_bytes()
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(root / "scripts/eval/summarise.py"), str(tmp_path)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ModuleNotFoundError" not in result.stderr
+    assert "phase " not in result.stdout
+    assert "solved      4/18" in result.stdout

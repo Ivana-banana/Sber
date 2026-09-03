@@ -42,6 +42,15 @@ def number(value: str) -> int:
     return 0 if value in {"?", "", "-"} else int(float(value))
 
 
+def _open_step(open_phase: str) -> int | None:
+    """Return a numeric open-phase step, ignoring corrupt telemetry suffixes."""
+    suffix = open_phase.partition("@")[2]
+    try:
+        return int(suffix) if suffix else None
+    except ValueError:
+        return None
+
+
 def phase_report(rows: list[dict[str, str]]) -> list[str]:
     """Aggregate the per-task `phases` column into the three timeout questions.
 
@@ -85,9 +94,10 @@ def phase_report(rows: list[dict[str, str]]) -> list[str]:
         )
     deepest = max(
         (
-            (int(phases.open_phase.partition("@")[2]), item["task"])
+            (step, item["task"])
             for item, phases in timed
             if phases.open_phase
+            if (step := _open_step(phases.open_phase)) is not None
         ),
         default=(0, "-"),
     )
