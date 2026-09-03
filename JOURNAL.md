@@ -890,3 +890,8 @@ E014 запущен: один фактор — конверт ответа.
   preflight 5 PASS; production/archive public-identifier и secret-value scans пусты;
   `git diff --check` PASS. Untracked drafts другого владельца не изменялись и в
   builder allowlist не входят.
+- 21:59 — E018 evidence commit `495fd48` запушен в `origin/eval/live-baseline`.
+  Проверка уже на committed tree: **318 passed in 6.61s**, ZIP 62 942 B с тем же
+  `95d23169…5cdf`, preflight 5 PASS, branch divergence 0/0. AFK-autonomy выключена,
+  сторож уже снят; model/proxy containers остановлены. Ветка оставлена как есть по
+  зафиксированной границе «не трогать `main`».
