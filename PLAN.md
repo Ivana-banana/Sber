@@ -399,3 +399,25 @@ digest `sha256:1324d7bb…`, и главное — есть **живой лок�
 
 Граница: не трогать `main`, не добавлять runtime-зависимости, не отправлять решение
 организаторам и не выдумывать метрики КТ №4, которых нет в репозитории.
+
+## Очередь observability после E017 — утверждена 03.09.2026
+
+Факт: в E017 13 из 14 нулей имеют первичную причину `timeout`. До понимания
+внутреннего времени prompt/router/budget-абляции дают неоднозначный сигнал.
+
+- [x] **OT1. Live per-phase contract, test-first.** В stderr/stdout диагностики
+      (не в model context) печатать flushed start/end для `inspect`, каждого `plan`
+      (LLM), `act` (tool) и `verify`: step, status, monotonic duration. Start без end
+      после outer kill явно называет in-flight phase. Task text, arguments/output и
+      secrets не печатать; отказ diagnostic sink не влияет на решение задачи.
+- [ ] **OT2. Один timeout-fixture.** Собрать exact archive чистого telemetry commit и
+      прогнать один E017 timeout-case с теми же model/task image, network и scale 1.0.
+      Сохранить raw phase log + endpoint trace; посчитать LLM/tool/verify durations,
+      число завершённых шагов и последнюю незакрытую фазу.
+- [ ] **OT3. Решение по данным.** Только по OT2 выбрать максимум одну следующую
+      абляцию (`MAX_STEPS`, `VERIFY_RESERVE_FRACTION`, recovery или logical-call cap).
+      Не менять число до fresh control и заранее записанного acceptance gate.
+
+Параллельный нулевой-risk долг public docstrings закрыт `402622b`: archive-level
+regression, 316 passed, ZIP/preflight green. Security treatment остаётся отдельным
+архитектурным выбором после observability и требует paired injection + utility gates.

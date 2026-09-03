@@ -856,6 +856,13 @@ E014 запущен: один фактор — конверт ответа.
   targeted 1 passed, full **316 passed**, ZIP 62 369 B / `6adc0b88…d86f`, preflight
   5 PASS, production public-identifier scan пуст. Навык TDD определил границу теста:
   проверяется собранный artifact, а не текст исходника сам по себе.
+- Пользователь утвердил новый приоритет: timeout observability раньше prompt/router и
+  budget tuning. Bounded design: append-only `Event` получает optional live sink;
+  main выводит только безопасные phase/start/end/step/duration строки с flush, а loop
+  размечает inspect/LLM/tool/verify. Model messages, actions, budgets и endpoint payload
+  не меняются. RED: интеграционный тест не нашёл ни одной phase-строки; GREEN после
+  реализации — полный state/loop/main slice 59 passed. Второй RED доказал, что ошибка
+  sink обнуляла run; теперь sink отключается, audit продолжает жить.
 
 - 18:06 — сторож: работа поднята заново (сессия молчит 30 мин), сессия 6e010d42
 

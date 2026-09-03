@@ -89,12 +89,14 @@ def run(
                 "Запиши лучший вариант через write_file сейчас, улучшишь потом."
             )
 
+        plan_started = state.start_phase("plan")
         reply = llm.complete_structured(
             prompt.build_messages(system, observations),
             schema=prompt.ACTION_SCHEMA,
             max_output_tokens=limits.LLM_MAX_OUTPUT_TOKENS,
             timeout_s=max(1.0, state.budget.llm_timeout_s()),
         )
+        state.finish_phase("plan", plan_started)
 
         if isinstance(reply, LlmError):
             llm_failures += 1
@@ -126,7 +128,9 @@ def run(
 
             assert deliverable is not None
             command = str(act.get("verify", "") or "")
+            verify_started = state.start_phase("verify")
             last_verdict = verify(state, deliverable=deliverable, command=command)
+            state.finish_phase("verify", verify_started)
             state.record(
                 "verify",
                 last_verdict.stage,
@@ -173,7 +177,9 @@ def run(
             continue
 
         blocks_in_a_row = 0
+        act_started = state.start_phase("act")
         result = _execute(tool, args, state)
+        state.finish_phase("act", act_started)
         state.record(
             "tool",
             tool,
@@ -408,7 +414,9 @@ def _finalise(
     """
     deliverable = state.artifacts[-1] if state.artifacts else None
     if deliverable is not None and stop_reason != "verify-failed":
+        verify_started = state.start_phase("verify")
         verdict = verify(state, deliverable=deliverable, command="")
+        state.finish_phase("verify", verify_started)
         state.record(
             "verify",
             verdict.stage,

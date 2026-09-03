@@ -19,12 +19,23 @@ from pathlib import Path
 from agent import limits, loop, paths, playbooks, preflight, redact, verify
 from agent.llm import HttpLlm, LlmSettings
 from agent.ports import LlmPort
-from agent.state import AgentState, Budget
+from agent.state import AgentState, Budget, Event
 
 EXIT_OK = 0
 EXIT_USAGE = 2
 
 FINGERPRINT_CHARS = 12
+
+
+def emit_phase(event: Event) -> None:
+    """Print bounded timing telemetry that remains useful after an outer kill."""
+    if event.kind != "phase":
+        return
+    print(
+        f"agent phase: step={event.step} phase={event.name} status={event.detail} "
+        f"duration_s={event.duration_s:.3f}",
+        flush=True,
+    )
 
 
 def fingerprint(instruction: str) -> str:
@@ -123,6 +134,7 @@ def main(
         return EXIT_USAGE
 
     state = build_state(argv, env, cwd)
+    state.event_sink = emit_phase
     settings = LlmSettings.from_env(env)
     missing = settings.missing()
 
@@ -152,6 +164,7 @@ def main(
         # all it has ever meant here.
         return EXIT_OK
 
+    inspect_started = state.start_phase("inspect")
     brief = preflight.inspect_environment(state.workspace, env)
     # `classify` rather than `select` for the numbers alone: "general, because two
     # categories tied at 0" and "general, because the task said nothing we know" are
@@ -159,6 +172,7 @@ def main(
     # first thing worth reading.
     choice = playbooks.classify(state.instruction)
     playbook = choice.playbook
+    state.finish_phase("inspect", inspect_started)
     state.record("preflight", "playbook", f"{playbook.name}: {choice.reason}")
 
     client = llm or HttpLlm(

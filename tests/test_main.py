@@ -344,6 +344,40 @@ def test_a_configured_endpoint_makes_main_run_the_loop_and_report_it(
     assert target.read_text(encoding="utf-8") == "A"
 
 
+def test_phase_trace_times_inspect_plan_act_and_verify_without_task_text(
+    tmp_path: Path, capsys
+) -> None:
+    """A timeout log must identify its in-flight phase without exposing input data."""
+    instruction = "private instruction that must not enter diagnostics"
+    target = tmp_path / "answer.txt"
+    llm = StubLlm(
+        replies=[
+            LlmReply(text=json.dumps({"tool": "write_file", "path": str(target), "content": "A"})),
+            LlmReply(text=json.dumps({"tool": "finish", "path": str(target)})),
+        ]
+    )
+
+    assert main(["run.sh", instruction], ENV, tmp_path, llm=llm) == EXIT_OK
+
+    out = capsys.readouterr().out
+    phase_lines = [line for line in out.splitlines() if line.startswith("agent phase:")]
+    expected = [
+        "phase=inspect status=start",
+        "phase=inspect status=end",
+        "phase=plan status=start",
+        "phase=plan status=end",
+        "phase=act status=start",
+        "phase=act status=end",
+        "phase=verify status=start",
+        "phase=verify status=end",
+    ]
+    positions = [next(i for i, line in enumerate(phase_lines) if marker in line) for marker in expected]
+
+    assert positions == sorted(positions), phase_lines
+    assert all("step=" in line and "duration_s=" in line for line in phase_lines)
+    assert instruction not in out
+
+
 def test_without_an_endpoint_main_reports_and_spends_nothing(tmp_path: Path, capsys) -> None:
     llm = StubLlm(replies=[])
 
@@ -439,22 +473,29 @@ def test_the_status_line_is_readable_before_the_process_is_killed(tmp_path: Path
             "AGENT_TIMEOUT_S": "300",
         },
     )
-    # Read on a thread with a deadline. A buffered status line does not arrive late,
-    # it does not arrive at all until the process exits -- so a plain readline() here
-    # would hang the suite instead of failing it.
-    first: list[str] = []
+    # Read on a thread with a deadline. Buffered diagnostics do not arrive late, they
+    # do not arrive at all until the process exits -- so a plain readline() here would
+    # hang the suite instead of failing it. The plan-start marker is the crucial one:
+    # an outer kill during generation has no matching end marker, and that is the
+    # evidence that generation, rather than a tool or verifier, held the deadline.
+    live_lines: list[str] = []
 
-    def read_one() -> None:
+    def read_until_plan() -> None:
         assert process.stdout is not None
-        first.append(process.stdout.readline())
+        for _ in range(8):
+            line = process.stdout.readline()
+            live_lines.append(line)
+            if "phase=plan status=start" in line:
+                return
 
-    reader = threading.Thread(target=read_one, daemon=True)
+    reader = threading.Thread(target=read_until_plan, daemon=True)
     reader.start()
     reader.join(timeout=20.0)
 
     try:
-        assert first, "no status line arrived while the run was alive: stdout is buffered"
-        assert first[0].startswith("agent ready:")
+        assert live_lines, "no status line arrived while the run was alive: stdout is buffered"
+        assert live_lines[0].startswith("agent ready:")
+        assert any("phase=plan status=start" in line for line in live_lines), live_lines
     finally:
         process.kill()
         process.wait(timeout=30)

@@ -44,3 +44,15 @@ def test_nothing_rewrites_a_recorded_event(tmp_path: Path) -> None:
 
     assert len(state.audit) == 2, "the trace is append-only, a retry does not erase the failure"
     assert state.audit[0].detail == "2 failed"
+
+
+def test_a_broken_diagnostic_sink_cannot_break_the_agent(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+
+    def broken_sink(_event) -> None:
+        raise OSError("diagnostic pipe closed")
+
+    state.event_sink = broken_sink
+    event = state.record("phase", "plan", "start")
+
+    assert state.audit == [event], "the append-only trace survives optional output failure"

@@ -33,7 +33,7 @@ class Event:
 
     step: int
     kind: str
-    """`llm`, `tool`, `verify`, `budget` or `degrade`."""
+    """`phase`, `llm`, `tool`, `verify`, `budget` or `degrade`."""
 
     name: str
     detail: str
@@ -255,6 +255,9 @@ class AgentState:
     secrets: tuple[str, ...] = field(default=(), repr=False)
     """Values that must not reach an observation, a hash or the trace."""
 
+    event_sink: Callable[[Event], None] | None = field(default=None, repr=False)
+    """Optional live diagnostic sink. It observes events but cannot alter the run."""
+
     def record(
         self,
         kind: str,
@@ -273,7 +276,24 @@ class AgentState:
             exit_code=exit_code,
         )
         self.audit.append(event)
+        if self.event_sink is not None:
+            try:
+                self.event_sink(event)
+            except Exception:
+                # Diagnostics are strictly best-effort. A closed runner pipe or a
+                # formatting defect must never turn an otherwise valid task into 0.
+                self.event_sink = None
         return event
+
+    def start_phase(self, name: str) -> float:
+        """Emit a flushed start marker, then return the phase's timing origin."""
+        self.record("phase", name, "start")
+        return self.budget.clock()
+
+    def finish_phase(self, name: str, started_at: float) -> Event:
+        """Record one completed phase without allowing a backwards test clock."""
+        duration = max(0.0, self.budget.clock() - started_at)
+        return self.record("phase", name, "end", duration_s=duration)
 
     def observe(
         self,
