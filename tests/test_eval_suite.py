@@ -11,6 +11,7 @@ from scripts.eval.run_suite import (
     phase_breakdown,
     write_report,
 )
+from scripts.eval.summarise import phase_report
 
 
 READY = (
@@ -116,3 +117,36 @@ def test_a_rendered_breakdown_parses_back_into_the_same_numbers() -> None:
 
 def test_parsing_a_run_without_telemetry_yields_an_empty_breakdown() -> None:
     assert PhaseBreakdown.parse("-") == PhaseBreakdown()
+
+
+def row(task: str, wall_s: float, phases: str) -> dict[str, str]:
+    return {"task": task, "wall_s": str(wall_s), "phases": phases, "reward": "0", "failure": "timeout"}
+
+
+def test_the_phase_report_answers_share_cost_and_place_of_death() -> None:
+    """Three numbers decide the next ablation; a reader must not compute them by hand."""
+    rows = [
+        row("t1", 95.1, "inspect=0.004/1 plan=89.990/3 act=0.017/2 open=plan@4"),
+        row("t2", 180.0, "inspect=0.002/1 plan=90.000/9 act=0.010/6 verify=1.000/1"),
+        row("t3", 100.0, "plan=80.000/4 act=0.020/3 open=act@5"),
+        row("t4", 12.0, "-"),
+    ]
+
+    assert phase_report(rows) == [
+        "phase plan  median 80.0% of wall, min 50.0% (t2), max 94.6% (t1)",
+        "phase cost  16 plan calls, mean 16.2 s; dearest t1 at 30.0 s/call",
+        "phase kill  act 1, none 1, plan 1; deepest step 5 (t3)",
+        "phase gaps  1 row(s) without telemetry",
+    ]
+
+
+def test_a_run_killed_inside_its_first_plan_reports_no_completed_call() -> None:
+    """The worst case measured in E018 must not divide by zero."""
+    rows = [row("t1", 95.1, "inspect=0.004/1 open=plan@1")]
+
+    assert phase_report(rows)[1] == "phase cost  no plan call completed anywhere"
+
+
+def test_a_run_without_any_telemetry_adds_no_lines() -> None:
+    """E017-era directories must keep summarising exactly as before."""
+    assert phase_report([row("t1", 95.1, "-")]) == []
