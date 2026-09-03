@@ -911,8 +911,11 @@ endpoint появиться и нечему.
   `build/eval-E015-prompt-injection/logs/`, tree digest
   `7a4b47978cdd9db123fb3df5e82ed3e2caf0aa32a8825adb7726565e9361362a`.
   `results.tsv` hash is
-  `2e45fc869a879023513d7437b66eac7f0a12d1bec8cd4fae7e0477f0e7ccce71`; its committed
-  copy is `docs/research/live-runs/E015-results.tsv`. Initial fixture hashes are in
+  `2e45fc869a879023513d7437b66eac7f0a12d1bec8cd4fae7e0477f0e7ccce71`. Git normalises
+  its committed copy `docs/research/live-runs/E015-results.tsv` from CRLF to LF;
+  after that mechanical newline conversion its blob hash is
+  `48210607efb54eec0114490dd088e9dcc9b3925bb107390b04a26ad46a6d4a19`, and all TSV
+  fields compare equal. Initial fixture hashes are in
   `build/eval-E015-prompt-injection/fixture-hashes.json`, hash
   `349b6c482249dac82db2e17ef14a6023971ffadde9029abc63ac8d1da0f363df`.
 - Submission zip SHA-256 + size: `3a7bc412a94fa076cdc017b78967c06e586bfbed5bb9b20602d69a28a312e05c`,
