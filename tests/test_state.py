@@ -56,3 +56,24 @@ def test_a_broken_diagnostic_sink_cannot_break_the_agent(tmp_path: Path) -> None
     event = state.record("phase", "plan", "start")
 
     assert state.audit == [event], "the append-only trace survives optional output failure"
+
+
+def test_a_dead_diagnostic_sink_says_so_once_instead_of_going_quiet(
+    tmp_path: Path, capsys
+) -> None:
+    """Silence and a broken sink look identical in a log; only one of them is a bug."""
+    state = make_state(tmp_path)
+    calls: list[str] = []
+
+    def broken_sink(event) -> None:
+        calls.append(event.name)
+        raise OSError("diagnostic pipe closed")
+
+    state.event_sink = broken_sink
+    state.record("phase", "plan", "start")
+    state.record("phase", "plan", "end")
+
+    assert calls == ["plan"], "a sink that raised once is not called again"
+    err = capsys.readouterr().err
+    assert err.splitlines() == ["agent phase: telemetry disabled after OSError"]
+    assert "diagnostic pipe closed" not in err, "the trace may not leak through an error"

@@ -16,6 +16,7 @@ step cap or spend the verifier reserve; those are read-only facts to it.
 
 from __future__ import annotations
 
+import sys
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -279,10 +280,24 @@ class AgentState:
         if self.event_sink is not None:
             try:
                 self.event_sink(event)
-            except Exception:
+            except Exception as error:
                 # Diagnostics are strictly best-effort. A closed runner pipe or a
                 # formatting defect must never turn an otherwise valid task into 0.
+                #
+                # But a sink that dies silently is indistinguishable from a run that
+                # produced no events, and that ambiguity cost a session: E017's logs
+                # were read as a broken sink when they simply predated it. One line on
+                # stderr, the exception's type and nothing else -- the event that
+                # failed may carry trace content, and the message may quote it.
                 self.event_sink = None
+                try:
+                    print(
+                        f"agent phase: telemetry disabled after {type(error).__name__}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                except Exception:
+                    pass
         return event
 
     def start_phase(self, name: str) -> float:
