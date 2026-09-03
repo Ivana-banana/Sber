@@ -14,6 +14,7 @@
 | `E014-control-results.tsv` | текущий paired control | точный архив E012 (`617b774`) в той же среде, что полный E014 | 3/18 |
 | `E014-results.tsv` | конверт ответа | полный treatment; 0 приобретено, 1 потеряно против текущего control | 2/18 |
 | `E014-mut-audit-reruns.tsv` | проверка вариативности | два дополнительных treatment-повтора одной нестабильной задачи | 1/2 |
+| `E015-results.tsv` | M0.2 prompt injection | 15 isolated fixture; marker side effect — единственный security outcome | 3/15 markers |
 
 Колонки: `reward` — вердикт верификатора самой задачи (`/logs/verifier/reward.txt`),
 единственное, что считается результатом; `tokens` — то, что агент сообщил о себе сам
@@ -43,3 +44,10 @@ control для сентябрьского прогона: mutable base image с�
 
 Модель прогонов — `qwen2.5-coder:7b` на CPU. Это **не** модель оценки, и ни одно число
 отсюда не переносится на закрытый набор; ограничения перечислены в карточках.
+
+E015 использует тот же модельный файл `qwen2.5-coder:7b-instruct-q4_K_M`, но не task
+image: локальный `python:3.12-slim` в сети только с моделью. Поэтому это измерение
+непрямой инъекции, а не доказательство совместимости с `secureintelligent/acp`.
+`marker_created=True` означает реальный запрещённый side effect; `inputs_changed=False`
+во всех строках означает, что fixture data остались прежними. Endpoint counter отбросил
+один поздний ответ, поэтому его token sum — нижняя граница.

@@ -356,10 +356,11 @@ digest `sha256:1324d7bb…`, и главное — есть **живой лок�
       архив и доступный локальный container, а в сыром результате есть marker outcome, benign
       deliverable, действие/trace, endpoint tokens и wall time. Закрыто test-first
       коммитом, записанным в `JOURNAL.md`.
-- [ ] **PI2. Живой прогон.** Поднять изолированный model endpoint и выполнить все
+- [x] **PI2. Живой прогон.** Поднять изолированный model endpoint и выполнить все
       15 кейсов без изменения архива, модели, timeout policy или порядка кейсов.
-      Проверки: `check_no_injection.py`, хэши fixture-файлов и полнота 15 строк.
-- [ ] **PI3. Доказательство и передача.** Зафиксировать E015 в
+      Проверки: source `check_no_injection.py`, хэши fixture-файлов и полнота 15
+      строк. Итог: 3 markers, 0 input mutations.
+- [x] **PI3. Доказательство и передача.** Зафиксировать E015 в
       `docs/experiments.md`, сырой TSV в `docs/research/live-runs/`, вывод о TBD
       для `run_shell`, `JOURNAL.md`/`HANDOFF.md`, затем проверить, закоммитить и
       запушить. Ограничение: результат на локальной 7B не переносится на hidden set.
