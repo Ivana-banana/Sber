@@ -26,6 +26,7 @@
 | E016 | 2026-09-03 | `435c178` + docs-only dirty state | Свежий compliance baseline: source hash, pytest, фактический ZIP/preflight и offline Python 3.12 smoke | endpoint не вызывался; `python:3.12-slim@78387bc3…`; exact ACP локально отсутствует | — | 0 | 7.586 с весь check; smoke 0.619/0.612 с | 319 passed; ZIP 62 947 B, 5 preflight PASS; offline exits 0/2; exact-ACP gate остаётся историческим E003, а не свежим доказательством |
 | E017 | 2026-09-03 | `5cd1be7` | Свежий baseline фактического принятого кандидата после обычного revert проигравшего E014; более поздний directory finish gate сохранён | `qwen2.5-coder:7b-instruct-q4_K_M` (`dae161e2…`), Ollama 0.20.5 на CPU, те же 18 task images | **4/18** | **154 549** endpoint tokens | 2 729 с | лучший локальный solved count: +1 к E012/E014 control; 13 timeout, 1 verification; это current baseline, не причинная оценка одного revert |
 | E018 | 2026-09-03 | `c05453c` | Model-context-neutral synchronous per-phase telemetry; один прежний timeout-fixture, две diagnostic attempts | та же 7B manifest `dae161e2…`; один package path/tree hash, post-run image `b7fc75ca…`; per-repeat image identity не доказана | 0/1, 0/1 | 4 452 / 11 751 | 95.1 / 95.1 с | в обоих ≥94.6% wall — завершённые LLM plan; tool <0.02 с, verify не начат, kill во время следующего plan; MAX_STEPS/reserve/recovery не поддержаны как следующий фактор |
+| E019 | 2026-09-03 | `1fed51a`, `f60197d` | Инфраструктура наблюдаемости, не прогон: диагноз «нулевой телеметрии» в E017 и harvesting phase breakdown в результаты сьюта | endpoint не вызывался; локальный stub-сервер и уже сохранённые E017/E018 логи | — | 0 | 5.67 с pytest | «пропажа» телеметрии — артефакт хронологии (E017 запущен на `5cd1be7`, телеметрия добавлена позже в `c05453c`), а не сбой; per-phase breakdown теперь попадает в `results.tsv`/`suite.json` автоматически |
 
 ## Per-task результаты
 
@@ -1075,6 +1076,62 @@ endpoint появиться и нечему.
   записанного E017 (`ec077276…` → `b7fc75ca…`), поскольку harness пересобирает mutable
   local tag; ID не снимался между repeats. Phase diagnosis каждого запуска валиден,
   но exact per-repeat image identity и причинное сравнение с E017 не заявляются.
+
+### E019 — телеметрия фаз: диагноз «нулевого сигнала» и harvesting в сьют
+
+Инфраструктурная карточка, а не измерение решаемости: модель не вызывалась, ни один
+task image не запускался, solved count не менялся.
+
+- Date/time (MSK): 2026-09-03 22:00–22:25.
+- Commit / dirty state: `1fed51a` (harvester + tests), `f60197d` (stderr-нотис
+  мёртвого sink). Tracked tree чист; присутствуют user-owned untracked черновики
+  брейншторма, которые builder allowlist не пакует.
+- Hypothesis: заявленная в черновике плана причина — «`event_sink` тихо глохнет либо
+  stdout буферизуется в `docker exec`» — **отвергнута**.
+- Что на самом деле произошло: E017 запущен на `5cd1be7`; телеметрия фаз добавлена
+  позже, в `c05453c` (`git log --oneline 5cd1be7..c05453c` содержит именно её). Во
+  всех 18 логах E017 строк `agent phase` ноль, потому что в том коде их некому было
+  печатать. Первый прогон *с* телеметрией — E018 — дал 13 строк (cold) и 33 (warm)
+  через тот же `docker exec` путь.
+- Независимая проверка пути захвата: `sh run.sh "<instruction>"` под
+  `subprocess.run(capture_output=True)` со stub OpenAI-сервером на loopback печатает
+  14 строк `agent phase` и завершается с кодом 0. Ни `run.sh`, ни pipe-захват,
+  которым пользуется `scripts/eval/run_suite.py`, строки не теряют. Ранее
+  существовавший `tests/test_main.py` уже покрывает небуферизованную выдачу живого
+  процесса; она подтверждена повторно.
+- Реальный оставшийся пробел (он и закрыт): harness читал из лога только
+  `agent ready:` и `agent done:`. Per-phase числа E018 извлекались руками, поэтому
+  на 18 задачах breakdown стоил бы 18 grep-ов и в `results.tsv` не попадал.
+  `phase_breakdown` суммирует завершённое время и число вызовов по фазам и называет
+  фазу, оставшуюся открытой в момент kill; результат — новая колонка `phases`
+  в `results.tsv` и поле в `suite.json`.
+- Regression evidence парсера: на сохранённых E018 трассах cold воспроизводится
+  побайтово как `inspect=0.004/1 plan=89.990/3 act=0.017/2 open=plan@4`, warm — как
+  `inspect=0.004/1 plan=89.988/9 act=0.008/6 open=plan@10`; оба совпадают с ручной
+  арифметикой карточки E018. Логи E017 без телеметрии дают `-`, а не исключение.
+- Второй фикс: `AgentState.record` по-прежнему навсегда отключает упавший sink (иначе
+  диагностика способна превратить валидную задачу в ноль), но теперь один раз пишет
+  в stderr `agent phase: telemetry disabled after <ExceptionType>` — только тип
+  исключения, потому что упавшее событие может нести содержимое трассы. Без этой
+  строки «сломанный sink» и «событий не было» в логе неразличимы; именно эта
+  неоднозначность и породила ложную гипотезу выше.
+- Command: `python3 -m pytest -q` → 325 passed (было 318; +6 `tests/test_eval_suite.py`,
+  +1 `tests/test_state.py`); `python3 scripts/build_submission.py` →
+  63 204 B, SHA-256
+  `67418f4ac4ca9bdb20cec212a6ba2080190468c72626d7ef312aabc319acadf4`;
+  `python3 scripts/check_submission.py` → 5 PASS, 0 blocking.
+- Result: решаемость не измерялась и измениться не могла — `scripts/` в архив не
+  попадает, а изменение в `agent/state.py` добавляет вывод только на пути, который
+  до этого молчал.
+- Decision: следующий живой E0xx-прогон запускать без дополнительных изменений
+  телеметрии; его `results.tsv` уже даст пофазный breakdown по каждой задаче, и
+  только на нём имеет смысл обсуждать абляции `MAX_STEPS`, `VERIFY_RESERVE_FRACTION`
+  и более раннюю точку производства результата.
+- Limitations: подтверждён путь захвата, а не корректность самих длительностей на
+  чужом железе; синхронная запись фаз входит в wall-clock, её стоимость по-прежнему
+  не измерена (унаследовано из E018). Валидация парсера опирается на две сохранённые
+  трассы одного fixture, а не на полный сьют: форма строки одна, но 18-задачный
+  прогон с колонкой `phases` ещё не выполнялся.
 
 ## Запланированные абляции токен-экономии (M8)
 
