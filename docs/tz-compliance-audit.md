@@ -23,10 +23,10 @@
 | Для каждой задачи есть конечный budget, stop condition и резерв проверки | PARTIAL | Wall/step/recovery конечны: `Budget`, `MAX_STEPS=30`, monotonic deadlines, per-tool/LLM timeout, `VERIFY_RESERVE_FRACTION=0.20`; 22 budget tests входят в 319 PASS | Токены только учитываются, но не имеют hard cap/stop. Значения hidden limit не опубликованы, однако это не снимает долг консервативного собственного cap/call policy |
 | Endpoint задаётся `LOCAL_AGENT_MODEL`, `OPENAI_BASE_URL`, `OPENAI_API_KEY` | PASS | Константы в `agent/limits.py`, env parsing в `agent/llm.py`, секрет передаётся только Authorization header и редактируется; endpoint compatibility ladder покрыта тестами | API key допускается пустым для keyless local endpoint, что расширяет, а не сужает контракт |
 | Решение работает в `secureintelligent/acp`, Python 3.12, offline | PARTIAL | Исторические E003/E004/E006 запускали архив и настоящую петлю в ACP index `1324d7bb…c8a3` с `--network none`; E016 свежо подтвердил Python 3.12/offline на `python:3.12-slim@78387bc3…` | На текущем Docker daemon 29.3.0 exact ACP image отсутствует; это не тот daemon 29.6.1/WSL2, где записан E003. Интернет для повторного pull правилами проекта запрещён |
-| Агент покрывает code audit, SWE fix, forensics и CTF | PARTIAL | Пять capability playbook, classifier tests; 18 независимых пакетов E008 покрывают четыре класса и имеют 18/18 reference validity | Последний принятый quality baseline E012 решает лишь 3/18 на локальной 7B; скрытую решаемость нельзя заявлять |
+| Агент покрывает code audit, SWE fix, forensics и CTF | PARTIAL | Пять capability playbook, classifier tests; 18 независимых пакетов E008 покрывают четыре класса и имеют 18/18 reference validity | Свежий E017 решает 4/18 на локальной 7B; скрытую решаемость нельзя заявлять |
 | Закрытый набор содержит 15 бинарно оцениваемых задач | NOT REQUIRED | Harness и документы считают внешний reward единственным результатом; `Outcome.solved` не подменяет verifier | Состав и oracle hidden-задач принципиально недоступны |
 | Любой crash, exception, timeout или неверный ответ получает `0`; score — доля решённых | NOT REQUIRED | Это правило evaluator. Код превращает ожидаемые tool/endpoint ошибки в результаты, а harness сохраняет внешний reward и failure taxonomy | Нельзя доказать отсутствие всех crash на hidden set; uncontrolled локальные crash/timeout остаются regression-дефектами |
-| Оптимизация идёт `solved_count → total tokens → wall time` | PARTIAL | Gate записан в `CLAUDE.md`, `PLAN.md`, `docs/experiments.md`; E013 и E014 документированно отклонены | E014 treatment всё ещё находится в текущем HEAD; пока он не удалён обычным коммитом, фактический кандидат нарушает собственный gate |
+| Оптимизация идёт `solved_count → total tokens → wall time` | PASS | E013 и E014 отклонены; E014 удалён обычным revert `5cd1be7`; свежий E017 текущего кандидата дал лучший локальный результат 4/18 | Вторичные метрики сравниваются только после solved count; E017 не выдаётся за причинную оценку одного revert |
 | Public fixtures не являются hidden benchmark; запрещён хардкод их имён/путей/ответов | PARTIAL | Нет runtime-ветвления по public cases; prompt skeleton тестируется на отсутствие имён | Два runtime docstring содержат два task name (`bye-file`, `fix-sqli-login`) и public path/answer (`bye.txt`, `Bye`). Они попадают в ZIP и должны быть обезличены отдельной безопасной правкой |
 | Секреты не логируются и не сохраняются | PASS | Redaction tests для LLM/tool/verifier/main; E016 scan нашёл только fake canaries, аргументы dev-runner и документированные имена переменных | Реальные значения в Git не найдены; бинарный DOCX не интерпретировался текстовым scanner'ом |
 | Для КТ учитывается одно последнее решение команды; до cutoff его можно обновлять, leaderboard не пересчитывается мгновенно | NOT REQUIRED | Это операционный контракт из `docs/task.md`, он не реализуется агентом | В репозитории отсутствуют metadata реально отправленного КТ №4, поэтому его rollback не воспроизводим |
@@ -41,7 +41,7 @@
 |---|---|---|---|
 | G0: upstream SHA и форма public-набора известны | PARTIAL | `docs/task.md` фиксирует `b95c62f` и шесть task packages | Сам snapshot `local_task/` в Git не импортирован; это долг воспроизводимости dev baseline, не дефект submission |
 | G1: layout/entrypoint архива | PASS | E016 build/preflight, 319 tests | Root layout принят согласно нормативному README; wrapper layout отклонён локальными contract tests |
-| G2/G3: измеримый baseline и отсутствие solved-регрессии | PARTIAL | E011–E014 дают полный 18-task журнал; E012 — 3/18, E013/E014 отклонены | В текущем HEAD присутствует экспериментальный envelope E014 и последующие main-изменения; до нового treatment нужен свежий 18-task control текущего кандидата после явного возврата отклонённого фактора |
+| G2/G3: измеримый baseline и отсутствие solved-регрессии | PASS | E014 factor удалён `5cd1be7`; E017 exact-archive baseline имеет 18/18 строк и 4/18 reward против принятого E012 3/18 | Это baseline всего текущего HEAD, не причинная оценка directory gate или revert по отдельности |
 | G4: robustness, включая prompt injection | PARTIAL | Fault/unit tests не дают uncontrolled hangs; E015 исполнил 15/15 isolated injection cases | E015: 3/15 реальных marker side effects. Нужна отдельная security-vs-utility абляция; prompt-only утверждение безопасности запрещено |
 | G5: non-public audit/fix/forensics/CTF suite | PASS | E008: 18/18 reference solutions проходят независимые verifier; production scan не ветвится по именам fixtures | Это валидность сьюта, не решаемость агента |
 | G6: clean offline unpacked archive | PARTIAL | Исторический exact-ACP E003 зелёный; свежий E016 build/preflight и Python 3.12 offline smoke зелёные | Fresh exact-ACP повтор невозможен без локального image; перед реальной отправкой нужен daemon с pinned image |
@@ -70,15 +70,15 @@
 
 Формальный entrypoint, упаковка, offline-форма и env-контракт учтены. Полное
 соответствие заявлять нельзя: свежий exact-ACP gate не воспроизводится на этом daemon,
-token hard-cap отсутствует, проигравший E014 всё ещё активен, runtime docstrings
-содержат public task/path/answer, а E015 дал 3/15 prompt-injection side effects.
-Решаемость также остаётся низкой: лучший принятый локальный результат — 3/18, и это
+token hard-cap отсутствует, runtime docstrings содержат public task/path/answer, а E015
+дал 3/15 prompt-injection side effects. Решаемость также остаётся низкой: свежий
+принятый локальный результат E017 — 4/18, и это
 не прогноз hidden score.
 
 Очередь по риску:
 
-1. удалить из активного кандидата отклонённый E014 factor обычным обратимым коммитом;
-2. получить свежий 18-task utility baseline принятого архива;
+1. ~~удалить из активного кандидата отклонённый E014 factor~~ — выполнено `5cd1be7`;
+2. ~~получить свежий 18-task utility baseline~~ — E017: 4/18, 154 549 tokens;
 3. обезличить runtime docstrings без изменения поведения и повторить unit/archive;
 4. после явного одобрения дизайна получить свежие 15-case injection и 18-task
    utility controls, затем сравнить **один** security treatment по marker-rate и

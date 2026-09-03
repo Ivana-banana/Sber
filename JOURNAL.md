@@ -838,3 +838,19 @@ E014 запущен: один фактор — конверт ответа.
   и способно сломать CTF/forensics; обязательный brainstorming требует явного design
   approval. Продолжаю уже принятое и обратимое: убрать проигравший E014 и измерить
   свежий E017 utility baseline. Security варианты оставлю человеку с exact gates.
+- 16:41 — конфликт обычного revert E014 разрешён узко: удалены 27 строк envelope
+  parser и четыре его теста, сохранён более поздний directory finish gate. Revert
+  `5cd1be7` проверен: `tests/test_loop.py` 27 passed, полный suite 315 passed, архив
+  62 402 B / `a2d4d1ed…c38`, preflight 5 PASS; commit запушен до model run.
+- 16:42–17:29 — E017 на явном архиве и clean `5cd1be7`: **4/18**, 154 549 endpoint
+  tokens, 2 729.2 s. Решены `ctf-header-override`, `mut-audit-query-gate`,
+  `mut-greeting-farewell`, `mut-salutation-beacon`; нули — 13 timeout и 1
+  verification (`ctf-signed-cookie`). Это лучший локальный solved count, поэтому
+  current baseline принят по первичной метрике. Прирост нельзя приписывать одному
+  revert: HEAD также сохраняет последующий directory gate, а модель вариативна.
+  Raw build TSV `8245bf26…1c91`; committed copy without trailing empty separators
+  `00727047…b739`; ignored logs tree `744dd444…17d`.
+
+- 18:06 — сторож: работа поднята заново (сессия молчит 30 мин), сессия 6e010d42
+
+- 18:21 — сторож: подъём не помогает: поднятая сессия молчит. Проверь «afk-autonomy --status» и подними работу сам

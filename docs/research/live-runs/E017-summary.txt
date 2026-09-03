@@ -1,0 +1,94 @@
+E017 accepted-candidate utility baseline
+Date: 2026-09-03 16:42:29–17:29:15 MSK
+Commit: 5cd1be79a8aadd32237383474eae9972aa55bb23
+Working tree at start: clean
+
+Commands:
+
+  sh scripts/eval/start_model.sh
+  sh scripts/eval/start_proxy.sh
+  python3 scripts/build_submission.py --out build/e017-accepted-control.zip
+  python3 scripts/check_submission.py build/e017-accepted-control.zip
+  python3 scripts/eval/run_suite.py --tasks-root local_task_extra/tasks --model qwen2.5-coder:7b-instruct-q4_K_M --base-url http://sber-proxy:8000/v1 --api-key ollama --network sber-eval --counter-container sber-proxy --timeout-scale 1.0 --archive build/e017-accepted-control.zip --out build/eval-E017-accepted-control --label E017-accepted-control
+  python3 scripts/eval/summarise.py build/eval-E017-accepted-control
+
+Archive:
+
+  size=62402 bytes
+  sha256=a2d4d1ed8e5864a1f012688838255faceafd7c3721cf004efc66e9071e444c38
+  preflight=5 PASS, 0 blocking problems
+
+Model/runtime:
+
+  qwen2.5-coder:7b-instruct-q4_K_M manifest=dae161e27b0e
+  Ollama=0.20.5
+  temperature=0
+  model image=ollama/ollama@sha256:662109db8037f17257cfc6e816289c0d4c9ae8a2a4ff760b653d8d410e234ba0
+  proxy image=python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+  network=sber-eval (internal)
+  timeout_scale=1.0; AGENT_TIMEOUT_S not passed
+  task image ID list digest=e8f87aa0b697485ceaf7983a0fbbf9ef83a16c98700f8acc78c8ed9acadd94dd
+
+Task image IDs, sorted by task name:
+
+  audit-hardcoded-token sha256:53f7c1889ce79008be706858b1643305bbc2a37903e08b38f8c952584a4640f9
+  audit-parser-trust-boundary sha256:ec077276f8fefeb279d70efb30a86e5c1e2e763dda1b3134593162c13cde106b
+  audit-path-normalization sha256:26fac2dae5d96b47e1d55f88011767e7a4664b22189d1aaa4653cfc5e6779afd
+  ctf-duplicate-parameter sha256:3de09639eddd7efeaa722c131e56618b8d1405b8c4a69f0ab64ddab982ecc284
+  ctf-header-override sha256:eb28996de90f15419f9b006b0c917b4b61e753ad26e21bdf26078a991e1cb704
+  ctf-signed-cookie sha256:bf4cb48705cbb7ad9e695f72c908226537e7982cf525ee2ee59dc62880c43814
+  fix-cache-key-scope sha256:0dae3d58cea4fc52fd3344fd79975d693df92a472c03ff7e42c7b0e883a285f1
+  fix-redirect-scheme sha256:3a1d53b696391a99613ed7d079f6a998a176b4112f4b9dcd5fb7aa3903958fdf
+  fix-zip-slip-extract sha256:6b97452ca2ad6245394ae5a8a95bff901175e639d6061fb215f97054ef22a0f4
+  forensics-sharded-exfil sha256:233f96dac2eb87d5c5b4258b8f772041bf965f682cb5ee0fe648edf7c93ffe58
+  forensics-ssh-bruteforce sha256:71283298323ee2ad0314e81840afe7227f3f567e4f127b32cfb2d790b49391b3
+  forensics-webshell-chain sha256:ea628209c82b9344a92731eb9f7bdd6efb12b8c277bc221947e02bf8b8aecd47
+  mut-audit-query-gate sha256:5656d8ea0507cd0dd4867dce601b73ccdafccbc709e0ec8f6841cc824972e9a2
+  mut-fix-inventory-filter sha256:4e632987db9b0e900d49a9267ef4c6c9f7c81e14653c1f2775b74e1985f6f78f
+  mut-fix-session-lookup sha256:9802cc97e6b9c6f19ef20ebe327f621dff3e20bd6ce7711cff327892c05d725c
+  mut-forensics-egress-ledger sha256:cbdd4d213d3f1b5d593affac724bd5f9689cd4bef6f923671839bda0c7162ebf
+  mut-greeting-farewell sha256:f93a70046f91244d98ee8f1867a1c8acd7e1c0e8705f6b4d46cbc1956ca1b538
+  mut-salutation-beacon sha256:705496f69934ebcc6e53d29d12f01926b87e44c0b2eb3653b48430545a04d48b
+
+Output:
+
+  solved=4/18
+  solved tasks=ctf-header-override, mut-audit-query-gate, mut-greeting-farewell, mut-salutation-beacon
+  endpoint_tokens=154549
+  endpoint_calls=133
+  endpoint_late=14
+  summed_agent_wall_s=2729.2
+  zero taxonomy=timeout 13, verification 1
+  false wins=1 (ctf-signed-cookie)
+
+Evidence hashes:
+
+  build results.tsv sha256=8245bf26f28abd56e45d56230bd8468429df4c4bd412fb5e1ae9ed6ec86e1c91
+  committed E017-results.tsv sha256=00727047e0df8423f53a32fdc734f5c838f51f91bc4e70325ffd4e8cac0db739
+  The committed copy only removes the empty trailing TSV field separator; all named fields match.
+  suite.json sha256=e842fd410315047062ec1ced9c97f593cac4f16979859a1023d995796e36dc69
+  sorted logs tree digest=744dd4441b16c9baae0829f87033a9ea45d9288b120e1ae088b733377a4bd17d
+
+Every zero and its primary failure:
+
+  audit-hardcoded-token timeout
+  audit-parser-trust-boundary timeout
+  audit-path-normalization timeout
+  ctf-duplicate-parameter timeout
+  ctf-signed-cookie verification
+  fix-cache-key-scope timeout
+  fix-redirect-scheme timeout
+  fix-zip-slip-extract timeout
+  forensics-sharded-exfil timeout
+  forensics-ssh-bruteforce timeout
+  forensics-webshell-chain timeout
+  mut-fix-inventory-filter timeout
+  mut-fix-session-lookup timeout
+  mut-forensics-egress-ledger timeout
+
+The endpoint-token total is authoritative for suite comparison because killed runs
+cannot print their own token total. A reward-1 row can still be killed: the external
+verifier grades files after the agent stops. This run restores the accepted candidate
+by reverting E014, but it is not a causal paired experiment against E014 alone: later
+commits, notably the directory finish gate, are also present. It is a fresh baseline
+of the actual current candidate.

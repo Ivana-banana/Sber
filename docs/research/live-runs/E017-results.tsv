@@ -1,0 +1,19 @@
+task	repeat	reward	tokens	ep_tokens	ep_calls	ep_late	wall_s	steps	stop	claim	failure	note
+audit-hardcoded-token	1	0	?	8199	7	0	180.1	?	killed	-	timeout
+audit-parser-trust-boundary	1	0	?	7959	7	1	95.2	?	killed	-	timeout
+audit-path-normalization	1	0	?	10747	9	1	180.2	?	killed	-	timeout
+ctf-duplicate-parameter	1	0	?	7388	6	0	95.1	?	killed	-	timeout
+ctf-header-override	1	1	11197	13721	11	1	143.3	10	stuck	False	-
+ctf-signed-cookie	1	0	11253	14062	10	0	158.6	9	verified	True	verification
+fix-cache-key-scope	1	0	?	5815	5	0	95.1	?	killed	-	timeout
+fix-redirect-scheme	1	0	?	3569	3	2	180.2	?	killed	-	timeout
+fix-zip-slip-extract	1	0	?	10952	10	0	180.1	?	killed	-	timeout
+forensics-sharded-exfil	1	0	?	3307	3	1	95.2	?	killed	-	timeout
+forensics-ssh-bruteforce	1	0	?	9765	9	2	180.1	?	killed	-	timeout
+forensics-webshell-chain	1	0	?	8971	8	1	180.1	?	killed	-	timeout
+mut-audit-query-gate	1	1	?	11561	10	1	180.2	?	killed	-	-
+mut-fix-inventory-filter	1	0	?	7157	6	1	180.2	?	killed	-	timeout
+mut-fix-session-lookup	1	0	?	6882	6	1	180.2	?	killed	-	timeout
+mut-forensics-egress-ledger	1	0	?	9840	8	1	180.2	?	killed	-	timeout
+mut-greeting-farewell	1	1	2861	4901	5	1	121.0	4	verified	True	-
+mut-salutation-beacon	1	1	7640	9753	10	0	124.1	9	stuck	False	-

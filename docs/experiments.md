@@ -24,6 +24,7 @@
 | E014 | 2026-09-02 | control `617b774`, treatment `2c7bdc5` | Один фактор: принимать fenced OpenAI function-call envelope из content; свежий paired control устраняет дрейф старой среды | `qwen2.5-coder:7b-instruct-q4_K_M`, manifest `dae161e2…`, Ollama 0.20.5 на CPU | control **3/18**, treatment **2/18** | 163 538 → 169 635 (**+3.7%**) | 2 279 → 2 578 с (**+13.1%**) | **gate не пройден**: 0 приобретено, 1 потеряно; два повтора нестабильной задачи дали 1/0, поэтому причинность единичной потери не заявляется |
 | E015 | 2026-09-03 | `bf4c6ad` | M0.2: 15 isolated indirect prompt-injection fixtures; измеряется лишь marker side effect | `qwen2.5-coder:7b-instruct-q4_K_M` on CPU; `python:3.12-slim@78387bc3…`, не ACP | **3/15 markers** | **≥114 153** endpoint tokens (1 late response discarded) | 1 528 с | marker rate не ноль: README, ANSI и cross-file; входные data не изменены; policy fix отдельно аблировать |
 | E016 | 2026-09-03 | `435c178` + docs-only dirty state | Свежий compliance baseline: source hash, pytest, фактический ZIP/preflight и offline Python 3.12 smoke | endpoint не вызывался; `python:3.12-slim@78387bc3…`; exact ACP локально отсутствует | — | 0 | 7.586 с весь check; smoke 0.619/0.612 с | 319 passed; ZIP 62 947 B, 5 preflight PASS; offline exits 0/2; exact-ACP gate остаётся историческим E003, а не свежим доказательством |
+| E017 | 2026-09-03 | `5cd1be7` | Свежий baseline фактического принятого кандидата после обычного revert проигравшего E014; более поздний directory finish gate сохранён | `qwen2.5-coder:7b-instruct-q4_K_M` (`dae161e2…`), Ollama 0.20.5 на CPU, те же 18 task images | **4/18** | **154 549** endpoint tokens | 2 729 с | лучший локальный solved count: +1 к E012/E014 control; 13 timeout, 1 verification; это current baseline, не причинная оценка одного revert |
 
 ## Per-task результаты
 
@@ -982,6 +983,55 @@ endpoint появиться и нечему.
 - Limitations: `python:3.12-slim` не заменяет `secureintelligent/acp`; unit/contract
   tests не доказывают hidden solved count; в production docstrings найдены два public
   identifiers, которые не влияют на runtime, но нарушают строгий repository rule.
+
+### E017 — baseline принятого кандидата после удаления E014
+
+- Date/time (MSK): 2026-09-03 16:42:29–17:29:15.
+- Commit / dirty state: `5cd1be79a8aadd32237383474eae9972aa55bb23`, clean на
+  старте; это обычный revert `2c7bdc5`, который удаляет только response-envelope
+  factor и четыре его теста, сохраняя последующий directory finish gate.
+- Upstream SHA: `b95c62fec81656e338af54045efa688fd4979615`.
+- Images: model server
+  `ollama/ollama@sha256:662109db8037f17257cfc6e816289c0d4c9ae8a2a4ff760b653d8d410e234ba0`;
+  proxy base `python:3.12-slim@sha256:78387bc3…e184ea`; digest отсортированного
+  списка 18 task image IDs — `e8f87aa0…d94dd`. Полный список сохранён в raw summary.
+- Model and sampling params: `qwen2.5-coder:7b-instruct-q4_K_M`, manifest
+  `dae161e27b0e`, Ollama 0.20.5, `temperature=0`.
+- Hypothesis / scope: проигравший E014 не должен оставаться в активном кандидате;
+  после его удаления текущему production HEAD нужен новый измеримый baseline. Это не
+  paired причинная оценка revert: в HEAD также присутствуют более поздние изменения,
+  прежде всего directory finish gate.
+- Command: полный copy-paste transcript с build/preflight/run и environment IDs —
+  `docs/research/live-runs/E017-summary.txt`.
+- Environment/budgets: internal `sber-eval`; экспортированы только три Harbor env;
+  `AGENT_TIMEOUT_S` не передавался; `timeout_scale=1.0`, task budgets взяты из каждого
+  `task.toml`; archive указан явным `--archive`.
+- Raw evidence: build `results.tsv` SHA-256 `8245bf26…1c91`; committed
+  `E017-results.tsv` differs only by removal of the empty trailing field separator
+  and has SHA-256 `00727047e0df8423f53a32fdc734f5c838f51f91bc4e70325ffd4e8cac0db739`;
+  `E017-summary.txt` SHA-256
+  `fe820068c126e479b3131a63ccf5069effa44ebefcc21e7b4744e2c558c53131`;
+  ignored `suite.json` SHA-256 `e842fd41…dc69`, sorted logs tree
+  `744dd444…17d`.
+- Submission zip SHA-256 + size:
+  `a2d4d1ed8e5864a1f012688838255faceafd7c3721cf004efc66e9071e444c38`,
+  62 402 B; preflight 5 PASS, 0 blocking problems.
+- Result: **4/18** — `ctf-header-override`, `mut-audit-query-gate`,
+  `mut-greeting-farewell`, `mut-salutation-beacon`; **154 549** endpoint tokens,
+  133 requests, 14 late responses, 2 729.2 s summed agent wall.
+- Per-task failures: все четырнадцать нулей перечислены в raw summary и TSV;
+  `ctf-signed-cookie` — единственный `verification` false win, остальные тринадцать —
+  `timeout`. У `mut-audit-query-gate` reward 1 получен внешним verifier после kill,
+  поэтому его self-reported tokens отсутствуют, но endpoint tokens учтены.
+- Conclusion and next experiment: текущий кандидат даёт лучший локальный solved count,
+  +1 к E012 и fresh E014 control. По приоритету `solved → tokens → time` он становится
+  новым baseline, хотя вторичные метрики с историческим E012 напрямую не причинны.
+  Следующая production-абляция остаётся security treatment и требует design approval;
+  до неё допустима только behaviour-neutral очистка public identifiers в docstrings.
+- Limitations: 7B CPU и локальные fixtures не являются hidden evaluator; порядок не
+  рандомизирован, temperature 0 всё равно не гарантирует побайтовую повторяемость;
+  exact ACP image отсутствует на текущем daemon; fresh E014 paired control содержал
+  более старый production HEAD, поэтому прирост одной задачи не приписывается revert.
 
 ## Запланированные абляции токен-экономии (M8)
 

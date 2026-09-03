@@ -70,7 +70,7 @@ rg -n '10 MiB|run\.sh|LOCAL_AGENT_MODEL|OPENAI_BASE_URL|OPENAI_API_KEY|offline|b
 
 Expected: every normative category has at least one explicit status row and evidence path.
 
-- [ ] **Step 5: Commit the audit ledger**
+- [x] **Step 5: Commit the audit ledger**
 
 ```sh
 git add docs/tz-compliance-audit.md PLAN.md HANDOFF.md JOURNAL.md docs/superpowers/plans/2026-09-03-tz-compliance-audit.md
@@ -121,7 +121,7 @@ git diff --check
 
 Expected: no production hardcode or secret value; documented variable names and test fixtures are classified separately from leaked values.
 
-- [ ] **Step 5: Record the baseline as an experiment and commit**
+- [x] **Step 5: Record the baseline as an experiment and commit**
 
 Append a card with commit SHA, commands, archive size/hash, image digest, test counts, duration, and any zero/failure taxonomy to `docs/experiments.md`; update the ledger and journal; then commit and push the documentation only.
 
@@ -135,11 +135,11 @@ Append a card with commit SHA, commands, archive size/hash, image digest, test c
 - Consumes: the recorded rejection of E014, the existing 18-task utility suite, and the local `qwen2.5-coder:7b-instruct-q4_K_M` endpoint.
 - Produces: an accepted current branch without the known losing factor and a fresh 18-row utility baseline tied to its exact archive.
 
-- [ ] **Step 1: Remove the rejected E014 factor**
+- [x] **Step 1: Remove the rejected E014 factor**
 
 Inspect `git show 2c7bdc5`, then create a normal revert commit that removes only its fenced/OpenAI-envelope parsing and its matching tests. Run the targeted loop tests and the full suite. Do not rewrite published history.
 
-- [ ] **Step 2: Establish a fresh utility baseline**
+- [x] **Step 2: Establish a fresh utility baseline**
 
 Start the existing model and counting proxy, build `build/e017-accepted-control.zip`, preflight that exact file, and run:
 
