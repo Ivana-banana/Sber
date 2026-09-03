@@ -45,10 +45,7 @@ def number(value: str) -> int:
 def _open_step(open_phase: str) -> int | None:
     """Return a numeric open-phase step, ignoring corrupt telemetry suffixes."""
     suffix = open_phase.partition("@")[2]
-    try:
-        return int(suffix) if suffix else None
-    except ValueError:
-        return None
+    return int(suffix) if suffix.isdigit() else None
 
 
 def phase_report(rows: list[dict[str, str]]) -> list[str]:

@@ -168,6 +168,12 @@ def test_a_corrupt_open_step_does_not_crash_the_phase_report() -> None:
     assert lines[-1] == "phase kill  plan 1; deepest step 0 (-)"
 
 
+def test_a_negative_open_step_is_ignored_as_malformed() -> None:
+    lines = phase_report([row("t1", 1.0, "plan=1.000/1 open=plan@-1")])
+
+    assert lines[-1] == "phase kill  plan 1; deepest step 0 (-)"
+
+
 def test_e017_table_remains_compatible_with_direct_summary_script(tmp_path: Path) -> None:
     """The old committed table must stay readable through the real CLI entrypoint."""
     root = Path(__file__).resolve().parents[1]
