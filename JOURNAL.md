@@ -850,6 +850,12 @@ E014 запущен: один фактор — конверт ответа.
   revert: HEAD также сохраняет последующий directory gate, а модель вариативна.
   Raw build TSV `8245bf26…1c91`; committed copy without trailing empty separators
   `00727047…b739`; ignored logs tree `744dd444…17d`.
+- Compliance cleanup выполнен test-first. Новый archive-level test сначала упал ровно
+  на `bye-file`, `fix-sqli-login`, `bye.txt` и reference literal в shipped Python;
+  затем только human docstrings обезличены, runtime-ветвления не менялись. GREEN:
+  targeted 1 passed, full **316 passed**, ZIP 62 369 B / `6adc0b88…d86f`, preflight
+  5 PASS, production public-identifier scan пуст. Навык TDD определил границу теста:
+  проверяется собранный artifact, а не текст исходника сам по себе.
 
 - 18:06 — сторож: работа поднята заново (сессия молчит 30 мин), сессия 6e010d42
 

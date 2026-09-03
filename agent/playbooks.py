@@ -166,10 +166,10 @@ GENERAL = Playbook(
 Проверь инструменты и права раньше догадок.
 Заверши только после внешнего PASS; сохрани status.""",
 )
-"""Original text, not third-party-derived like the other four -- there is no
-`bye-file`/`code-audit`-shaped skill to distil a "no assumptions yet" procedure from.
-Written to the same budget and step-grammar as the rest, and kept shorter than
-`FORENSICS` (342) on purpose: it carries no domain-specific steps to spend tokens on."""
+"""Original text, not third-party-derived like the other four: there is no generic
+generalist skill from which to distil a "no assumptions yet" procedure. Written to
+the same budget and step-grammar as the rest, and kept shorter than `FORENSICS` (342)
+on purpose: it carries no domain-specific steps to spend tokens on."""
 
 
 PLAYBOOKS: tuple[Playbook, ...] = (CODE_AUDIT, CODE_FIX, FORENSICS, CTF, GENERAL)

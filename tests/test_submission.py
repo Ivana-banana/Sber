@@ -25,6 +25,20 @@ SMOKE_PARENT_ENV: dict[str, str] = {}
 empty parent makes it report SKIP or FAIL rather than depending on the developer's
 machine."""
 
+SHIPPED_PUBLIC_FIXTURE_IDENTIFIERS = (
+    b"bye-file",
+    b"hello-file",
+    b"find-sqli-login",
+    b"fix-sqli-login",
+    b"fix-sqli-search",
+    b"incident-log-forensics",
+    b"bye.txt",
+    b"hello.txt",
+    b"security_report.json",
+    b"incident_report.txt",
+    b'"bye"',
+)
+
 
 @pytest.fixture(scope="module")
 def archive(tmp_path_factory) -> Path:
@@ -56,6 +70,19 @@ def test_archive_holds_only_what_the_allowlist_names(archive: Path) -> None:
     for name in names:
         top = name.split("/")[0]
         assert top in {"run.sh", "agent", "THIRD_PARTY_NOTICES.md"}, f"unexpected entry: {name}"
+
+
+def test_archive_contains_no_public_fixture_identifiers(archive: Path) -> None:
+    """Public examples may shape tests, but their identifiers must never ship."""
+    offenders: dict[str, list[str]] = {}
+    with zipfile.ZipFile(archive) as zf:
+        for name in zf.namelist():
+            data = zf.read(name).lower()
+            for identifier in SHIPPED_PUBLIC_FIXTURE_IDENTIFIERS:
+                if identifier in data:
+                    offenders.setdefault(identifier.decode("ascii"), []).append(name)
+
+    assert offenders == {}, f"public fixture identifiers shipped: {offenders}"
 
 
 def test_caches_and_compiled_files_never_ship(archive: Path) -> None:

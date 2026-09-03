@@ -17,9 +17,9 @@ Four outcomes, in the order they are checked:
   regardless of what runs here. `ok=True` so the run can still finish and leave the
   reserve for something that needs it more.
 * `command`    -- the model's own command ran. Its exit code decides, not its stdout;
-  `fix-sqli-login`'s reference check is `[ "$(cat bye.txt)" = "Bye" ]`-shaped, and a
-  command that echoes success while exiting non-zero is exactly the case a real
-  verifier would also fail.
+  an exact-output shell comparison is the representative shape, and a command that
+  echoes success while exiting non-zero is exactly the case a real verifier would
+  also fail.
 """
 
 from __future__ import annotations

@@ -27,7 +27,7 @@
 | Закрытый набор содержит 15 бинарно оцениваемых задач | NOT REQUIRED | Harness и документы считают внешний reward единственным результатом; `Outcome.solved` не подменяет verifier | Состав и oracle hidden-задач принципиально недоступны |
 | Любой crash, exception, timeout или неверный ответ получает `0`; score — доля решённых | NOT REQUIRED | Это правило evaluator. Код превращает ожидаемые tool/endpoint ошибки в результаты, а harness сохраняет внешний reward и failure taxonomy | Нельзя доказать отсутствие всех crash на hidden set; uncontrolled локальные crash/timeout остаются regression-дефектами |
 | Оптимизация идёт `solved_count → total tokens → wall time` | PASS | E013 и E014 отклонены; E014 удалён обычным revert `5cd1be7`; свежий E017 текущего кандидата дал лучший локальный результат 4/18 | Вторичные метрики сравниваются только после solved count; E017 не выдаётся за причинную оценку одного revert |
-| Public fixtures не являются hidden benchmark; запрещён хардкод их имён/путей/ответов | PARTIAL | Нет runtime-ветвления по public cases; prompt skeleton тестируется на отсутствие имён | Два runtime docstring содержат два task name (`bye-file`, `fix-sqli-login`) и public path/answer (`bye.txt`, `Bye`). Они попадают в ZIP и должны быть обезличены отдельной безопасной правкой |
+| Public fixtures не являются hidden benchmark; запрещён хардкод их имён/путей/ответов | PASS | Нет runtime-ветвления по public cases; archive-level regression проверяет все shipped bytes; после cleanup production scan пуст, полный suite 316 passed | Public identifiers остаются только в tests/docs как ожидаемые запрещённые fixtures и не входят в ZIP |
 | Секреты не логируются и не сохраняются | PASS | Redaction tests для LLM/tool/verifier/main; E016 scan нашёл только fake canaries, аргументы dev-runner и документированные имена переменных | Реальные значения в Git не найдены; бинарный DOCX не интерпретировался текстовым scanner'ом |
 | Для КТ учитывается одно последнее решение команды; до cutoff его можно обновлять, leaderboard не пересчитывается мгновенно | NOT REQUIRED | Это операционный контракт из `docs/task.md`, он не реализуется агентом | В репозитории отсутствуют metadata реально отправленного КТ №4, поэтому его rollback не воспроизводим |
 | Календарь КТ №1–№7 соблюдается командой | NOT REQUIRED | Даты полностью перенесены в `docs/task.md` и `PLAN.md`; ближайшая выгрузка №5 — 07.09 12:00 МСК | Автоматического подтверждения календаря вне DOCX нет; отправка решения в этой AFK-работе запрещена |
@@ -70,8 +70,8 @@
 
 Формальный entrypoint, упаковка, offline-форма и env-контракт учтены. Полное
 соответствие заявлять нельзя: свежий exact-ACP gate не воспроизводится на этом daemon,
-token hard-cap отсутствует, runtime docstrings содержат public task/path/answer, а E015
-дал 3/15 prompt-injection side effects. Решаемость также остаётся низкой: свежий
+token hard-cap отсутствует, а E015 дал 3/15 prompt-injection side effects. Решаемость
+также остаётся низкой: свежий
 принятый локальный результат E017 — 4/18, и это
 не прогноз hidden score.
 
@@ -79,7 +79,7 @@ token hard-cap отсутствует, runtime docstrings содержат publi
 
 1. ~~удалить из активного кандидата отклонённый E014 factor~~ — выполнено `5cd1be7`;
 2. ~~получить свежий 18-task utility baseline~~ — E017: 4/18, 154 549 tokens;
-3. обезличить runtime docstrings без изменения поведения и повторить unit/archive;
+3. ~~обезличить runtime docstrings и повторить unit/archive~~ — 316 passed, 5 PASS;
 4. после явного одобрения дизайна получить свежие 15-case injection и 18-task
    utility controls, затем сравнить **один** security treatment по marker-rate и
    solved/tokens/time;
