@@ -773,6 +773,13 @@ E014 запущен: один фактор — конверт ответа.
   анализа; его нельзя выдавать за oracle результата — им служит per-workspace проверка
   runner'а. E015 оформляется без production-фикса: containment требует отдельной
   абляции utility/solved против marker-rate.
+- PI3: result записан и pushed как `e274dcb`; отдельный документный commit `14851e5`
+  исправил важную деталь аудита — raw CSV writer оставляет CRLF, а Git нормализует
+  committed TSV в LF. Карточка теперь хранит оба hash и утверждает только проверенное
+  equality полей. Финальные gates: committed TSV содержит 15 строк, 3 markers, 0 input
+  mutations; source checker зелёный; `pytest -q` — 319 passed; archive preflight — 5
+  PASS. Следующая задача вне этой AFK-очереди — только отдельная security/utility
+  абляция конкретного confinement treatment.
 
 - 00:56 — сторож: работа поднята заново (сессия молчит 31 мин), сессия 7f5843e6
 
