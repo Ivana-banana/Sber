@@ -66,6 +66,61 @@ DONE_LINE = re.compile(
     r"recovery=(?P<recovery>\d+) tokens=(?P<tokens>\d+)"
 )
 READY_LINE = re.compile(r"agent ready: workspace=(?P<workspace>\S+) \((?P<why>[^)]*)\)")
+PHASE_LINE = re.compile(
+    r"agent phase: step=(?P<step>\d+) phase=(?P<phase>\w+) "
+    r"status=(?P<status>start|end) duration_s=(?P<duration>[0-9.]+)"
+)
+PHASE_ORDER = ("inspect", "plan", "act", "verify")
+
+
+@dataclass
+class PhaseBreakdown:
+    """Where one run's wall clock actually went, read back from its own log.
+
+    E018 needed this by hand: eighteen greps to tell "the model was generating" from
+    "the agent took too many steps" from "the verifier ate the reserve". The numbers
+    were already in the log; only the harvesting was missing.
+    """
+
+    seconds: dict[str, float] = field(default_factory=dict)
+    """Completed time per phase. A phase killed mid-flight contributes nothing."""
+
+    completed: dict[str, int] = field(default_factory=dict)
+    """How many times each phase finished, so a total can be read as a per-call cost."""
+
+    open_phase: str = ""
+    """`name@step` of the phase that never ended -- what held the deadline at the kill."""
+
+    def render(self) -> str:
+        parts = [
+            f"{name}={self.seconds[name]:.3f}/{self.completed[name]}"
+            for name in PHASE_ORDER
+            if name in self.seconds
+        ]
+        if self.open_phase:
+            parts.append(f"open={self.open_phase}")
+        return " ".join(parts) or "-"
+
+
+def phase_breakdown(output: str) -> PhaseBreakdown:
+    """Sum the agent's phase markers. Phases are sequential, so nesting cannot occur.
+
+    A log written before the telemetry existed, or one truncated mid-line by a kill,
+    yields an empty breakdown rather than an error: the harness has to keep reading
+    every other field of a run whose diagnostics are incomplete.
+    """
+    breakdown = PhaseBreakdown()
+    for match in PHASE_LINE.finditer(output):
+        name = match["phase"]
+        if match["status"] == "start":
+            breakdown.open_phase = f"{name}@{match['step']}"
+            continue
+        breakdown.open_phase = ""
+        breakdown.seconds[name] = round(
+            breakdown.seconds.get(name, 0.0) + float(match["duration"]), 3
+        )
+        breakdown.completed[name] = breakdown.completed.get(name, 0) + 1
+    return breakdown
 
 
 @dataclass
@@ -103,6 +158,9 @@ class TaskResult:
     endpoint_late: int | None = None
     """Replies that arrived after their task was killed. Non-zero means the previous
     task outlived its deadline at the endpoint, not that this one misbehaved."""
+
+    phases: str = "-"
+    """Rendered `PhaseBreakdown`: where the wall clock went, per task and per repeat."""
 
     note: str = ""
     log: str = ""
@@ -347,6 +405,7 @@ class Runner:
             log_file.write_text(output, encoding="utf-8")
             base.log = str(log_file.relative_to(Path(self.args.out)))
             base.agent_exit = None if proc is None else proc.returncode
+            base.phases = phase_breakdown(output).render()
 
             done = DONE_LINE.search(output)
             deliverable = ""
@@ -394,7 +453,8 @@ def write_report(out: Path, suite: SuiteResult) -> None:
         json.dumps(asdict(suite), indent=2, ensure_ascii=False), encoding="utf-8"
     )
     lines = [
-        "task\trepeat\treward\ttokens\tep_tokens\tep_calls\tep_late\twall_s\tsteps\tstop\tclaim\tfailure\tnote"
+        "task\trepeat\treward\ttokens\tep_tokens\tep_calls\tep_late\twall_s\tsteps\tstop\t"
+        "claim\tfailure\tphases\tnote"
     ]
     for row in suite.rows:
         lines.append(
@@ -409,7 +469,7 @@ def write_report(out: Path, suite: SuiteResult) -> None:
                     "?" if row.endpoint_late is None else row.endpoint_late,
                     row.wall_s,
                     "?" if row.steps is None else row.steps,
-                    row.stop_reason, row.solved_claim, row.failure_mode, row.note,
+                    row.stop_reason, row.solved_claim, row.failure_mode, row.phases, row.note,
                 )
             )
         )
