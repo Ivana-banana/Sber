@@ -101,6 +101,24 @@ class PhaseBreakdown:
             parts.append(f"open={self.open_phase}")
         return " ".join(parts) or "-"
 
+    @classmethod
+    def parse(cls, rendered: str) -> PhaseBreakdown:
+        """Read `render` back, so a summary can aggregate the table, not the logs.
+
+        The placeholder `-` and any token this format does not own are skipped: a
+        results table written by an older harness must stay readable.
+        """
+        breakdown = cls()
+        for token in rendered.split():
+            name, _, value = token.partition("=")
+            if name == "open":
+                breakdown.open_phase = value
+            elif value:
+                seconds, _, count = value.partition("/")
+                breakdown.seconds[name] = float(seconds)
+                breakdown.completed[name] = int(count)
+        return breakdown
+
 
 def phase_breakdown(output: str) -> PhaseBreakdown:
     """Sum the agent's phase markers. Phases are sequential, so nesting cannot occur.
