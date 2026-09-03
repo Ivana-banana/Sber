@@ -16,6 +16,7 @@
 | `E014-mut-audit-reruns.tsv` | проверка вариативности | два дополнительных treatment-повтора одной нестабильной задачи | 1/2 |
 | `E015-results.tsv` | M0.2 prompt injection | 15 isolated fixture; marker side effect — единственный security outcome | 3/15 markers |
 | `E017-results.tsv` | принятый current baseline | E014 откачен; последующий directory finish gate сохранён | 4/18 |
+| `E018-results.tsv` | per-phase timeout diagnosis | один fixture, две attempts; synchronous telemetry | 0/1, 0/1 |
 
 Колонки: `reward` — вердикт верификатора самой задачи (`/logs/verifier/reward.txt`),
 единственное, что считается результатом; `tokens` — то, что агент сообщил о себе сам
@@ -58,3 +59,11 @@ E017 — не новый single-factor treatment, а свежий baseline фа�
 `ctf-header-override`; при этом `mut-audit-query-gate` снова оказался вариативным и в
 этот раз дал 1. Полный environment/image ledger и причины каждого нуля лежат рядом в
 `E017-summary.txt`; тяжёлые trace остаются в ignored `build/`.
+
+Для E018 phase/action traces намеренно тоже закоммичены: это небольшой первичный
+результат observability, без которого вывод о timeout нельзя перепроверить. В двух
+attempts завершённые `plan` заняли 89.990/89.988 из 95.1 s, `act` — меньше 0.02 s,
+`verify` не начался, а последняя незакрытая фаза снова `plan`. Значит ближайшая
+абляция не должна менять `MAX_STEPS`, reserve или recovery: они не успели сработать.
+Вторая попытка использовала уже запущенный model container, но один повтор и
+post-run-only task image ID не доказывают ни causal warming effect, ни identity image.

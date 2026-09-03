@@ -1,0 +1,3 @@
+condition	task	repeat	reward	tokens	ep_tokens	ep_calls	ep_late	wall_s	steps	stop	claim	failure
+cold	audit-parser-trust-boundary	1	0	?	4452	4	0	95.1	?	killed	-	timeout
+warm	audit-parser-trust-boundary	1	0	?	11751	10	0	95.1	?	killed	-	timeout

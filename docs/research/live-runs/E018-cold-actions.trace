@@ -1,0 +1,26 @@
+--- call 1 ---
+```json
+{
+  "name": "list_dir",
+  "arguments": {
+    "path": "/app"
+  }
+}
+```
+--- call 2 ---
+{
+  "tool": "list_dir",
+  "path": "/app"
+}
+--- call 3 ---
+{
+  "tool": "read_range",
+  "path": "gateway.py",
+  "start_line": 1
+}
+--- call 4 ---
+{
+  "tool": "read_range",
+  "path": "/app/gateway.py",
+  "start_line": 10
+}

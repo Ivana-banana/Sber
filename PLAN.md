@@ -409,14 +409,17 @@ digest `sha256:1324d7bb…`, и главное — есть **живой лок�
       (не в model context) печатать flushed start/end для `inspect`, каждого `plan`
       (LLM), `act` (tool) и `verify`: step, status, monotonic duration. Start без end
       после outer kill явно называет in-flight phase. Task text, arguments/output и
-      secrets не печатать; отказ diagnostic sink не влияет на решение задачи.
-- [ ] **OT2. Один timeout-fixture.** Собрать exact archive чистого telemetry commit и
-      прогнать один E017 timeout-case с теми же model/task image, network и scale 1.0.
-      Сохранить raw phase log + endpoint trace; посчитать LLM/tool/verify durations,
-      число завершённых шагов и последнюю незакрытую фазу.
-- [ ] **OT3. Решение по данным.** Только по OT2 выбрать максимум одну следующую
-      абляцию (`MAX_STEPS`, `VERIFY_RESERVE_FRACTION`, recovery или logical-call cap).
-      Не менять число до fresh control и заранее записанного acceptance gate.
+      secrets не печатать; исключение diagnostic sink не роняет задачу. Синхронный
+      flushed вывод входит в wall-clock и не объявляется бесплатным.
+- [x] **OT2. Один timeout-fixture.** Exact archive commit `c05453c` прогнан cold и
+      warm на `audit-parser-trust-boundary`: оба 0/1 timeout 95.1 s. Завершённые LLM
+      plan заняли 89.990/89.988 s, tool — 0.017/0.008 s, verify не начался;
+      последняя открытая фаза — plan.
+- [x] **OT3. Решение по данным.** `MAX_STEPS`, reserve и recovery не менять: кейс
+      оборван на plan шага 4/10, до verify/recovery и задолго до 30 шагов. Следующий
+      design должен выбрать один factor между более ранним production checkpoint и
+      post-checkpoint logical-call policy; число не менять до отдельного approval,
+      fresh control и заранее записанного acceptance gate.
 
 Параллельный нулевой-risk долг public docstrings закрыт `402622b`: archive-level
 regression, 316 passed, ZIP/preflight green. Security treatment остаётся отдельным

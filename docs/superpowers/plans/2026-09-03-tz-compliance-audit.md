@@ -153,10 +153,15 @@ python3 scripts/eval/run_suite.py --tasks-root local_task_extra/tasks --model qw
 
 Expected: 18 complete rows from the explicitly supplied archive, external reward for each task, endpoint calls/tokens, wall time, stop reason, and primary failure mode.
 
-- [ ] **Step 3: Record and independently criticise E017**
+- [x] **Step 3: Record and independently criticise E017**
 
 Store the compact raw TSV, exact command, archive hash/size, model manifest, image digests, solved/tokens/time, and reason for every zero. Give the actual revert diff, test output, raw TSV, and summary to an independent critic; address reproducible objections.
 
-- [ ] **Step 4: Close the run without inventing a security design**
+- [x] **Step 4: Close the run without inventing a security design**
 
 Run `pytest -q`, archive preflight, `git diff --check`, and production hardcode/secret scans. Commit and push E017 documentation. Record three concrete security-treatment approaches from E015, but do not implement one until the user approves the architectural trade-off required by the brainstorming gate.
+
+Closed by E017/E018 evidence and final independent critique. The three unselected
+security candidates are recorded in `docs/decisions.md`: submission-side Landlock,
+host/runtime confinement, and replacement of free shell actions with typed mediated
+operations. None is treated as approved production behavior.

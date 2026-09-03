@@ -1,0 +1,92 @@
+E018 per-phase timeout diagnosis
+Date: 2026-09-03 21:39:50–21:44:01 MSK
+Telemetry commit: c05453cb3988dc3eaf87a80b8037b667d84c89e8
+Tracked working tree at build/run start: clean
+Untracked user draft docs/superpowers/plans/2026-09-03-brainstorm-gaps.md was present and is excluded by the submission allowlist.
+
+Commands:
+
+  python3 scripts/build_submission.py --out build/e018-phase-telemetry.zip
+  python3 scripts/check_submission.py build/e018-phase-telemetry.zip
+  sh scripts/eval/start_model.sh
+  sh scripts/eval/start_proxy.sh
+  python3 scripts/eval/run_suite.py --tasks-root local_task_extra/tasks --model qwen2.5-coder:7b-instruct-q4_K_M --base-url http://sber-proxy:8000/v1 --api-key ollama --network sber-eval --counter-container sber-proxy --timeout-scale 1.0 --archive build/e018-phase-telemetry.zip --out build/eval-E018-phase-trace --label E018-phase-trace --only audit-parser-trust-boundary
+  python3 scripts/eval/run_suite.py --tasks-root local_task_extra/tasks --model qwen2.5-coder:7b-instruct-q4_K_M --base-url http://sber-proxy:8000/v1 --api-key ollama --network sber-eval --counter-container sber-proxy --timeout-scale 1.0 --archive build/e018-phase-telemetry.zip --out build/eval-E018-phase-trace-warm --label E018-phase-trace-warm --only audit-parser-trust-boundary
+
+Evidence identification commands:
+
+  git rev-parse HEAD
+  git status --porcelain --untracked-files=no
+  sha256sum build/e018-phase-telemetry.zip
+  docker exec sber-model ollama --version
+  docker exec sber-model ollama list
+  docker inspect sber-model --format '{{.Image}}'
+  docker inspect sber-proxy --format '{{.Image}}'
+  docker image inspect sber-eval/audit-parser-trust-boundary:latest --format '{{.Id}}'
+  find local_task_extra/tasks/audit-parser-trust-boundary -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum
+  sha256sum build/eval-E018-phase-trace/{results.tsv,suite.json,logs/audit-parser-trust-boundary.r1.log,logs/audit-parser-trust-boundary.r1.trace}
+  sha256sum build/eval-E018-phase-trace-warm/{results.tsv,suite.json,logs/audit-parser-trust-boundary.r1.log,logs/audit-parser-trust-boundary.r1.trace}
+
+  The task image command was run only after both attempts. It does not establish
+  per-attempt image identity because the runner rebuilds a mutable local tag.
+
+Archive and environment:
+
+  archive size=62936 bytes
+  archive sha256=9f93be2be964e196fc0c0b1fb8cfa61e13189d41af076561873268a33558d8ab
+  preflight=5 PASS, 0 blocking problems
+  model=qwen2.5-coder:7b-instruct-q4_K_M manifest=dae161e27b0e, Ollama 0.20.5, temperature=0
+  model image=sha256:662109db8037f17257cfc6e816289c0d4c9ae8a2a4ff760b653d8d410e234ba0
+  proxy image=sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+  task package tree sha256=80ca975c4f619ef87803d64f5261915f0b89ab2985e2d23d09495420d7889f53
+  task image observed after the two E018 runs=sha256:b7fc75ca677e91323e8dcbf7eddad50a4a9c7441035f4c6c414df817b83e30ae
+  network=sber-eval (internal); timeout_scale=1.0; task.toml outer agent timeout=95s
+  AGENT_TIMEOUT_S was not passed, matching the Harbor launch contract; agent assumed 600s with 120s reserve and 90s early-deliverable checkpoint.
+
+Cold result:
+
+  reward=0 failure=timeout wall=95.1s endpoint_tokens=4452 calls=4 late=0
+  completed inspect=0.004s
+  completed plan=89.990s across 3 calls (72.182 + 9.869 + 7.939)
+  completed act=0.017s across 2 actions
+  verify phases=0
+  last unmatched phase=step 4 plan start
+
+Second result, same running model/container:
+
+  reward=0 failure=timeout wall=95.1s endpoint_tokens=11751 calls=10 late=0
+  completed inspect=0.004s
+  completed plan=89.988s across 9 calls
+  completed act=0.008s across 6 actions
+  verify phases=0
+  last unmatched phase=step 10 plan start
+
+Interpretation:
+
+  Completed plan time alone is 94.6% of wall in both runs; the unmatched final phase is also plan. Tool execution is below 0.02s total and verification never begins. The observed first completed plan calls took 72.182s and 24.733s, and both attempts timed out with reward 0; one attempt per condition is not a causal warming estimate. Neither run approaches MAX_STEPS=30, enters recovery, or reaches the internally computed verify reserve. Therefore MAX_STEPS, VERIFY_RESERVE_FRACTION and recovery are not supported next factors for this timeout.
+
+  The concrete mismatch is deadline visibility: the task runner enforces 95s but the agent is not told this and assumes 600s. Its 90s early-deliverable checkpoint leaves about 5s for the emergency LLM action on this fixture; both runs are killed during that plan. This does not by itself select a new constant. A next treatment should be separately designed and approved, with an exact control, and should target earlier production or post-checkpoint logical-call policy rather than MAX_STEPS/reserve.
+
+Limitations:
+
+  This is one task package with two attempts, not an 18-task utility comparison. The task package path and content hash are fixed, but the image ID observed after E018 differs from the E017 image ledger (`ec077276…` then, `b7fc75ca…` now); the build script uses a mutable local tag, and the ID was not sampled between the two attempts. E018 supports a within-run phase diagnosis and records that the second attempt reused the running model container, not proof of exact per-attempt task image identity, a causal warming effect, or a causal comparison with E017. The synchronous flushed telemetry is absent from model context but consumes wall-clock time; its latency/backpressure were not isolated. The evaluation model and hidden task timeouts remain unknown.
+
+Ignored build evidence hashes:
+
+  cold results.tsv f41bed9c4c0891217de64226a9061aec300e9812ba52809a5c96bd5e9c9b4f1e
+  cold suite.json e3bbe6ff2e6d28995b7f7f4adfbfc40c40bed66a651202392020a3715ce566af
+  cold phase log 74e5857e0835ca2ce63a0c6aa235d858efd0b77243b7a9167f429598a44ea382
+  cold action trace 4675e867685248d29cc916294d8693859fcefc4b2cc7346b848b4004a63ef09a
+  warm results.tsv 06c2d3004e12f91691ee1978a7b5732de6c2df88c060a25be9cdd2f3af6d8f22
+  warm suite.json fce2da550ac7b8fa5aa01e8b722f767917e2dd827e35f25ce2b37c6314755eef
+  warm phase log 46a3106891112efbf1f649e54d84721a9ff5feadce9246ee963d2c1f41c0776d
+  warm action trace 13d3d01727fedd1a91bdde490864abaa84cec3ab38f7c940936b400ae483fcc1
+
+Committed compact evidence hashes:
+
+  E018-results.tsv 0faa0505529d063745a021b03d9bfcff2e08dad1918e2b81cb8b83b827624094
+  E018-cold-phase.txt 74e5857e0835ca2ce63a0c6aa235d858efd0b77243b7a9167f429598a44ea382 (byte-identical)
+  E018-warm-phase.txt 46a3106891112efbf1f649e54d84721a9ff5feadce9246ee963d2c1f41c0776d (byte-identical)
+  E018-cold-actions.trace f2eae34ee4cbb5b56b805736362ff4e65ccc6b1dbe033bbe3dcc52ee7f930464
+  E018-warm-actions.trace ff9ad438a697b511afd8bd76c227c20b4663d2616867c0539f37ec8e648a78de
+  The two committed action traces only add a final newline; their content matches the ignored raw trace.

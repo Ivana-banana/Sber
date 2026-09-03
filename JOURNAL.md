@@ -863,7 +863,30 @@ E014 запущен: один фактор — конверт ответа.
   не меняются. RED: интеграционный тест не нашёл ни одной phase-строки; GREEN после
   реализации — полный state/loop/main slice 59 passed. Второй RED доказал, что ошибка
   sink обнуляла run; теперь sink отключается, audit продолжает жить.
-
 - 18:06 — сторож: работа поднята заново (сессия молчит 30 мин), сессия 6e010d42
 
 - 18:21 — сторож: подъём не помогает: поднятая сессия молчит. Проверь «afk-autonomy --status» и подними работу сам
+
+- 21:39–21:44 — E018 diagnostic на exact archive `c05453c`, один прежний timeout
+  fixture, cold + warm. Оба reward 0/timeout 95.1 s. Cold: completed plan 89.990 s,
+  act 0.017 s, kill на plan шага 4; warm: plan 89.988 s, act 0.008 s, kill на plan
+  шага 10; verify/recovery не начались. Значит `MAX_STEPS=30`, reserve и recovery не
+  являются измеренным bottleneck. Агент не знает outer 95 s и считает budget 600 s;
+  checkpoint 90 s оставляет лишь ~5 s на emergency call. РЕШЕНИЕ: не менять параметры
+  по одному кейсу; следующий design — один approved factor про более раннее production
+  или post-checkpoint call cap с fresh control. Task image drift относительно E017
+  честно записан как limitation; между двумя E018 repeats ID отдельно не снимался.
+- 21:57 — независимый критик перепроверил E018 arithmetic, raw/committed hashes,
+  archive hash и полный suite. Приняты все четыре замечания: сняты недоказанные
+  claims об identical task image и causal warming; synchronous flushed telemetry
+  теперь явно считается частью wall-clock; в summary добавлены точные команды
+  получения commit/archive/model/container/task-image/tree/raw hashes. Raw phase logs
+  byte-identical, action traces отличаются от raw только финальным newline; повторный
+  подсчёт дал cold `inspect/plan/act=0.004/89.990/0.017`, second
+  `0.004/89.988/0.008`.
+- 21:57 — fresh final verification: `python3 -m pytest -q` — **318 passed in 6.96s**;
+  `build/final-submission.zip` — 62 942 B,
+  `95d23169e4e72273570f089f26cc400889a8c3a9fdd3abd52b182df44d3f5cdf`,
+  preflight 5 PASS; production/archive public-identifier и secret-value scans пусты;
+  `git diff --check` PASS. Untracked drafts другого владельца не изменялись и в
+  builder allowlist не входят.

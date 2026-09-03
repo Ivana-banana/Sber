@@ -256,7 +256,7 @@ class AgentState:
     """Values that must not reach an observation, a hash or the trace."""
 
     event_sink: Callable[[Event], None] | None = field(default=None, repr=False)
-    """Optional live diagnostic sink. It observes events but cannot alter the run."""
+    """Optional live diagnostic sink. Exceptions are isolated; synchronous latency is not."""
 
     def record(
         self,

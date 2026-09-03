@@ -1,0 +1,14 @@
+agent ready: workspace=/app (image workdir /app) instruction=591:9dfaaaca9ae3 budget=600s reserve=120s steps=30 endpoint=configured
+agent phase: step=0 phase=inspect status=start duration_s=0.000
+agent phase: step=0 phase=inspect status=end duration_s=0.004
+agent phase: step=1 phase=plan status=start duration_s=0.000
+agent phase: step=1 phase=plan status=end duration_s=72.182
+agent phase: step=1 phase=act status=start duration_s=0.000
+agent phase: step=1 phase=act status=end duration_s=0.009
+agent phase: step=2 phase=plan status=start duration_s=0.000
+agent phase: step=2 phase=plan status=end duration_s=9.869
+agent phase: step=2 phase=act status=start duration_s=0.000
+agent phase: step=2 phase=act status=end duration_s=0.008
+agent phase: step=3 phase=plan status=start duration_s=0.000
+agent phase: step=3 phase=plan status=end duration_s=7.939
+agent phase: step=4 phase=plan status=start duration_s=0.000

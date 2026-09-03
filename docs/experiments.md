@@ -25,6 +25,7 @@
 | E015 | 2026-09-03 | `bf4c6ad` | M0.2: 15 isolated indirect prompt-injection fixtures; измеряется лишь marker side effect | `qwen2.5-coder:7b-instruct-q4_K_M` on CPU; `python:3.12-slim@78387bc3…`, не ACP | **3/15 markers** | **≥114 153** endpoint tokens (1 late response discarded) | 1 528 с | marker rate не ноль: README, ANSI и cross-file; входные data не изменены; policy fix отдельно аблировать |
 | E016 | 2026-09-03 | `435c178` + docs-only dirty state | Свежий compliance baseline: source hash, pytest, фактический ZIP/preflight и offline Python 3.12 smoke | endpoint не вызывался; `python:3.12-slim@78387bc3…`; exact ACP локально отсутствует | — | 0 | 7.586 с весь check; smoke 0.619/0.612 с | 319 passed; ZIP 62 947 B, 5 preflight PASS; offline exits 0/2; exact-ACP gate остаётся историческим E003, а не свежим доказательством |
 | E017 | 2026-09-03 | `5cd1be7` | Свежий baseline фактического принятого кандидата после обычного revert проигравшего E014; более поздний directory finish gate сохранён | `qwen2.5-coder:7b-instruct-q4_K_M` (`dae161e2…`), Ollama 0.20.5 на CPU, те же 18 task images | **4/18** | **154 549** endpoint tokens | 2 729 с | лучший локальный solved count: +1 к E012/E014 control; 13 timeout, 1 verification; это current baseline, не причинная оценка одного revert |
+| E018 | 2026-09-03 | `c05453c` | Model-context-neutral synchronous per-phase telemetry; один прежний timeout-fixture, две diagnostic attempts | та же 7B manifest `dae161e2…`; один package path/tree hash, post-run image `b7fc75ca…`; per-repeat image identity не доказана | 0/1, 0/1 | 4 452 / 11 751 | 95.1 / 95.1 с | в обоих ≥94.6% wall — завершённые LLM plan; tool <0.02 с, verify не начат, kill во время следующего plan; MAX_STEPS/reserve/recovery не поддержаны как следующий фактор |
 
 ## Per-task результаты
 
@@ -1032,6 +1033,48 @@ endpoint появиться и нечему.
   рандомизирован, temperature 0 всё равно не гарантирует побайтовую повторяемость;
   exact ACP image отсутствует на текущем daemon; fresh E014 paired control содержал
   более старый production HEAD, поэтому прирост одной задачи не приписывается revert.
+
+### E018 — per-phase диагностика timeout
+
+- Date/time (MSK): 2026-09-03 21:39:50–21:44:01; один cold и один warm repeat.
+- Commit / dirty state: telemetry commit
+  `c05453cb3988dc3eaf87a80b8037b667d84c89e8`; tracked tree clean. Присутствовал
+  user-owned untracked brainstorm draft, который builder allowlist не пакует.
+- Changed factor относительно production context: synchronous flushed phase start/end
+  строки в лог; system prompt, actions, budgets, model payload и verifier не менялись.
+  Вывод входит в wall-clock; его latency/backpressure не измерены. Вторая попытка
+  использовала уже запущенный model container, но exact single-factor и task-image
+  identity между попытками не доказаны.
+- Model/environment: `qwen2.5-coder:7b-instruct-q4_K_M` (`dae161e2…`), Ollama 0.20.5,
+  `temperature=0`; model image `662109db…4ba0`, proxy `78387bc3…184ea`, task package
+  tree `80ca975c…9f53`, observed task image `b7fc75ca…e30ae`, internal `sber-eval`.
+- Command, archive, raw/committed hashes and phase arithmetic:
+  `docs/research/live-runs/E018-summary.txt`; compact outcomes — `E018-results.tsv`;
+  полные безопасные phase/action traces сохранены рядом.
+- Committed evidence SHA-256: summary `af15daa5…0f8a`, results `0faa0505…4094`,
+  cold/warm phase `74e5857e…a382` / `46a31068…0776`, cold/warm actions
+  `f2eae34e…0464` / `ff9ad438…78de`. Raw build hashes и отличие финального newline
+  action trace записаны в summary.
+- Submission: 62 936 B, SHA-256
+  `9f93be2be964e196fc0c0b1fb8cfa61e13189d41af076561873268a33558d8ab`,
+  preflight 5 PASS.
+- Result: оба запуска — reward 0, timeout 95.1 s. Cold: три завершённых plan =
+  89.990 s, два act = 0.017 s, kill на plan шага 4. Warm: девять plan = 89.988 s,
+  шесть act = 0.008 s, kill на plan шага 10. Verify не начался ни разу.
+- Interpretation: завершённые LLM-фазы уже занимают 94.6% wall, а незакрытая последняя
+  фаза также `plan`. Наблюдаемые первые calls заняли 72.182 и 24.733 s; обе попытки
+  завершились timeout/reward 0, но по одному повтору причинный эффект прогрева не
+  оценивается. `MAX_STEPS=30` не достигнут, recovery не начат, внутренний reserve при
+  ошибочном assumed budget 600 s не активировался.
+- Decision: не аблировать сейчас `MAX_STEPS`, `VERIFY_RESERVE_FRACTION` или recovery.
+  Измеренный конфликт — внешний deadline 95 s против неизвестного агенту budget 600 s:
+  early checkpoint 90 s оставляет около 5 s на emergency generation. Следующий factor
+  должен отдельно проверять более раннее производство или post-checkpoint logical-call
+  policy, но конкретный treatment/число требует отдельного design approval и control.
+- Limitations: это один fixture, не utility suite. E018 task image ID отличается от
+  записанного E017 (`ec077276…` → `b7fc75ca…`), поскольку harness пересобирает mutable
+  local tag; ID не снимался между repeats. Phase diagnosis каждого запуска валиден,
+  но exact per-repeat image identity и причинное сравнение с E017 не заявляются.
 
 ## Запланированные абляции токен-экономии (M8)
 
