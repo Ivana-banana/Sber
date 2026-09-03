@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from scripts.eval.run_suite import (
+    PhaseBreakdown,
     SuiteResult,
     TaskResult,
     phase_breakdown,
@@ -104,3 +105,14 @@ def test_the_results_table_carries_the_breakdown_for_every_row(tmp_path: Path) -
     assert first.split("\t")[header.split("\t").index("phases")] == (
         "inspect=0.004/1 plan=89.990/2 act=0.017/2 open=plan@3"
     )
+
+
+def test_a_rendered_breakdown_parses_back_into_the_same_numbers() -> None:
+    """The TSV cell is the only form a summary sees; it has to be lossless."""
+    original = phase_breakdown(killed_log())
+
+    assert PhaseBreakdown.parse(original.render()) == original
+
+
+def test_parsing_a_run_without_telemetry_yields_an_empty_breakdown() -> None:
+    assert PhaseBreakdown.parse("-") == PhaseBreakdown()
