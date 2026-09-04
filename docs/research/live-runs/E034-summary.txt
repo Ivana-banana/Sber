@@ -77,3 +77,21 @@ Review corrections (critic pass, 13:25):
   - The 172 -> 153 fall in calls is partly behavioural: mut-greeting-farewell took 10
     steps in E033 and 2 in E034.
   - time to first write is computed over 13 tasks in E033 and 14 in E034.
+
+Prefix eviction, tested 04.09 13:35-14:00 (scripts/eval/bench_prefix.py, 364-token
+resident block):
+
+  cold        12.2 s   a resident block the server has not seen
+  repeat       3.0 s   the identical request again
+  adjacent     4.3 s   same block, new tail, nothing in between
+  worked       4.2 s   same block, new tail, after 8 calls of a task
+
+So the shared prefix survives a task's worth of work: `worked` sits on `adjacent`, not
+on `cold`. Eviction is not why E034 showed nothing in the suite, and the guess written
+into the card before this measurement was wrong.
+
+What is left is the noise floor. The normalised first call (first / median of steps
+2-6) is 5.23, 6.01 and 5.14 across E033, E034 and E035, and the last two are the same
+archive -- a spread of 0.9, about 17%. A reorder that moves the shared prefix from 362
+to about 630 tokens can be worth roughly 20% of the first call, which is inside that
+band. E034 did not fail to reproduce; a single suite run cannot resolve it.
