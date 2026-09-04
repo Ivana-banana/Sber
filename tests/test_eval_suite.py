@@ -12,6 +12,7 @@ from scripts.eval.run_suite import (
     write_report,
 )
 from scripts.eval.summarise import phase_report
+from scripts.eval.timing import read_run
 
 
 READY = (
@@ -150,3 +151,80 @@ def test_a_run_killed_inside_its_first_plan_reports_no_completed_call() -> None:
 def test_a_run_without_any_telemetry_adds_no_lines() -> None:
     """E017-era directories must keep summarising exactly as before."""
     assert phase_report([row("t1", 95.1, "-")]) == []
+
+
+def write_run(root: Path, log: str, trace: str) -> Path:
+    """One task's artefacts in the layout `run_suite.py` writes."""
+    logs = root / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    (logs / "t1.r1.log").write_text(log, encoding="utf-8")
+    (logs / "t1.r1.trace").write_text(trace, encoding="utf-8")
+    return root
+
+
+def test_timing_charges_a_ladder_demotion_to_the_step_it_happened_in(
+    tmp_path: Path,
+) -> None:
+    """The first call of E033's `fix-redirect-scheme` was answered in the wrong schema.
+
+    The retry shares step 1, so the `write_file` that the proxy records as call 5 ran
+    in step 4 and must not be charged with step 5's plan.
+    """
+    log = (
+        READY
+        + phase(0, "inspect", "start", 0.0)
+        + phase(0, "inspect", "end", 0.003)
+        + phase(1, "plan", "start", 0.0)
+        + phase(1, "plan", "end", 76.092)
+        + phase(1, "act", "start", 0.0)
+        + phase(1, "act", "end", 0.0)
+        + phase(2, "plan", "start", 0.0)
+        + phase(2, "plan", "end", 7.826)
+        + phase(2, "act", "start", 0.0)
+        + phase(2, "act", "end", 0.0)
+        + phase(3, "plan", "start", 0.0)
+        + phase(3, "plan", "end", 6.085)
+        + phase(4, "plan", "start", 0.0)
+        + phase(4, "plan", "end", 17.504)
+        + phase(4, "act", "start", 0.0)
+        + phase(4, "act", "end", 0.001)
+        + phase(5, "plan", "start", 0.0)
+        + phase(5, "plan", "end", 18.708)
+    )
+    trace = (
+        '--- call 1 ---\n{"name": "read_range", "arguments": {"path": "/app/a.py"}}\n'
+        '--- call 2 ---\n{"tool": "read_range", "path": "/app/a.py"}\n'
+        '--- call 3 ---\n{"tool": "read_range", "path": "/app/a.py"}\n'
+        '--- call 4 ---\n{"tool": "read_range", "path": "/app/a.py"}\n'
+        '--- call 5 ---\n{"tool": "write_file", "path": "/app/a.py"}\n'
+        '--- call 6 ---\n{"tool": "finish", "path": "/app/a.py"}\n'
+    )
+
+    task = read_run(write_run(tmp_path, log, trace))[0]
+
+    assert task.first_plan_s == 76.092
+    assert task.plan_calls == 5
+    assert task.aligned
+    assert task.first_write_step == 4
+    assert round(task.time_to_first_write_s, 3) == 107.511
+    assert round(task.naive_time_to_first_write_s, 3) == 126.219
+
+
+def test_timing_refuses_to_place_a_write_it_could_not_align(tmp_path: Path) -> None:
+    """A trace with more tool calls than the log has plans is not guessed at."""
+    log = (
+        READY
+        + phase(1, "plan", "start", 0.0)
+        + phase(1, "plan", "end", 10.0)
+        + phase(1, "act", "start", 0.0)
+        + phase(1, "act", "end", 0.0)
+    )
+    trace = (
+        '--- call 1 ---\n{"tool": "list_dir", "path": "/app"}\n'
+        '--- call 2 ---\n{"tool": "write_file", "path": "/app/a.py"}\n'
+    )
+
+    task = read_run(write_run(tmp_path, log, trace))[0]
+
+    assert not task.aligned
+    assert task.time_to_first_write_s is None
