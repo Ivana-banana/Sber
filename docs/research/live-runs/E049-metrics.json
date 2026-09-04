@@ -1,0 +1,21 @@
+{
+  "rows": 6,
+  "solved": 2,
+  "wrote": 4,
+  "ep_tokens": 254972,
+  "ep_calls": 124,
+  "tokens_per_call": 2056.2258064516127,
+  "wall_s": 686.4,
+  "timeouts": 0,
+  "false_wins": 1,
+  "solved_tasks": [
+    "bye-file",
+    "hello-file"
+  ],
+  "failures": {
+    "find-sqli-login": "reasoning/stuck",
+    "fix-sqli-login": "verification/verified",
+    "fix-sqli-search": "reasoning/steps",
+    "incident-log-forensics": "reasoning/stuck"
+  }
+}

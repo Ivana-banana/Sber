@@ -1,0 +1,97 @@
+{
+  "build/e039-anchored-history.zip": {
+    "sha256": "36c6cb4d34733d0dc538a0e19e05d03daf76ff146216defc6ffee3305e0824a7",
+    "bytes": 68471,
+    "files": {
+      "THIRD_PARTY_NOTICES.md": "f5ce13951cd3c799fc52bc6b7ba00b3ea895e81d1d7c8af908c269b2a27ab602",
+      "agent/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "agent/detectors.py": "99e8c8b58d5ca0b8a4ea908d10d1ac1bd5dd5767ce78486c76ae4471f71ddb74",
+      "agent/limits.py": "12b6e3cffc939c358d71115ac7e90409317d4393d9168ee3d45935d018a19a6d",
+      "agent/llm.py": "e755e6580776a82a3afe91b7c5917994260e854a268a860053eed1f522c293c5",
+      "agent/loop.py": "d6222de8c4200f7703621a31fdfff09964eae28562e0b133dcf20c238d8b4b46",
+      "agent/main.py": "f3fa7aecd6ddee884ab1e5933e9db7b89b94e1c1c2c8deda9cf64fd94c943d83",
+      "agent/paths.py": "62d7c260c3da65a3d734774d2a13d8416b104dc42c6db4a8168bc4c1f64ae754",
+      "agent/playbooks.py": "0e88a857b7a432356e9b78f1b31a92ed9851515ca3fbfd5aac08827df63a5016",
+      "agent/ports.py": "f12b03a86bc3ede0af03d230b13dff2ed89c59d3bf7796721d18d72df1a08023",
+      "agent/preflight.py": "628db70a196db24e2e0b60ba1ef90c0f86a9257a78e7dd7c1cd0333c8474e66f",
+      "agent/prompt.py": "a4ca1f320ed4ac10557ef33655b3230812cdf95d6aa132173db4c5c2d34b0c3f",
+      "agent/redact.py": "df430314a56011cd43981bc798ed782dda0a71eff941f8d50316cd9f68b572d6",
+      "agent/state.py": "226bbd72ff16943a202374a5e19e1d44d642674ba3cd5ceda7431e2bf16758a8",
+      "agent/tools.py": "85bceab053c9939f5efd47d0ff6dcd349bfc8f9c59c0e620dd5b37d814a3b62f",
+      "agent/verify.py": "51a0c26f16e36099b29b6bad007049c12f0817658e43e48ee1aeafeb322e0a26",
+      "run.sh": "4d845cff1e031ce677eb711a97c5a5ee3402599cb1226be1c5c8c2d9856e0b29"
+    }
+  },
+  "build/e041-macro.zip": {
+    "sha256": "6ac0857f59a3aac8d876e984773061ab5d4eeff0e6c0066bd6a4b7adfbdb0916",
+    "bytes": 78552,
+    "files": {
+      "THIRD_PARTY_NOTICES.md": "f5ce13951cd3c799fc52bc6b7ba00b3ea895e81d1d7c8af908c269b2a27ab602",
+      "agent/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "agent/detectors.py": "99e8c8b58d5ca0b8a4ea908d10d1ac1bd5dd5767ce78486c76ae4471f71ddb74",
+      "agent/limits.py": "275f084feb8cf276c3e99b3f0251538c7952826d54bac8f0afe758391085a42f",
+      "agent/llm.py": "3048cfd31b26dc9e94ee0b2f4c5b9a4a7b752800f6510217b8ab135923779e39",
+      "agent/loop.py": "1b21698ec7e12c1caa6d36eff8dc74c79e19fa79bcc4c30bea2e0d2514bf0618",
+      "agent/macro.py": "95a6e0a7ce2b3a0613e260562be0cd5f8271f235a8e773da417aefb60c93b427",
+      "agent/main.py": "3e18cce9dfd25d31b6082d737ff9542bf1f2417925d7ba29c485ffa952087428",
+      "agent/paths.py": "62d7c260c3da65a3d734774d2a13d8416b104dc42c6db4a8168bc4c1f64ae754",
+      "agent/playbooks.py": "0e88a857b7a432356e9b78f1b31a92ed9851515ca3fbfd5aac08827df63a5016",
+      "agent/ports.py": "f12b03a86bc3ede0af03d230b13dff2ed89c59d3bf7796721d18d72df1a08023",
+      "agent/preflight.py": "628db70a196db24e2e0b60ba1ef90c0f86a9257a78e7dd7c1cd0333c8474e66f",
+      "agent/prompt.py": "a4ca1f320ed4ac10557ef33655b3230812cdf95d6aa132173db4c5c2d34b0c3f",
+      "agent/redact.py": "df430314a56011cd43981bc798ed782dda0a71eff941f8d50316cd9f68b572d6",
+      "agent/state.py": "226bbd72ff16943a202374a5e19e1d44d642674ba3cd5ceda7431e2bf16758a8",
+      "agent/tools.py": "fc411b4d9d0fb45a435d879550f71c35e16ddc1de489ceca3d475eedd3f51552",
+      "agent/verify.py": "51a0c26f16e36099b29b6bad007049c12f0817658e43e48ee1aeafeb322e0a26",
+      "run.sh": "4d845cff1e031ce677eb711a97c5a5ee3402599cb1226be1c5c8c2d9856e0b29"
+    }
+  },
+  "build/e042-english-prompt.zip": {
+    "sha256": "0e2e707c364af27c7c96d0d12431655125e77b1d8494cd15c2c51f1f329ed95e",
+    "bytes": 78055,
+    "files": {
+      "THIRD_PARTY_NOTICES.md": "f5ce13951cd3c799fc52bc6b7ba00b3ea895e81d1d7c8af908c269b2a27ab602",
+      "agent/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "agent/detectors.py": "99e8c8b58d5ca0b8a4ea908d10d1ac1bd5dd5767ce78486c76ae4471f71ddb74",
+      "agent/limits.py": "275f084feb8cf276c3e99b3f0251538c7952826d54bac8f0afe758391085a42f",
+      "agent/llm.py": "3048cfd31b26dc9e94ee0b2f4c5b9a4a7b752800f6510217b8ab135923779e39",
+      "agent/loop.py": "1b21698ec7e12c1caa6d36eff8dc74c79e19fa79bcc4c30bea2e0d2514bf0618",
+      "agent/macro.py": "95a6e0a7ce2b3a0613e260562be0cd5f8271f235a8e773da417aefb60c93b427",
+      "agent/main.py": "3e18cce9dfd25d31b6082d737ff9542bf1f2417925d7ba29c485ffa952087428",
+      "agent/paths.py": "62d7c260c3da65a3d734774d2a13d8416b104dc42c6db4a8168bc4c1f64ae754",
+      "agent/playbooks.py": "66e9e481eb225a1a6811299fdbf0d5a1c87a7ab1d2d09b18425988c801c9dacf",
+      "agent/ports.py": "f12b03a86bc3ede0af03d230b13dff2ed89c59d3bf7796721d18d72df1a08023",
+      "agent/preflight.py": "628db70a196db24e2e0b60ba1ef90c0f86a9257a78e7dd7c1cd0333c8474e66f",
+      "agent/prompt.py": "1ea262f97bbe86beb3ad92e50b687b5ea4e593e7db302b76f013c4c07a61b878",
+      "agent/redact.py": "df430314a56011cd43981bc798ed782dda0a71eff941f8d50316cd9f68b572d6",
+      "agent/state.py": "226bbd72ff16943a202374a5e19e1d44d642674ba3cd5ceda7431e2bf16758a8",
+      "agent/tools.py": "fc411b4d9d0fb45a435d879550f71c35e16ddc1de489ceca3d475eedd3f51552",
+      "agent/verify.py": "51a0c26f16e36099b29b6bad007049c12f0817658e43e48ee1aeafeb322e0a26",
+      "run.sh": "4d845cff1e031ce677eb711a97c5a5ee3402599cb1226be1c5c8c2d9856e0b29"
+    }
+  },
+  "build/e044-macro.zip": {
+    "sha256": "47b631f0ec09634cf5515664af6dbf50e64707880c71fdd1b4d01fdb7693291e",
+    "bytes": 78942,
+    "files": {
+      "THIRD_PARTY_NOTICES.md": "f5ce13951cd3c799fc52bc6b7ba00b3ea895e81d1d7c8af908c269b2a27ab602",
+      "agent/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "agent/detectors.py": "99e8c8b58d5ca0b8a4ea908d10d1ac1bd5dd5767ce78486c76ae4471f71ddb74",
+      "agent/limits.py": "ea7d9f437930d5f4035e58ee46101110fa4c3ccc250489b1ec10b3c37d567f62",
+      "agent/llm.py": "3048cfd31b26dc9e94ee0b2f4c5b9a4a7b752800f6510217b8ab135923779e39",
+      "agent/loop.py": "1b21698ec7e12c1caa6d36eff8dc74c79e19fa79bcc4c30bea2e0d2514bf0618",
+      "agent/macro.py": "5ba0b8a1673530b07873984ef03032aedc23b3c49703e8c71839e72dcbf0d57d",
+      "agent/main.py": "3e18cce9dfd25d31b6082d737ff9542bf1f2417925d7ba29c485ffa952087428",
+      "agent/paths.py": "62d7c260c3da65a3d734774d2a13d8416b104dc42c6db4a8168bc4c1f64ae754",
+      "agent/playbooks.py": "66e9e481eb225a1a6811299fdbf0d5a1c87a7ab1d2d09b18425988c801c9dacf",
+      "agent/ports.py": "f12b03a86bc3ede0af03d230b13dff2ed89c59d3bf7796721d18d72df1a08023",
+      "agent/preflight.py": "628db70a196db24e2e0b60ba1ef90c0f86a9257a78e7dd7c1cd0333c8474e66f",
+      "agent/prompt.py": "1ea262f97bbe86beb3ad92e50b687b5ea4e593e7db302b76f013c4c07a61b878",
+      "agent/redact.py": "df430314a56011cd43981bc798ed782dda0a71eff941f8d50316cd9f68b572d6",
+      "agent/state.py": "226bbd72ff16943a202374a5e19e1d44d642674ba3cd5ceda7431e2bf16758a8",
+      "agent/tools.py": "fc411b4d9d0fb45a435d879550f71c35e16ddc1de489ceca3d475eedd3f51552",
+      "agent/verify.py": "51a0c26f16e36099b29b6bad007049c12f0817658e43e48ee1aeafeb322e0a26",
+      "run.sh": "4d845cff1e031ce677eb711a97c5a5ee3402599cb1226be1c5c8c2d9856e0b29"
+    }
+  }
+}

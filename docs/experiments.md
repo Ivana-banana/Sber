@@ -2316,6 +2316,52 @@ task image не запускался, solved count не менялся.
   формы, а не закрытый набор. GPU и бюджеты изменены одновременно. Наш стенд остаётся
   прокси неизвестного endpoint оценки.
 
+### E049 — повтор public GPU baseline: 2/6 и ноль timeout подтверждены
+
+- Date/time (MSK): 2026-09-05 02:20–02:33; сумма agent wall 686.4 с.
+- Launch commit: `341503b`, clean worktree `eval/e049-night`; во время прогона
+  коммитились только research/fixture tracking, harness и архив не менялись.
+- Upstream: `b95c62fec81656e338af54045efa688fd4979615`. Четыре ignored forensic
+  input logs скопированы из исходного workspace **до** старта задачи; затем сохранены
+  в Git `7e163b3`. Bytes E048/E049 одинаковы; см. `public-fixture-log-inputs.md`.
+- Model: `qwen2.5-coder:7b-instruct-q4_K_M`, temperature 0, GPU RTX 3050, тот же proxy.
+  ACP base digest `sha256:1324d7bb140422a9929f5bc538f55ec0480d2731742effee02bf67604130c8a3`;
+  модели/container IDs и task hashes — `docs/research/live-runs/E049-environment.json`.
+- Factor: **никакого**, exact E039 archive против E048.
+  SHA-256 `36c6cb4d34733d0dc538a0e19e05d03daf76ff146216defc6ffee3305e0824a7`.
+- Command: `python3 scripts/eval/run_suite.py --tasks-root local_task --archive build/e039-anchored-history.zip --model qwen2.5-coder:7b-instruct-q4_K_M --base-url http://sber-proxy:8000/v1 --api-key ollama --counter-container sber-proxy --timeout-scale 1.0 --label E049-public-repeat --out build/eval-E049-public-repeat`
+- Raw: `.worktrees/e049-night/build/e049-run.log`, SHA-256 `2c815508d6f03a062c6fb1c6490dd19599deb59b0872feeb57081fc29146cd1a`;
+  per-file hashes в `E049-sha256.json`, TSV/summary/timing/comparison/metrics рядом.
+  Prediction `E049-prediction.md` записан до запуска.
+
+| Метрика | E048 | E049 | Предсказание |
+|---|---:|---:|---|
+| solved | 2/6 | **2/6**, те же bye-file/hello-file | совпало |
+| timeout | 0 | **0** | совпало |
+| wrote (harness) | 4/6 | 4/6 | 4–6 |
+| endpoint tokens / calls | 239852 / 120 | 254972 / 124 | — |
+| tokens/call | 1998.8 | **2056.2** | 1600–2400 |
+| sum agent wall | 755.5 с | **686.4 с** | 500–1100 |
+| false wins | 0 | **1** | не gate; важный исход |
+
+Нули: `find-sqli-login` — reasoning/stuck; `fix-sqli-login` — verification/verified;
+`fix-sqli-search` — reasoning/steps; `incident-log-forensics` — reasoning/stuck.
+SQLi-login снова записывает main.py с прежним AST, затем вызывает finish с
+`pytest tests/`. Normal-functionality suite зелёная, внешний security-verifier — нет.
+Это ложная внутренняя победа, а не исправление SQLi. Timeout не вернулся, но все
+остановки stuck из E048 **не** воспроизвелись: один verified и один steps.
+
+Все пять полос prediction взяты. Две public-точки дают тот же solved состав;
+это локальная воспроизводимость счёта, не доказательство устойчивости всей политики
+и не прогноз hidden set. Дальше E050/E051 строят отдельный baseline 18 fixtures.
+
+Ограничения: harness, не официальный Harbor run; verifier subprocess timeout в
+этом harness жёстко 180 с, независимо от task.toml. TSV сохраняет только total
+endpoint tokens, input/output отдельно неизвестны. `timing.py` пометил все шесть
+traces unaligned: time-to-first-write не интерпретируется как измеренная метрика.
+Сырые write proposals не равны successful writes. Подробный разбор E048 —
+`docs/research/e048-reasoning-zeros.md`, не переносить его механизмы на E049 без trace.
+
 ## Карточка эксперимента
 
 Для значимого прогона добавить под таблицами:

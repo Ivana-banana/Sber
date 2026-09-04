@@ -1,0 +1,33 @@
+
+=== eval-E048-public-gpu ===
+solved      2/6   bye-file hello-file
+wrote       4/6
+tokens      239852
+wall        756s (13 min)
+failures    reasoning 4, - 2
+phase plan  median 99.6% of wall, min 98.7% (hello-file), max 99.7% (incident-log-forensics)
+phase cost  120 plan calls, mean 6.3 s; dearest incident-log-forensics at 8.7 s/call
+phase kill  none 6; deepest step 0 (-)
+
+=== eval-E049-public-repeat ===
+solved      2/6   bye-file hello-file
+wrote       4/6
+tokens      254972
+wall        686s (11 min)
+failures    reasoning 3, verification 1, - 2
+phase plan  median 98.6% of wall, min 92.6% (fix-sqli-search), max 99.8% (incident-log-forensics)
+phase cost  124 plan calls, mean 5.4 s; dearest incident-log-forensics at 7.3 s/call
+phase kill  none 6; deepest step 0 (-)
+false wins  1: fix-sqli-login
+
+=== per task ===
+task                    eval-E048-public-gpu  eval-E049-public-repeat
+bye-file                           1/-             1/-
+find-sqli-login            0/reasoning     0/reasoning
+fix-sqli-login             0/reasoning    0/verificati
+fix-sqli-search            0/reasoning     0/reasoning
+hello-file                         1/-             1/-
+incident-log-forensics     0/reasoning     0/reasoning
+
+gained 0: -
+lost   0: -

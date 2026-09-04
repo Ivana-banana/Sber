@@ -1,0 +1,11 @@
+
+=== eval-E049-public-repeat ===
+solved      2/6   bye-file hello-file
+wrote       4/6
+tokens      254972
+wall        686s (11 min)
+failures    reasoning 3, verification 1, - 2
+phase plan  median 98.6% of wall, min 92.6% (fix-sqli-search), max 99.8% (incident-log-forensics)
+phase cost  124 plan calls, mean 5.4 s; dearest incident-log-forensics at 7.3 s/call
+phase kill  none 6; deepest step 0 (-)
+false wins  1: fix-sqli-login

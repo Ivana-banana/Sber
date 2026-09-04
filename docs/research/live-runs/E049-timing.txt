@@ -1,0 +1,12 @@
+
+== eval-E049-public-repeat (6 tasks) ==
+first plan call s : n=6 median=4.9 mean=6.2 sum=37
+later plan call s : n=118 median=4.3 mean=5.3 sum=630
+steady 2-6 call s : n=30 median=4.2 mean=4.6 sum=138
+first/later ratio : 1.13  (E020-E033 range 4.57-5.79)
+plan calls        : 124
+plan seconds      : 667
+tasks that wrote  : 4/6
+time to 1st write : n=0
+  same, call==step : n=4 median=104.1 mean=103.6 sum=415
+unaligned traces  : 6 (bye-file, find-sqli-login, fix-sqli-login, fix-sqli-search, hello-file, incident-log-forensics)

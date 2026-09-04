@@ -132,5 +132,13 @@
   "containers": [
     "/sber-model image=sha256:662109db8037f17257cfc6e816289c0d4c9ae8a2a4ff760b653d8d410e234ba0 devices=[{\"Driver\":\"\",\"Count\":-1,\"DeviceIDs\":null,\"Capabilities\":[[\"gpu\"]],\"Options\":{}}]",
     "/sber-proxy image=sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea devices=null"
+  ],
+  "task_image_ids_at_finish": [
+    "sber-eval/bye-file:latest sha256:6c903261ed1626d314338cc159ca206ac50848780584aa9e7eb500612f1118ec",
+    "sber-eval/find-sqli-login:latest sha256:453f0d2d9fb0cec188e6d596da6ff5c00c7958e5c10149bce2bd60624d6bbead",
+    "sber-eval/fix-sqli-login:latest sha256:82d2a9b74ee095de4e0b8cfd025195005de10a4e56a4f96852f68e76bab85394",
+    "sber-eval/fix-sqli-search:latest sha256:23ba6e6bf9472e8371bca13df6938feb53c7ef08f6807f254084f6dcacdcd14b",
+    "sber-eval/hello-file:latest sha256:d540eec25c1578d179cf4d83356fa1e8f04b8a93c0ba559e825ba6d61fba3daf",
+    "sber-eval/incident-log-forensics:latest sha256:efc5ad7ae297070a87544a581aefe99c93bcfbfe83ae80dcadefd85a8b553b02"
   ]
 }
