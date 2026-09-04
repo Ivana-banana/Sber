@@ -1,0 +1,19 @@
+task	repeat	reward	tokens	ep_tokens	ep_calls	ep_late	wall_s	steps	stop	claim	failure	phases	note
+audit-hardcoded-token	1	0	?	9453	8	0	180.1	?	killed	-	timeout	inspect=0.004/1 plan=174.520/8 act=0.013/7 open=plan@9	
+audit-parser-trust-boundary	1	0	?	10460	9	1	95.1	?	killed	-	timeout	inspect=0.007/1 plan=89.983/9 act=0.016/6 open=plan@10	
+audit-path-normalization	1	0	?	14752	11	1	180.1	?	killed	-	timeout	inspect=0.005/1 plan=163.138/11 act=0.034/10 open=plan@12	
+ctf-duplicate-parameter	1	0	?	3338	3	1	95.2	?	killed	-	timeout	inspect=0.004/1 plan=89.937/4 act=0.064/3 open=plan@5	
+ctf-header-override	1	0	?	11537	8	1	180.1	?	killed	-	timeout	inspect=0.005/1 plan=154.968/8 act=0.001/7 open=plan@9	
+ctf-signed-cookie	1	0	?	15385	11	1	180.1	?	killed	-	timeout	inspect=0.005/1 plan=168.851/11 act=0.073/10 open=plan@12	
+fix-cache-key-scope	1	0	?	9173	7	1	95.1	?	killed	-	timeout	inspect=0.005/1 plan=89.991/8 act=0.005/7 open=plan@9	
+fix-redirect-scheme	1	0	3223	4230	4	2	139.0	4	verified	True	verification	inspect=0.003/1 plan=138.410/4 act=0.001/2 verify=0.033/1	
+fix-zip-slip-extract	1	0	?	12732	11	0	180.1	?	killed	-	timeout	inspect=0.003/1 plan=165.350/11 act=0.002/10 open=plan@12	
+forensics-sharded-exfil	1	0	?	7749	6	1	95.1	?	killed	-	timeout	inspect=0.013/1 plan=89.988/6 act=0.008/5 open=plan@7	
+forensics-ssh-bruteforce	1	0	?	10803	10	1	180.1	?	killed	-	timeout	inspect=0.013/1 plan=157.940/10 act=0.020/9 open=plan@11	
+forensics-webshell-chain	1	0	?	15031	12	0	180.1	?	killed	-	timeout	inspect=0.003/1 plan=178.462/12 act=0.010/11 open=plan@13	
+mut-audit-query-gate	1	1	?	10631	9	1	180.1	?	killed	-	-	inspect=0.005/1 plan=154.396/9 act=0.010/8 open=plan@10	
+mut-fix-inventory-filter	1	0	?	10562	9	1	180.2	?	killed	-	timeout	inspect=0.005/1 plan=166.715/9 act=0.002/7 open=plan@10	
+mut-fix-session-lookup	1	0	?	12962	10	1	180.1	?	killed	-	timeout	inspect=0.006/1 plan=166.505/10 act=0.001/8 verify=0.017/1 open=plan@11	
+mut-forensics-egress-ledger	1	0	?	12031	10	1	180.1	?	killed	-	timeout	inspect=0.007/1 plan=167.601/10 act=0.055/9 open=plan@11	
+mut-greeting-farewell	1	0	1856	1856	2	1	48.8	2	verified	True	verification	inspect=0.012/1 plan=47.630/2 act=0.001/1 verify=0.017/1	
+mut-salutation-beacon	1	1	6982	6982	7	0	64.3	7	stuck	False	-	inspect=0.003/1 plan=63.873/7 act=0.021/6 verify=0.001/1	

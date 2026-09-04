@@ -1,0 +1,53 @@
+E036 ladder starts at json_schema instead of native_tools (2/18) -- factor REVERTED
+Date: 2026-09-04 14:04 - 14:47 MSK
+Commit: 5be5c5e (branch eval/e034-prompt-order), reverted the same hour by 5996427
+Archive: build/e036-json-schema-start.zip
+  sha256=addec91c31ac7f8442330d38d29a8b792c3ba127b3951610708fed11ac41d04f size=66046
+Control: E035 -- same archive minus this one constant.
+Model/runtime: qwen2.5-coder:7b-instruct-q4_K_M dae161e27b0e, n_ctx=4096, temperature 0,
+  network sber-eval, timeout_scale=1.0, AGENT_TIMEOUT_S not passed.
+
+Factor: agent/limits.py DEFAULT_CALL_STYLE "native_tools" -> "json_schema".
+  Prediction written before the run: docs/research/live-runs/E036-prediction.md.
+
+Commands:
+
+  python3 scripts/build_submission.py --out build/e036-json-schema-start.zip
+  python3 scripts/check_submission.py build/e036-json-schema-start.zip
+  python3 scripts/eval/run_suite.py --archive build/e036-json-schema-start.zip \
+      --model qwen2.5-coder:7b-instruct-q4_K_M \
+      --base-url http://sber-proxy:8000/v1 --api-key ollama \
+      --counter-container sber-proxy --timeout-scale 1.0 \
+      --label E036-json-schema-start --out build/eval-E036-json-schema-start
+  python3 scripts/eval/summarise.py build/eval-E035-order-repeat build/eval-E036-json-schema-start
+  python3 scripts/eval/timing.py    build/eval-E035-order-repeat build/eval-E036-json-schema-start
+
+Numbers (control E035 -> E036):
+
+  solved                  2/18 -> 2/18   gained 0 lost 0, same two tasks
+  first plan call, med    44.7 s -> 30.4 s
+  steady 2-6 call, med    8.7 s -> 8.1 s
+  normalised first call   5.14 -> 3.75   prediction asked 2.5-3.5, refutation >= 4.3
+  plan steps              128 -> 149
+  endpoint calls          144 -> 147
+  calls per plan step     1.125 -> 0.99
+  tokens                  172679 -> 179667   per call 1199 -> 1222
+  wall                    2590 s -> 2614 s
+
+The mechanism is confirmed and the prediction's arithmetic was wrong in one place. The
+saved requests do not come back as fewer calls: the agent spends them on twenty-one
+more steps inside the same wall. Calls per plan step is the metric that survives that,
+and it lands where one request per step says it should.
+
+The factor is REVERTED anyway, and the run is kept as a measurement of the ceiling
+rather than as a candidate. LADDER only ever moves down, so starting one rung lower
+makes native_tools unreachable for the whole run. An endpoint that accepts tools and
+rejects response_format -- the configuration the organisers' own reference agent
+documents -- would then spend three requests falling to text and never be offered the
+shape it takes. A review reproduced that against a stub endpoint: three requests, final
+style text, tools never sent. docs/decisions.md carries both rows, one reverted and one
+accepted, and the 26.08 rule it broke ("this constant is not to be changed without a
+run on their model") stands.
+
+The same defect is fixed in agent.llm._unwrap_function_envelope instead, measured as
+E037. This run says what the ceiling is: -27% of the normalised first call.
