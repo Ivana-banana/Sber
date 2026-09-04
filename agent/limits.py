@@ -263,18 +263,26 @@ Default `loop` so that an archive handed to the runner with no variable set beha
 exactly as every archive before it has. Treatment opts in; nothing opts out.
 """
 
-MACRO_TOTAL_S = 90.0
+MACRO_TOTAL_S = 170.0
 """Outer bound the macro controller sets for itself when it has no better number.
 
-Below the shortest outer kill actually observed on this stand (95 s), because the
-controller's own deadline is the only one it will ever be told about:
-`DEFAULT_TASK_TIMEOUT_S` is 600 and the measured kills happen at 95 and 180. A run cut
-off by the runner reports nothing and keeps nothing, so this is deliberately the
-smaller mistake -- stopping with time left rather than being killed mid-write.
+Was 85, then 90, and both numbers came from a rule that does not apply here. The loop's
+rule is "produce early, be killed late": it has a deliverable on disk long before the
+deadline, so stopping under the shortest observed kill (95 s) costs it a refinement and
+never the answer. This controller has *nothing* on disk until its program runs, and its
+program cannot run until the call returns.
 
-Was 85 and is 90 because 85 did not fit the measurement below: a program-writing call
-costs 57-74 s here, and 85 left no room for the program to then run. Five seconds of
-margin against a 95 s kill is thin, and it is the thinnest part of this controller.
+That makes the loss asymmetric in the other direction, and E041/E043 measured both
+sides of it. Against a 95 s kill: stopping at 73 s reports `llm-unusable` and scores 0,
+being killed at 95 s scores 0 -- identical. Against the 180 s kill the same stand
+applies to the audit, fix and forensics tasks: stopping at 73 s scores 0, while a call
+allowed to finish has a real attempt behind it. A longer bound therefore loses nothing
+it was going to win and wins what the shorter one threw away.
+
+170 and not 180 leaves the margin for the program, the inspector and the exit. Note
+that `LLM_TIMEOUT_S` (120) still caps any single call, which is above the 57-80 s a
+program-writing call actually costs here and is deliberately left alone: it is the
+loop's constant too, and the loop is the control arm.
 """
 
 MACRO_FINALIZE_RESERVE_S = 5.0

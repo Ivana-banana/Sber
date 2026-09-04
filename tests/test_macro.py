@@ -263,3 +263,27 @@ def test_the_call_ceiling_is_derived_from_the_deadline_and_not_a_constant(
     )
     assert asked == pytest.approx(expected, abs=2.0)
     assert asked > 50.0
+
+
+def test_the_first_call_is_given_more_time_than_a_program_call_measures(
+    tmp_path: Path,
+) -> None:
+    """E043 hit its 73 s ceiling on every task with no HTTP reply at all.
+
+    The controller has nothing on disk until its program runs, so a ceiling below what
+    a call costs converts a task that might have been solved into a certain zero, and
+    buys nothing in exchange -- being killed by the runner scores the same.
+    """
+    target = tmp_path / "answer.txt"
+    llm = StubLlm(replies=[reply("open('answer.txt','w').write('42')", str(target))])
+    state = AgentState(
+        instruction=f"write {target}",
+        workspace=tmp_path,
+        named_paths=(target,),
+        baseline=paths.snapshot((target,)),
+        budget=Budget(total_s=limits.DEFAULT_TASK_TIMEOUT_S),
+    )
+
+    drive(state, llm)
+
+    assert llm.timeouts[0] > 80.0
