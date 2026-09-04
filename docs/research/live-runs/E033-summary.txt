@@ -1,0 +1,109 @@
+E033 repeat of E032, same archive, nothing changed (2/18 -- E032's 5/18 did not hold)
+Date: 2026-09-04 10:07 - 10:50 MSK
+Commit: f406b46 (branch eval/e032-verify-cannot-fail), archive unchanged
+Archive: build/e032-verify-gate.zip sha256=22641c159824cda27bb92603b3920dc61d19889e9d31ed060f785b7f8aa2625e size=65334
+Control: E032 -- the same archive, same stand, same model, same day.
+Model/runtime: qwen2.5-coder:7b-instruct-q4_K_M dae161e27b0e, n_ctx=4096, temperature 0,
+  network sber-eval, timeout_scale=1.0, AGENT_TIMEOUT_S not passed.
+
+Factor: none. This run changes nothing and measures the stand's own spread.
+The prediction was written before the run: docs/research/live-runs/E033-prediction.md.
+
+Commands:
+
+  python3 scripts/check_submission.py build/e032-verify-gate.zip
+  python3 scripts/eval/run_suite.py --archive build/e032-verify-gate.zip \
+      --model qwen2.5-coder:7b-instruct-q4_K_M \
+      --base-url http://sber-proxy:8000/v1 --api-key ollama \
+      --counter-container sber-proxy --timeout-scale 1.0 \
+      --label E033-repeat --out build/eval-E033-repeat
+  python3 scripts/eval/summarise.py build/eval-E032-verify-gate build/eval-E033-repeat
+
+What the three lost tasks did:
+
+  mut-greeting-farewell  wrote the literal string "43616f" into the marker instead of
+                         the bytes, offered 'cat ...farewell.marker' at finish, was
+                         REFUSED by the S2 guard exactly as designed, moved on to a
+                         real check (grep -q 'Ciao'), failed it honestly five times in
+                         a row and never fixed the content. reward 0, failure=reasoning.
+                         The guard worked; the write was wrong. Not a refutation of S2.
+  fix-redirect-scheme    wrote startswith(ALLOWED_ORIGIN) -- open to
+                         https://console.internal.example.evil.com -- and verified with
+                         python3 -c '...' | grep "https://console.internal.example/path".
+                         That command CAN fail, so _cannot_fail lets it through, and it
+                         passed: stop=verified, claim=True, external reward 0.
+                         A fourth shape of useless verification: only the happy path.
+  ctf-header-override    the known jittery task; ran to the 180 s kill, reward 0.
+
+false wins went 0 -> 1 (fix-redirect-scheme).
+
+Output:
+
+
+=== eval-E032-verify-gate ===
+solved      5/18   ctf-header-override fix-redirect-scheme mut-audit-query-gate mut-greeting-farewell mut-salutation-beacon
+tokens      203813
+wall        2608s (43 min)
+failures    reasoning 1, timeout 12, - 5
+phase plan  median 92.9% of wall, min 50.3% (ctf-signed-cookie), max 99.5% (mut-salutation-beacon)
+phase cost  153 plan calls, mean 15.1 s; dearest fix-redirect-scheme at 41.1 s/call
+phase kill  none 4, plan 14; deepest step 14 (mut-audit-query-gate)
+
+=== eval-E033-repeat ===
+solved      2/18   mut-audit-query-gate mut-salutation-beacon
+tokens      204577
+wall        2567s (43 min)
+failures    reasoning 2, verification 1, timeout 13, - 2
+phase plan  median 95.6% of wall, min 86.4% (mut-fix-inventory-filter), max 99.6% (mut-greeting-farewell)
+phase cost  156 plan calls, mean 15.7 s; dearest ctf-duplicate-parameter at 30.0 s/call
+phase kill  none 5, plan 13; deepest step 15 (ctf-header-override)
+false wins  1: fix-redirect-scheme
+
+=== per task ===
+task                         eval-E032-verify-gate  eval-E033-repeat
+audit-hardcoded-token             0/timeout       0/timeout
+audit-parser-trust-boundary       0/timeout       0/timeout
+audit-path-normalization          0/timeout       0/timeout
+ctf-duplicate-parameter           0/timeout       0/timeout
+ctf-header-override                     1/-       0/timeout
+ctf-signed-cookie                 0/timeout       0/timeout
+fix-cache-key-scope               0/timeout       0/timeout
+fix-redirect-scheme                     1/-    0/verificati
+fix-zip-slip-extract            0/reasoning     0/reasoning
+forensics-sharded-exfil           0/timeout       0/timeout
+forensics-ssh-bruteforce          0/timeout       0/timeout
+forensics-webshell-chain          0/timeout       0/timeout
+mut-audit-query-gate                    1/-             1/-
+mut-fix-inventory-filter          0/timeout       0/timeout
+mut-fix-session-lookup            0/timeout       0/timeout
+mut-forensics-egress-ledger       0/timeout       0/timeout
+mut-greeting-farewell                   1/-     0/reasoning
+mut-salutation-beacon                   1/-             1/-
+
+gained 0: -
+lost   3: ctf-header-override fix-redirect-scheme mut-greeting-farewell
+a regression on any single task blocks the change, whatever the total says
+
+Note on that last line: here it does NOT block anything, because the "change" is the
+empty change. The gate is measuring noise, and the noise is three tasks wide.
+
+Solved sets across every full 18-task run on this stand:
+
+  E020 phase-control     3  ctf-header-override mut-audit-query-gate mut-salutation-beacon
+  E021 append-only       3  ctf-header-override mut-audit-query-gate mut-salutation-beacon
+  E022 anytime           2  mut-greeting-farewell mut-salutation-beacon
+  E024 control-repeat    3  ctf-header-override mut-audit-query-gate mut-salutation-beacon
+  E025 append-repeat     3  ctf-header-override mut-audit-query-gate mut-salutation-beacon
+  E028 stuck-advice      2  fix-redirect-scheme mut-audit-query-gate
+  E029 stuck-repeat      3  ctf-header-override fix-redirect-scheme mut-audit-query-gate
+  E030 control-third     2  mut-audit-query-gate mut-salutation-beacon
+  E031 stuck-guarded     3  fix-redirect-scheme mut-audit-query-gate mut-salutation-beacon
+  E032 verify-gate       5  ctf-header-override fix-redirect-scheme mut-audit-query-gate mut-greeting-farewell mut-salutation-beacon
+  E033 repeat            2  mut-audit-query-gate mut-salutation-beacon
+
+  mut-audit-query-gate   11/11  the only task solved by every run
+  mut-salutation-beacon   8/11
+  ctf-header-override     6/11
+  fix-redirect-scheme     4/11
+  mut-greeting-farewell   2/11
+  everything else         0/11
