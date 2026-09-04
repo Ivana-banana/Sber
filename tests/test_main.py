@@ -21,6 +21,7 @@ from agent.main import (
     fingerprint,
     main,
     resolve_workspace,
+    select_controller,
 )
 from agent.ports import LlmReply
 from tests.stub_llm import StubLlm
@@ -539,3 +540,26 @@ def test_events_that_are_neither_timing_nor_protocol_stay_out_of_the_log(capsys)
     emit_phase(Event(step=3, kind="retry", name="llm", detail="attempt 1 failed"))
 
     assert capsys.readouterr().out == ""
+
+
+def test_an_archive_with_no_variable_set_still_runs_the_loop() -> None:
+    """Every experiment before the macro comparison measured this path; unset keeps it."""
+    from agent import loop, macro
+
+    assert select_controller({}) is loop
+    assert select_controller({limits.CONTROLLER_ENV_NAME: "macro"}) is macro
+    assert select_controller({limits.CONTROLLER_ENV_NAME: " MACRO "}) is macro
+
+
+def test_an_unrecognised_controller_name_costs_a_comparison_and_not_a_task() -> None:
+    from agent import loop
+
+    assert select_controller({limits.CONTROLLER_ENV_NAME: "typo"}) is loop
+    assert select_controller({limits.CONTROLLER_ENV_NAME: ""}) is loop
+
+
+def test_the_status_line_names_the_controller_that_ran(tmp_path: Path, capsys) -> None:
+    """A run whose log does not say which arm it was cannot be read back afterwards."""
+    main(["run.sh", "do a thing"], {}, tmp_path)
+
+    assert "controller=loop" in capsys.readouterr().out

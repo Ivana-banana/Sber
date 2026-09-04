@@ -245,3 +245,73 @@ MODEL_ENV_NAME = "LOCAL_AGENT_MODEL"
 BASE_URL_ENV_NAME = "OPENAI_BASE_URL"
 API_KEY_ENV_NAME = "OPENAI_API_KEY"
 """Names fixed by the competition contract. Values are never logged or persisted."""
+
+
+# --- Macro controller --------------------------------------------------------
+
+CONTROLLER_ENV_NAME = "AGENT_CONTROLLER"
+DEFAULT_CONTROLLER = "loop"
+"""Which controller `agent.main` drives the task with, and what it picks unaided.
+
+An environment switch and not a build flag, because the comparison it exists for is
+paired: control and treatment then run from one archive with one sha256, and the only
+thing that differs between the two arms is this variable. A second archive would have
+been a second factor -- different bytes, different packaging, a different unpack -- in
+a run whose whole purpose is to isolate the first.
+
+Default `loop` so that an archive handed to the runner with no variable set behaves
+exactly as every archive before it has. Treatment opts in; nothing opts out.
+"""
+
+MACRO_TOTAL_S = 85.0
+"""Outer bound the macro controller sets for itself when it has no better number.
+
+Below the shortest outer kill actually observed on this stand (95 s), because the
+controller's own deadline is the only one it will ever be told about:
+`DEFAULT_TASK_TIMEOUT_S` is 600 and the measured kills happen at 95 and 180. A run cut
+off by the runner reports nothing and keeps nothing, so this is deliberately the
+smaller mistake -- stopping with time left rather than being killed mid-write.
+"""
+
+MACRO_FINALIZE_RESERVE_S = 5.0
+"""Tail of the macro budget that belongs to inspecting and reporting, never to work."""
+
+MACRO_FIRST_CALL_S = 45.0
+MACRO_FIRST_CALL_TOKENS = 1536
+"""Bounds on the one call that writes the whole program.
+
+Wider than a step of the micro loop in both dimensions, and that is the trade the
+controller is built on: one call of 45 s replaces the eight to forty that the same
+work costs at one action per request.
+"""
+
+MACRO_PROGRAM_TIMEOUT_S = 15.0
+MACRO_REPAIR_PROGRAM_TIMEOUT_S = 5.0
+"""How long a generated program may run. The second number is smaller because a repair
+runs against a workspace the first attempt already moved, with less budget behind it."""
+
+MACRO_REPAIR_MIN_S = 20.0
+MACRO_REPAIR_CALL_S = 12.0
+MACRO_REPAIR_TOKENS = 1024
+"""Repair is attempted only with this much time left, and is itself bounded.
+
+A repair that starts without room to run and inspect its own program spends the
+budget that the first attempt's result was going to be reported with.
+"""
+
+MACRO_PACKET_CHARS = 6000
+"""Ceiling on the dynamic half of the case packet: tree, paths, previews.
+
+The program reads whatever else it needs itself -- that is the point of sending a
+program instead of an action -- so this carries orientation, not data.
+"""
+
+MACRO_PREVIEW_BYTES = 800
+MACRO_PREVIEW_FILES = 4
+"""Bounded previews of small files the task names by hand. Named by the task, never
+found by walking: a preview of something the environment chose is untrusted input we
+paid tokens to carry.
+"""
+
+MACRO_MAX_LLM_CALLS = 2
+"""Logical calls one macro run may cost, repair included. Enforced in code."""

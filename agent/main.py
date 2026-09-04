@@ -16,7 +16,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from agent import limits, loop, paths, playbooks, preflight, redact, verify
+from agent import limits, loop, macro, paths, playbooks, preflight, redact, verify
 from agent.llm import HttpLlm, LlmSettings
 from agent.ports import LlmPort
 from agent.state import AgentState, Budget, Event
@@ -136,6 +136,27 @@ def build_state(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> Agent
     return state
 
 
+CONTROLLERS = {"loop": loop, "macro": macro}
+"""The two interchangeable drivers, both satisfying `loop.run`'s signature.
+
+A dict and not an `if` because the name is also what the trace prints, and a run whose
+log says `controller=macro` is the only way to read an experiment's arms apart after
+the fact. Nothing else in the agent branches on this.
+"""
+
+
+def select_controller(env: Mapping[str, str]):
+    """Which driver runs this task. Unknown or unset means the loop.
+
+    Unset must mean `loop`: an archive handed to the competition runner sets no
+    variables of ours, and the controller it gets then has to be the one every previous
+    experiment measured. An unrecognised value falls back the same way rather than
+    failing the run -- a typo in a harness flag should cost a comparison, not a task.
+    """
+    name = env.get(limits.CONTROLLER_ENV_NAME, "").strip().lower()
+    return CONTROLLERS.get(name or limits.DEFAULT_CONTROLLER, loop)
+
+
 def main(
     argv: Sequence[str],
     env: Mapping[str, str],
@@ -156,6 +177,7 @@ def main(
         return EXIT_USAGE
 
     state = build_state(argv, env, cwd)
+    controller = select_controller(env)
     state.event_sink = emit_phase
     settings = LlmSettings.from_env(env)
     missing = settings.missing()
@@ -176,6 +198,7 @@ def main(
         f"budget={state.budget.total_s:.0f}s "
         f"reserve={state.budget.verify_reserve_s:.0f}s "
         f"steps={state.budget.max_steps} "
+        f"controller={controller.__name__.rsplit('.', 1)[-1]} "
         f"endpoint={'configured' if not missing else 'missing:' + ','.join(missing)}",
         flush=True,
     )
@@ -201,7 +224,8 @@ def main(
         settings=settings,
         on_event=lambda kind, detail: state.record(kind, "llm", detail),
     )
-    outcome = loop.run(state, client, verify.verify, brief=brief, playbook=playbook)
+    state.record("preflight", "controller", controller.__name__)
+    outcome = controller.run(state, client, verify.verify, brief=brief, playbook=playbook)
 
     # Diagnostics, not the answer. M13 established that no public verifier reads agent
     # stdout: the result lives in the file this line merely names. Printing the outcome

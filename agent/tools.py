@@ -25,7 +25,7 @@ import signal
 import subprocess
 import threading
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -138,12 +138,22 @@ def run_argv(
     timeout_s: float,
     secrets: Iterable[str] = (),
     name: str = "run",
+    env: Mapping[str, str] | None = None,
 ) -> ToolResult:
-    """Run a command with no shell between us and it, bounded in time and size."""
+    """Run a command with no shell between us and it, bounded in time and size.
+
+    `env` replaces the child's whole environment rather than extending it, which is
+    what makes it usable as a scrubber: the macro controller hands a generated program
+    an environment with the endpoint credentials removed, and an "extend" semantics
+    would have left them in place while looking like it had not. `None` keeps the
+    parent environment, which is what every existing caller wants.
+    """
     started = time.monotonic()
     spawn: dict[str, object] = {}
     if os.name == "posix":
         spawn["start_new_session"] = True
+    if env is not None:
+        spawn["env"] = dict(env)
 
     # argv is a list, so the model's text is one argument and never a command line.
     try:

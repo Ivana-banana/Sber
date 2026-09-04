@@ -346,6 +346,11 @@ class Runner:
             "-e", f"OPENAI_BASE_URL={self.args.base_url}",
             "-e", f"OPENAI_API_KEY={self.args.api_key}",
         ]
+        if self.args.controller:
+            # The treatment arm of the macro-agent comparison. Set here and not baked
+            # into a second archive on purpose: both arms then run the same bytes with
+            # the same sha256, and the controller is the only thing that differs.
+            env += ["-e", f"AGENT_CONTROLLER={self.args.controller}"]
         if self.args.tell_agent_budget:
             # Off by default, and off in every scaled run: Harbor tells the agent
             # nothing about the deadline, so telling it here would change two things at
@@ -533,6 +538,12 @@ def main() -> int:
     parser.add_argument(
         "--tell-agent-budget", action="store_true",
         help="also export AGENT_TIMEOUT_S; off by default because the runner never does",
+    )
+    parser.add_argument(
+        "--controller",
+        default="",
+        choices=("", "loop", "macro"),
+        help="AGENT_CONTROLLER for the run; empty leaves the archive's own default",
     )
     parser.add_argument("--label", default="unlabelled")
     parser.add_argument("--archive", default=str(ROOT / "build" / "submission.zip"))
