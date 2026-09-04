@@ -3,10 +3,12 @@
 Form comes from M15 (`docs/research/verdict-system-prompt-evidence.md`), and three of
 its findings are load-bearing here:
 
-* **Block order** `РОЛЬ → ИНСТРУМЕНТЫ → РАБОТА → ПРОВЕРКА → ОТВЕТ → ЗАДАЧА`, task
-  last. Accepted as a recommendation, not as a measured effect: no controlled ablation
-  of block order on 7B-32B models was found. It is here to keep the constant contract
-  separate from the per-run input, nothing more.
+* **Block order** `РОЛЬ → ИНСТРУМЕНТЫ → РАБОТА → ПРОВЕРКА → ОТВЕТ`, then the playbook,
+  the environment brief and the task text, task last. M15 offered the order as a
+  recommendation with no controlled ablation on 7B-32B models, to keep the constant
+  contract separate from the per-run input. E034 measured what that separation is worth
+  when the *server* sees it: shared blocks first, per-task blocks last, 8.0 s off the
+  first call of every task at an unchanged token count.
 * **No few-shot trajectories.** The one pairwise comparison found on a fixed model in
   our size band -- EasyTool Table 6, Vicuna-30B -- has a compact structured tool
   contract beating four demonstrations, 65.00 against 45.00 one-hop, with half the
@@ -91,12 +93,13 @@ finish без существующего path не засчитывается.
 
 ОТВЕТ
 finish возвращает: path результата; verify — команду проверки; summary — итог.
-
-ЗАДАЧА
 """
 """Static part of the prompt: 433 cl100k_base tokens (289 o200k), measured locally
 with tiktoken on 25.08.2026 against the budget of 700 accepted in
-`docs/research/verdict-system-prompt-evidence.md`.
+`docs/research/verdict-system-prompt-evidence.md`. The `ЗАДАЧА` label left this text
+in E034 and is written by `build_system`; the count above is two tokens generous now.
+Measured again on the evaluation model itself on 04.09.2026: 362 tokens of Qwen2.5,
+of a 1015-token system message.
 
 Larger than the 273 of M15's illustrative skeleton, and the difference is the tool
 contract: their skeleton says "use the provided tools" without naming any, which is
@@ -117,20 +120,28 @@ is the line and character count; see `tests/test_prompt.py`.
 
 
 def build_system(brief: EnvironmentBrief, playbook: Playbook, instruction: str) -> str:
-    """Assemble the system message: skeleton, environment, playbook, task text.
+    """Assemble the system message: skeleton, playbook, environment, task text.
 
     The task goes last and unquoted-but-labelled. It is untrusted data: a public task
     description can contain anything, including text shaped like instructions to the
     agent, and the `РАБОТА` block says so before the text arrives rather than after.
+
+    Shared blocks lead and per-task blocks follow, which is the same separation M15
+    recommended -- constant contract apart from per-run input -- carried through to the
+    order the server pays for. Prefill costs ~29 ms per uncached token here and a
+    repeated prefix is reused, so a playbook sitting after the brief is re-read at full
+    price on every task. Moving it up cut the first call from 22.1 s to 14.1 s at an
+    unchanged 1038 tokens (E034); the words themselves are untouched.
     """
     return "".join(
         [
             SYSTEM_SKELETON,
-            instruction.strip(),
+            f"\nПРОЦЕДУРА ({playbook.name})\n",
+            playbook.body.strip(),
             "\n\nСРЕДА\n",
             brief.render(),
-            f"\n\nПРОЦЕДУРА ({playbook.name})\n",
-            playbook.body.strip(),
+            "\n\nЗАДАЧА\n",
+            instruction.strip(),
         ]
     )
 

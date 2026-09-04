@@ -40,17 +40,39 @@ def make_brief(tmp_path: Path) -> EnvironmentBrief:
     )
 
 
-def test_blocks_appear_in_the_order_accepted_in_m15() -> None:
+def test_blocks_appear_in_the_order_accepted_in_m15(tmp_path: Path) -> None:
+    # Checked on the assembled message rather than on the skeleton: ЗАДАЧА is a label
+    # `build_system` writes now, because the task text moved behind the playbook it
+    # used to precede. The M15 order itself is unchanged, and the task is still last.
+    system = prompt.build_system(make_brief(tmp_path), playbooks.GENERAL, "задача")
     positions = [
-        prompt.SYSTEM_SKELETON.index(block)
+        system.index(block)
         for block in ("РОЛЬ", "ИНСТРУМЕНТЫ", "РАБОТА", "ПРОВЕРКА", "ОТВЕТ", "ЗАДАЧА")
     ]
 
     assert positions == sorted(positions), "block order is the accepted form, not a preference"
 
 
-def test_the_task_block_is_last_so_the_contract_stays_constant() -> None:
-    assert prompt.SYSTEM_SKELETON.rstrip().endswith("ЗАДАЧА")
+def test_the_task_block_is_last_so_the_contract_stays_constant(tmp_path: Path) -> None:
+    system = prompt.build_system(make_brief(tmp_path), playbooks.CTF, "найди флаг")
+
+    assert system.rstrip().endswith("найди флаг")
+
+
+def test_blocks_shared_between_tasks_come_before_the_per_task_ones(tmp_path: Path) -> None:
+    # Measured on the stand, not preferred on taste: prefill costs ~29 ms per token
+    # that the server has not already cached, and a cached prefix is reused across
+    # requests. Skeleton and playbook repeat between tasks, brief and instruction do
+    # not, so every token of playbook placed after them is re-read at full price on
+    # each task. Moving it up saved 8.0 s of the 22.1 s first call, at the same 1038
+    # tokens and with no word of the prompt changed (E034).
+    system = prompt.build_system(make_brief(tmp_path), playbooks.CTF, "найди флаг")
+    shared = (prompt.SYSTEM_SKELETON, "ПРОЦЕДУРА")
+    per_task = ("СРЕДА", "ЗАДАЧА")
+
+    positions = [system.index(block) for block in shared + per_task]
+
+    assert positions == sorted(positions), "a shared block after a per-task one is re-read every task"
 
 
 def test_every_tool_is_named_in_the_prompt_and_in_the_schema() -> None:
