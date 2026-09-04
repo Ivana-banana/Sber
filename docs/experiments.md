@@ -1982,6 +1982,59 @@ task image не запускался, solved count не менялся.
 Не входят и не планируются без отдельного доказательства: learned token pruning,
 нестандартная нотация вывода, минификация исходников, многопроходный LLM-суммаризатор.
 
+### E040 — повтор неизменного архива: 3/18, разброс по solved нулевой
+
+- Date/time (MSK): 2026-09-04 17:15 – 17:59
+- Commit / dirty state: архив E039 без пересборки, дерево чистое
+- Control: **E039**, тот же файл `build/e039-anchored-history.zip`,
+  `sha256=36c6cb4d34733d0dc538a0e19e05d03daf76ff146216defc6ffee3305e0824a7`
+- Hypothesis (one changed factor): никакого. Прогон измеряет разброс, а не лечение.
+- Command: `scripts/eval/run_suite.py --archive build/e039-anchored-history.zip
+  --label E040-anchored-repeat --out build/eval-E040-anchored-repeat`
+- Raw log path: `build/eval-E040-anchored-repeat/results.tsv`, `build/e040-run.log`
+- Result: **3/18**, 155 344 токена, 2652 с. Решены ровно те же три задачи, что в E039:
+  `mut-audit-query-gate`, `mut-greeting-farewell`, `mut-salutation-beacon`.
+- Conclusion: у control впервые есть измеренный разброс, и по solved он равен нулю на
+  этой паре. Это не отменяет разброс в три задачи между E032 и E033 — там менялся код;
+  здесь не менялось ничего, и полосы E042 построены уже по этой паре.
+- Limitations: два прогона оценивают разброс, а не эффект. Ни одна метрика E036–E039
+  не получила третьего измерения.
+
+### E041 — пилот macro-agent: 0/5, прогон опровергнут собственной константой
+
+- Date/time (MSK): 2026-09-04 18:15 – 18:19
+- Commit / dirty state: `b4d0f41` (macro-контроллер), архив `build/e041-macro.zip`,
+  `sha256=6ac0857f59a3aac8d876e984773061ab5d4eeff0e6c0066bd6a4b7adfbdb0916`, 78 552 B
+- Hypothesis (one changed factor): `AGENT_CONTROLLER=macro` — один LLM-вызов пишет
+  автономную Python-программу, детерминированный inspector решает, засчитан ли
+  результат. Ожидание записано до прогона: `docs/research/live-runs/E041-prediction.md`
+- Command: `scripts/eval/run_suite.py --archive build/e041-macro.zip --controller macro
+  --label E041-macro-pilot --only mut-greeting-farewell audit-path-normalization
+  fix-redirect-scheme forensics-webshell-chain ctf-signed-cookie`
+- Raw log path: `build/eval-E041-macro-pilot/`, `build/e041-macro-run.log`
+- Result: **0/5**, **0 токенов**, 232 с. Все пять задач — `stop=llm-unusable`,
+  `failure=endpoint`, wall 45.7–46.9 с, ровно один шаг `plan` длительностью 45.07 с.
+- Per-task failures: единственная причина во всех пяти — потолок первого вызова
+  `MACRO_FIRST_CALL_S = 45`. Ответ не успевал прийти ни разу, `LlmError` завершал run
+  до того, как контроллер что-либо делал. Failure taxonomy: **все пять — `startup`
+  фактора, не `reasoning`**: гипотеза о гранулярности в этом прогоне не проверялась
+  вообще.
+- Control-плечо: запущено и **остановлено вручную** после провала treatment. Те же пять
+  задач в E039 и E040 дают 1/5 (`mut-greeting-farewell`), это и есть control.
+- Measurement that followed (`scripts/eval/bench_macro_call.py`, 04.09 18:25):
+  один program-вызов на этом endpoint стоит **57.6–74.0 с** (плюс холодный старт 261.8 с
+  на первом запросе), а модель пишет **271 output-токен и 27 строк программы при любом
+  потолке** 512/1024/1536. То есть 45 с не хватало никогда, а `max_tokens` не был
+  фактором вообще.
+- Conclusion: гипотеза macro-agent **не опровергнута и не подтверждена** — прогон её не
+  достиг. Константы переизмерены: `MACRO_TOTAL_S` 85 → 90, потолок вызова выведен из
+  дедлайна (`_call_budget`), `MACRO_PACKET_CHARS` 6000 → 2500 (prefill 29 мс/токен,
+  E034), `MACRO_REPAIR_MIN_S` 20 → 70. Следствие честное: при внешнем kill в 95 с
+  бюджет вмещает один вызов и один запуск программы, **repair на коротких задачах
+  невозможен физически**. Повтор — E043.
+- Limitations: 5 задач, один прогон, стенд с холодным стартом модели в 261 с на первом
+  запросе. Ничего не говорит о переносимости; `agent/loop.py` остаётся rollback-кандидатом.
+
 ## Карточка эксперимента
 
 Для значимого прогона добавить под таблицами:

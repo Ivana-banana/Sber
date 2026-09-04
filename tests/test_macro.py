@@ -240,3 +240,26 @@ def test_no_solver_program_leaves_the_workspace_behind(tmp_path: Path) -> None:
 
     assert sorted(entry.name for entry in tmp_path.iterdir()) == ["answer.txt"]
     assert os.path.exists(target)
+
+
+def test_the_call_ceiling_is_derived_from_the_deadline_and_not_a_constant(
+    tmp_path: Path,
+) -> None:
+    """E041 died on a fixed 45 s cap against a call that measures 57-74 s here.
+
+    The ceiling has to be everything left except the seconds the generated program will
+    itself need, so that a slow endpoint costs the program's refinement and never the
+    reply that would have produced one.
+    """
+    target = tmp_path / "answer.txt"
+    llm = StubLlm(replies=[reply("open('answer.txt','w').write('42')", str(target))])
+    state = make_state(tmp_path, f"write {target}", (target,))
+
+    drive(state, llm)
+
+    asked = llm.timeouts[0]
+    expected = (
+        limits.MACRO_TOTAL_S - limits.MACRO_FINALIZE_RESERVE_S - limits.MACRO_PROGRAM_TIMEOUT_S
+    )
+    assert asked == pytest.approx(expected, abs=2.0)
+    assert asked > 50.0

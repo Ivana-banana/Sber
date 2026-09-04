@@ -25,6 +25,10 @@ class StubLlm:
     replies: list[LlmReply | LlmError] = field(default_factory=list)
     calls: list[list[Message]] = field(default_factory=list)
     schemas: list[dict[str, object]] = field(default_factory=list)
+    timeouts: list[float | None] = field(default_factory=list)
+    """The ceiling each call was given. Recorded because the caller owns the deadline,
+    and a controller that hands a call less time than the endpoint needs fails in a way
+    no assertion about its output would catch -- E041 spent a whole pilot proving it."""
 
     _next: int = 0
 
@@ -61,6 +65,7 @@ class StubLlm:
         max_output_tokens: int,
         timeout_s: float | None = None,
     ) -> LlmReply | LlmError:
+        self.timeouts.append(timeout_s)
         return self._next_reply(messages)
 
     def complete_structured(
@@ -74,6 +79,7 @@ class StubLlm:
         # The transcript is shared between both methods: a recording is a sequence of
         # what the model said, not two independent streams.
         self.schemas.append(schema)
+        self.timeouts.append(timeout_s)
         return self._next_reply(messages)
 
     def _next_reply(self, messages: list[Message]) -> LlmReply | LlmError:

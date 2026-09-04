@@ -263,7 +263,7 @@ Default `loop` so that an archive handed to the runner with no variable set beha
 exactly as every archive before it has. Treatment opts in; nothing opts out.
 """
 
-MACRO_TOTAL_S = 85.0
+MACRO_TOTAL_S = 90.0
 """Outer bound the macro controller sets for itself when it has no better number.
 
 Below the shortest outer kill actually observed on this stand (95 s), because the
@@ -271,39 +271,53 @@ controller's own deadline is the only one it will ever be told about:
 `DEFAULT_TASK_TIMEOUT_S` is 600 and the measured kills happen at 95 and 180. A run cut
 off by the runner reports nothing and keeps nothing, so this is deliberately the
 smaller mistake -- stopping with time left rather than being killed mid-write.
+
+Was 85 and is 90 because 85 did not fit the measurement below: a program-writing call
+costs 57-74 s here, and 85 left no room for the program to then run. Five seconds of
+margin against a 95 s kill is thin, and it is the thinnest part of this controller.
 """
 
 MACRO_FINALIZE_RESERVE_S = 5.0
 """Tail of the macro budget that belongs to inspecting and reporting, never to work."""
 
-MACRO_FIRST_CALL_S = 45.0
-MACRO_FIRST_CALL_TOKENS = 1536
-"""Bounds on the one call that writes the whole program.
+MACRO_FIRST_CALL_TOKENS = 1024
+"""Ceiling on the program's length, and nothing more.
 
-Wider than a step of the micro loop in both dimensions, and that is the trade the
-controller is built on: one call of 45 s replaces the eight to forty that the same
-work costs at one action per request.
+Not a tuning knob: measured 04.09.2026 on the evaluation model, the reply is 271
+output tokens and 27 lines of program at every cap from 512 to 1536, so this bounds a
+runaway and never shapes an ordinary answer. The timeout of that call is not a
+constant at all -- `agent.macro` derives it from the deadline, because a fixed 45 s
+here is exactly what ended E041 at zero with no tokens spent.
 """
 
-MACRO_PROGRAM_TIMEOUT_S = 15.0
+MACRO_PROGRAM_TIMEOUT_S = 12.0
 MACRO_REPAIR_PROGRAM_TIMEOUT_S = 5.0
 """How long a generated program may run. The second number is smaller because a repair
 runs against a workspace the first attempt already moved, with less budget behind it."""
 
-MACRO_REPAIR_MIN_S = 20.0
-MACRO_REPAIR_CALL_S = 12.0
+MACRO_REPAIR_MIN_S = 70.0
 MACRO_REPAIR_TOKENS = 1024
 """Repair is attempted only with this much time left, and is itself bounded.
 
-A repair that starts without room to run and inspect its own program spends the
-budget that the first attempt's result was going to be reported with.
+Seventy and not twenty, because twenty was arithmetic about a call that does not
+exist: the measured cost of writing a program here is 57-74 s, so a repair beginning
+with less than that left cannot finish, and starting it spends the budget the first
+attempt's result was going to be reported with. On a task whose outer kill is 95 s
+this threshold is never met and repair never runs -- which is the honest consequence
+of the measurement, not a bug to tune around.
 """
 
-MACRO_PACKET_CHARS = 6000
+MACRO_PACKET_CHARS = 2500
 """Ceiling on the dynamic half of the case packet: tree, paths, previews.
 
 The program reads whatever else it needs itself -- that is the point of sending a
 program instead of an action -- so this carries orientation, not data.
+
+Was 6000 and is 2500 for a reason that is now measured rather than assumed: prefill
+costs about 29 ms an uncached token on this stand (E034), so 6000 characters is
+roughly 1500 tokens and 43 s of wall clock spent before the model writes anything --
+inside a call whose whole budget is 73 s. The excerpts are what shrinks; the task text
+is never cut.
 """
 
 MACRO_PREVIEW_BYTES = 800

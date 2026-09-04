@@ -143,7 +143,7 @@ def run(
         state,
         llm,
         [{"role": "system", "content": system}, {"role": "user", "content": packet}],
-        timeout_s=min(limits.MACRO_FIRST_CALL_S, _left(state, deadline)),
+        timeout_s=_call_budget(state, deadline, limits.MACRO_PROGRAM_TIMEOUT_S),
         max_output_tokens=limits.MACRO_FIRST_CALL_TOKENS,
     )
     calls += 1
@@ -177,7 +177,7 @@ def run(
             {"role": "assistant", "content": attempt.program},
             {"role": "user", "content": _repair_brief(verdict, run_note)},
         ],
-        timeout_s=min(limits.MACRO_REPAIR_CALL_S, _left(state, deadline)),
+        timeout_s=_call_budget(state, deadline, limits.MACRO_REPAIR_PROGRAM_TIMEOUT_S),
         max_output_tokens=limits.MACRO_REPAIR_TOKENS,
     )
     calls += 1
@@ -201,6 +201,19 @@ def run(
 
 def _left(state: AgentState, deadline: float) -> float:
     return max(0.0, deadline - state.budget.elapsed_s())
+
+
+def _call_budget(state: AgentState, deadline: float, program_s: float) -> float:
+    """All the time left, minus what the program it writes will need to run.
+
+    Derived and not a constant, and E041 is why. A fixed 45 s ceiling ended every task
+    of that pilot at `llm-unusable` with zero tokens spent, because writing a program
+    costs 57-74 s on this endpoint and no reply ever arrived inside the cap. The only
+    defensible ceiling is the one the budget implies: the model may use everything
+    except the seconds its own program still has to run in, and the finalize reserve
+    that `deadline` has already been reduced by.
+    """
+    return max(1.0, _left(state, deadline) - program_s)
 
 
 def _ask(
