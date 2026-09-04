@@ -16,6 +16,12 @@ Three numbers matter here.
 In E033 it was 33% of all planning time for a median reply of 84 characters, so it
 is nearly pure prefill and it is what prompt-order changes are supposed to move.
 
+*Later calls.* Every other `plan` of the task re-sends a prefix the server already
+holds. Their median sat in 7.6-8.6 s across thirteen runs no matter what the factor
+was, so they are the stand's speedometer: E034 moved them to 9.1 s, which no prompt
+reordering can do, and its slower first call was the machine rather than the change.
+Read the first call against them, not on its own.
+
 *Plan calls and seconds.* A factor that makes each call cheaper but buys more calls
 has not made the task faster; both have to be read together.
 
@@ -68,6 +74,17 @@ class Task:
         how much of the task's 180 seconds passed before anything existed on disk.
         """
         return None if not self.aligned else self._through(self.first_write_step)
+
+    @property
+    def later_plan_s(self) -> list[float]:
+        """Every `plan` of the task except the first.
+
+        These calls re-send a prefix the server already holds, so they cost decode and
+        almost no prefill. Across thirteen runs their median sat in 7.6-8.6 s whatever
+        the factor was, which makes them the stand's own speedometer: when they move,
+        the machine moved, not the agent.
+        """
+        return [d for _, phase, d in self.steps if phase == "plan"][1:]
 
     @property
     def naive_time_to_first_write_s(self) -> float | None:
@@ -137,8 +154,13 @@ def report(directory: Path, tasks: list[Task]) -> None:
     unaligned = [t.name for t in tasks if not t.aligned]
     wrote = [t for t in tasks if t.first_write_step is not None]
 
+    later = [d for t in tasks for d in t.later_plan_s]
     print(f"\n== {directory.name} ({len(tasks)} tasks) ==")
     print(f"first plan call s : {stat(first)}")
+    print(f"later plan call s : {stat(later)}")
+    if first and later:
+        ratio = statistics.median(first) / statistics.median(later)
+        print(f"first/later ratio : {ratio:.2f}  (E020-E033 range 4.57-5.79)")
     print(f"plan calls        : {sum(t.plan_calls for t in tasks)}")
     print(f"plan seconds      : {sum(t.plan_s for t in tasks):.0f}")
     print(f"tasks that wrote  : {len(wrote)}/{len(tasks)}")

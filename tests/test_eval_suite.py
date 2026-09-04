@@ -228,3 +228,26 @@ def test_timing_refuses_to_place_a_write_it_could_not_align(tmp_path: Path) -> N
 
     assert not task.aligned
     assert task.time_to_first_write_s is None
+
+
+def test_timing_separates_the_first_call_from_the_ones_that_reuse_the_prefix(
+    tmp_path: Path,
+) -> None:
+    """E034 read as a regression until its later calls showed the whole stand slower."""
+    log = (
+        READY
+        + phase(1, "plan", "start", 0.0)
+        + phase(1, "plan", "end", 48.7)
+        + phase(1, "act", "start", 0.0)
+        + phase(1, "act", "end", 0.0)
+        + phase(2, "plan", "start", 0.0)
+        + phase(2, "plan", "end", 9.1)
+        + phase(3, "plan", "start", 0.0)
+        + phase(3, "plan", "end", 8.9)
+    )
+    trace = '--- call 1 ---\n{"tool": "list_dir", "path": "/app"}\n'
+
+    task = read_run(write_run(tmp_path, log, trace))[0]
+
+    assert task.first_plan_s == 48.7
+    assert task.later_plan_s == [9.1, 8.9]
