@@ -12,15 +12,15 @@ category = "security"
 tags = ["local", "offline", "mutation", "audit", "sqli", "find-sqli-login-essence"]
 
 [verifier]
-timeout_sec = 30.0
+timeout_sec = 120.0
 
 [agent]
-timeout_sec = 180.0
+timeout_sec = 600.0
 
 [environment]
-build_timeout_sec = 120.0
+build_timeout_sec = 600.0
 cpus = 1
-memory_mb = 256
+memory_mb = 2048
 storage_mb = 1024
 gpus = 0
 allow_internet = false
