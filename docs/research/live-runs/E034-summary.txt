@@ -64,3 +64,16 @@ because every real check the loop has seen contained one and refusing a real che
 the task outright. The tightening that keeps that reasoning is "a pipeline whose every
 stage is a reader and which contains no comparator", not "no pipes". Not implemented --
 the human's stated priority is the timeout class.
+
+Review corrections (critic pass, 13:25):
+  - "later calls" mixes two mechanisms. Up to step 8 a call is a strict extension of
+    the previous request; from step 9 the observation window slides and it costs three
+    times as much. The clean stand-speed reading is steps 2-6: 7.5 s -> 8.1 s, +8%.
+    The slowdown is real, it is 8% and not 14%.
+  - In all 36 task runs of E033 and E034 the first reply arrives as
+    {"name": ..., "arguments": {...}} in content, not as a native tool call, so the
+    native_tools rung fails on every task and the first step pays an extra full
+    prefill. Untested by any experiment so far.
+  - The 172 -> 153 fall in calls is partly behavioural: mut-greeting-farewell took 10
+    steps in E033 and 2 in E034.
+  - time to first write is computed over 13 tasks in E033 and 14 in E034.

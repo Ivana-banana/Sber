@@ -251,3 +251,20 @@ def test_timing_separates_the_first_call_from_the_ones_that_reuse_the_prefix(
 
     assert task.first_plan_s == 48.7
     assert task.later_plan_s == [9.1, 8.9]
+    assert task.steady_plan_s == [9.1, 8.9]
+
+
+def test_timing_stops_the_steady_window_before_the_observation_window_slides(
+    tmp_path: Path,
+) -> None:
+    """From step 9 a call re-prefills the whole context, so it measures the agent too."""
+    log = READY + "".join(
+        phase(step, "plan", "start", 0.0) + phase(step, "plan", "end", float(step))
+        for step in range(1, 11)
+    )
+    trace = '--- call 1 ---\n{"tool": "list_dir", "path": "/app"}\n'
+
+    task = read_run(write_run(tmp_path, log, trace))[0]
+
+    assert task.steady_plan_s == [2.0, 3.0, 4.0, 5.0, 6.0]
+    assert task.later_plan_s[-1] == 10.0
