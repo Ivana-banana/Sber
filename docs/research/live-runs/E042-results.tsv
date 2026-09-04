@@ -1,0 +1,19 @@
+task	repeat	reward	tokens	ep_tokens	ep_calls	ep_late	wall_s	steps	stop	claim	wrote	failure	phases	note
+audit-hardcoded-token	1	0	?	8113	8	0	180.1	?	killed	-	yes	timeout	inspect=0.004/1 plan=173.568/8 act=0.017/7 open=plan@9	
+audit-parser-trust-boundary	1	0	?	7828	8	1	95.1	?	killed	-	no	timeout	inspect=0.006/1 plan=89.982/9 act=0.015/7 open=plan@10	
+audit-path-normalization	1	0	?	9602	8	1	180.1	?	killed	-	yes	timeout	inspect=0.004/1 plan=166.492/8 act=0.013/7 open=plan@9	
+ctf-duplicate-parameter	1	0	?	3263	3	1	95.1	?	killed	-	no	timeout	inspect=0.003/1 plan=90.000/4 act=0.002/3 open=plan@5	
+ctf-header-override	1	0	13360	14659	12	2	132.4	12	stuck	False	yes	reasoning	inspect=0.004/1 plan=131.765/12 act=0.065/10 verify=0.001/1	
+ctf-signed-cookie	1	0	26994	28980	16	0	170.2	16	stuck	False	yes	reasoning	inspect=0.003/1 plan=169.567/16 act=0.340/13 verify=0.000/1	
+fix-cache-key-scope	1	1	?	5526	5	0	95.1	?	killed	-	yes	-	inspect=0.004/1 plan=89.818/5 act=0.180/4 open=plan@6	
+fix-redirect-scheme	1	0	11604	12756	12	0	130.1	12	verified	True	yes	verification	inspect=0.003/1 plan=129.632/12 act=0.017/9 verify=0.033/1	
+fix-zip-slip-extract	1	0	?	16630	14	0	180.1	?	killed	-	yes	timeout	inspect=0.003/1 plan=160.435/14 act=0.002/12 verify=0.065/1 open=plan@15	
+forensics-sharded-exfil	1	0	?	6931	6	0	95.1	?	killed	-	no	timeout	inspect=0.004/1 plan=89.985/6 act=0.018/5 open=plan@7	
+forensics-ssh-bruteforce	1	0	?	8823	9	1	180.1	?	killed	-	yes	timeout	inspect=0.005/1 plan=164.987/9 act=0.021/8 open=plan@10	
+forensics-webshell-chain	1	0	5939	5939	6	0	84.0	6	stuck	False	no	reasoning	inspect=0.003/1 plan=83.515/6 act=0.016/4	
+mut-audit-query-gate	1	0	?	9310	9	0	180.1	?	killed	-	yes	timeout	inspect=0.003/1 plan=163.591/9 act=0.011/8 open=plan@10	
+mut-fix-inventory-filter	1	0	?	10897	9	1	180.2	?	killed	-	yes	timeout	inspect=0.004/1 plan=161.495/9 act=0.019/6 open=plan@10	
+mut-fix-session-lookup	1	0	?	8333	7	1	180.2	?	killed	-	yes	timeout	inspect=0.004/1 plan=151.653/7 act=0.012/6 open=plan@8	
+mut-forensics-egress-ledger	1	0	?	7767	7	1	180.1	?	killed	-	yes	timeout	inspect=0.006/1 plan=158.424/7 act=0.026/6 open=plan@8	
+mut-greeting-farewell	1	1	8546	9445	11	0	124.3	11	stuck	False	no	-	inspect=0.003/1 plan=123.664/11 act=0.084/9 verify=0.001/1	
+mut-salutation-beacon	1	1	3159	3159	4	0	51.7	4	stuck	False	yes	-	inspect=0.003/1 plan=51.121/4 act=0.005/4 verify=0.001/1	

@@ -1,0 +1,75 @@
+E042 English resident prompt (3/18) -- mechanism CONFIRMED, composition of the three changed
+Date: 2026-09-04 20:30 - 21:13 MSK
+Commit: 09d4073 (branch eval/e042-english-prompt), tree clean at build time
+Archive: build/e042-english-prompt.zip
+  sha256=0e2e707c364af27c7c96d0d12431655125e77b1d8494cd15c2c51f1f329ed95e size=78055
+Control: the pair E039 + E040 -- the same archive run twice, so the bands below are
+  built on a measured spread and not on a single run.
+Model/runtime: qwen2.5-coder:7b-instruct-q4_K_M, n_ctx=4096, temperature 0,
+  network sber-eval, timeout_scale=1.0, AGENT_TIMEOUT_S not passed.
+
+Factor: agent/prompt.py and agent/playbooks.py -- the resident part of the prompt
+  (skeleton, five playbooks, block labels) is translated to English. A translation and
+  not a rewrite: step order, wording and the "what to keep" lists are preserved, so the
+  changing quantity is the language alone. Measurement and method:
+  docs/research/prompt-language.md. Prediction written before the run:
+  docs/research/live-runs/E042-prediction.md.
+
+Commands:
+
+  python3 scripts/check_submission.py build/e042-english-prompt.zip
+  python3 scripts/eval/run_suite.py --archive build/e042-english-prompt.zip \
+      --model qwen2.5-coder:7b-instruct-q4_K_M \
+      --base-url http://sber-proxy:8000/v1 --api-key ollama \
+      --counter-container sber-proxy --timeout-scale 1.0 \
+      --label E042-english-prompt --out build/eval-E042-english-prompt
+  python3 scripts/eval/summarise.py build/eval-E039-anchored-history \
+      build/eval-E040-anchored-repeat build/eval-E042-english-prompt
+  python3 scripts/eval/timing.py    build/eval-E039-anchored-history \
+      build/eval-E040-anchored-repeat build/eval-E042-english-prompt
+
+Numbers (control E039 / E040 -> E042):
+
+  solved                  3/18 / 3/18 -> 3/18   gained fix-cache-key-scope,
+                                                lost mut-audit-query-gate
+  tasks that wrote        13/18 / 13/18 -> 13/18
+  tokens per call         1293 / 1243 -> 1156   prediction asked 1090-1180  HIT
+  total tokens            187428 / 155344 -> 177961  (not a criterion, spread 17%)
+  endpoint calls          145 / 125 -> 154
+  calls per plan step     0.99 / 0.98 -> 0.99   prediction asked 0.95-1.05  HIT
+  first plan call, med    38.4 / 41.2 -> 30.5 s
+  steady 2-6 call, med    9.6 / 10.5 -> 9.4 s   the stand is the same speed this hour
+  normalised first call   4.02 / 3.92 -> 3.24   prediction asked 3.6-4.4    MISS (lower)
+  steps 9-12 call, med    13.2 / 15.1 -> 8.8 s
+  same, normalised        1.38 / 1.44 -> 0.94   prediction asked 1.1-1.8    MISS (lower)
+  deepest step reached    14 / 11 -> 15
+  wall                    2638 / 2652 -> 2514 s
+  degrade lines           18 tasks x step=1, one each (E040 had one at step=2)
+
+Per-step medians, control first:
+
+  step   1     2     3     4     5     6     7     8     9    10    11    12
+  E039  38.4   8.0  12.1  11.9   8.3   8.5   7.8  20.8  18.8  18.9   9.1   --
+  E040  41.2   9.9  12.2  12.3  10.3   9.9  12.0  12.4  16.3  23.2   --    --
+  E042  30.5   8.1  11.1  10.9  10.9   8.2  11.6   7.3  15.9   8.6   8.8  14.4
+
+The token criterion is hit dead centre: 112 tokens per call cheaper against a mean
+control of 1268, where the local tokenizer predicted 155. The two timing bands were
+written as "the factor does not touch this" and both came in below the band, which
+means the prediction was wrong in the direction of the factor helping more than
+expected: a shorter resident prefix is cheaper to prefill even when it is cached, so
+the whole task runs at a lower rate and reaches step 15 instead of 11-14.
+
+What the run does NOT establish:
+
+- solved 3/18 is inside the gate 2-5, but the composition changed. Both the lost and
+  the gained task are decided at the external kill: mut-audit-query-gate and
+  fix-cache-key-scope are killed in all three runs (95 s and 180 s), and the reward
+  depends only on whether the right edit landed before the kill. E042 wrote in both,
+  and won one race and lost the other. This is not evidence that the factor costs a
+  task, and it is not evidence that it gains one either.
+- one run of eighteen public tasks says nothing about the closed set;
+- the translation changes two quantities at once, resident cost and the number of
+  languages in the context. Nothing here separates them.
+- summarise reports one false win: fix-redirect-scheme claimed success and failed
+  verification. Control killed the same task before it could claim anything.
