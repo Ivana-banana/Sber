@@ -9,6 +9,7 @@ from scripts.eval.run_suite import (
     SuiteResult,
     TaskResult,
     phase_breakdown,
+    task_names,
     write_report,
 )
 from scripts.eval.summarise import phase_report
@@ -295,3 +296,13 @@ def test_timing_stops_the_steady_window_before_the_observation_window_slides(
 
     assert task.steady_plan_s == [2.0, 3.0, 4.0, 5.0, 6.0]
     assert task.later_plan_s[-1] == 10.0
+
+
+def test_a_directory_without_a_task_toml_is_not_a_task(tmp_path):
+    """The public snapshot ships `insecure-api-app`, which is a shared app, not a task."""
+    (tmp_path / "hello-file").mkdir()
+    (tmp_path / "hello-file" / "task.toml").write_text("[task]\n", encoding="utf-8")
+    (tmp_path / "insecure-api-app").mkdir()
+    (tmp_path / "insecure-api-app" / "sync.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    assert task_names(tmp_path) == ["hello-file"]

@@ -154,6 +154,7 @@ class TaskSpec:
     workdir: str
     has_entrypoint: bool
     agent_timeout_s: float
+    build_timeout_s: float
     cpus: float
     memory_mb: int
 
@@ -212,6 +213,20 @@ def run(cmd: list[str], *, timeout: float = DOCKER_STEP_TIMEOUT_S) -> subprocess
     )
 
 
+def task_names(root: Path) -> list[str]:
+    """Every package under `root`, and nothing else.
+
+    The public snapshot keeps `insecure-api-app` next to the six task packages: it is
+    the application the SQLi tasks are built from, not a task, and it has no
+    `task.toml`. Treating every subdirectory as a package made the whole suite die on
+    it with a FileNotFoundError, taking the results of the tasks that had already run
+    down with it.
+    """
+    return sorted(
+        p.name for p in root.iterdir() if p.is_dir() and (p / "task.toml").is_file()
+    )
+
+
 def read_spec(pkg: Path) -> TaskSpec:
     """Derive the run parameters from the package rather than from a lookup table."""
     config = tomllib.loads((pkg / "task.toml").read_text(encoding="utf-8"))
@@ -234,6 +249,7 @@ def read_spec(pkg: Path) -> TaskSpec:
         workdir=workdir,
         has_entrypoint=has_entrypoint,
         agent_timeout_s=float(config.get("agent", {}).get("timeout_sec", 180.0)),
+        build_timeout_s=float(environment.get("build_timeout_sec", 600.0)),
         cpus=float(environment.get("cpus", 1)),
         memory_mb=int(environment.get("memory_mb", 512)),
     )
@@ -298,8 +314,17 @@ class Runner:
         return f"sber-eval/{spec.name}:latest"
 
     def build(self, spec: TaskSpec) -> str | None:
+        # Built on the host's network stack, because this machine's firewall drops
+        # traffic from docker bridges and the bridge's DNS never resolves -- the same
+        # reason `start_model.sh` runs the model as a container. Three public packages
+        # `apt-get install postgresql` at build time and simply failed here. This
+        # touches the build only: the task itself still runs on the isolated
+        # `--network` the harness was given, so nothing about the agent's offline
+        # contract is relaxed.
         built = run(
-            ["docker", "build", "-q", "-t", self.image_tag(spec), str(spec.root / "environment")]
+            ["docker", "build", "--network=host", "-q", "-t", self.image_tag(spec),
+             str(spec.root / "environment")],
+            timeout=spec.build_timeout_s,
         )
         if built.returncode != 0:
             return built.stderr.strip()[-400:]
@@ -568,7 +593,7 @@ def main() -> int:
         print(f"unzip failed: {unzipped.stderr}", file=sys.stderr)
         return 1
 
-    names = sorted(p.name for p in Path(args.tasks_root).iterdir() if p.is_dir())
+    names = task_names(Path(args.tasks_root))
     if args.only:
         names = [n for n in names if n in set(args.only)]
     if not names:
