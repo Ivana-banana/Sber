@@ -19,7 +19,17 @@ docker network inspect "$NETWORK" >/dev/null 2>&1 || \
   docker network create --internal --subnet 172.28.0.0/24 --gateway 172.28.0.1 "$NETWORK"
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" --network "$NETWORK" \
+
+# The GPU is offered when the host has one. This card holds 4 GiB, and the 7B Q4_K_M
+# weights are 4.68 GiB, so nothing here promises a full offload: ollama places the
+# layers that fit and runs the rest on the CPU. That is still the difference between
+# a stand whose latency is admittedly unrepresentative and one that is merely slow.
+GPU_FLAGS=""
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+  GPU_FLAGS="--gpus all"
+fi
+
+docker run -d --name "$NAME" --network "$NETWORK" $GPU_FLAGS \
   -v "$STORE:/models:ro" \
   -e OLLAMA_MODELS=/models \
   -e OLLAMA_MAX_LOADED_MODELS=1 \
