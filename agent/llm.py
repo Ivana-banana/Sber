@@ -354,6 +354,24 @@ class HttpLlm:
         if self.on_event is not None:
             self.on_event(kind, redact(detail, self.settings.secrets))
 
+    def _leave_the_native_rung(self, in_content: bool) -> None:
+        """Answer accepted; ask the next question in the shape this server really serves.
+
+        A reply that arrives in `content` while `tools` were offered says the server is
+        not doing tool calls -- it is completing text that looks like one. Keeping the
+        rung then costs on every later call: E037 stayed native for whole runs and paid
+        63.1 s for a first call against 44.7 s, took 84 planning steps instead of 128
+        and left a deliverable on 3 tasks of 18 instead of 14, at 1354 tokens a call
+        against 1199. The bench had said as much before the run -- native 16.1 s,
+        json_schema 7.9 s -- and the reading was not carried through.
+
+        The answer in hand is still used, so this costs no request. And it is not the
+        bet that E036 lost: a server that genuinely serves tool calls returns them in
+        `tool_calls`, `in_content` stays false, and the rung is kept.
+        """
+        if in_content:
+            self._demote("tool calls arrive in content")
+
     def _demote(self, why: str) -> bool:
         """Step down one rung. Returns False when already at the bottom."""
         if not self.allow_fallback:
@@ -481,6 +499,7 @@ class HttpLlm:
         if schema is None:
             return (content, "") if content else ("", "empty content")
 
+        in_content = False
         if self.style == NATIVE_TOOLS:
             arguments = self._read_tool_call(message)
             if arguments is not None:
@@ -489,6 +508,7 @@ class HttpLlm:
                 # The server's parser failed but the model did produce a call. Better
                 # to recover it than to change the prompt and hope.
                 self._note("protocol", "tool call arrived in content, not tool_calls")
+                in_content = True
             else:
                 return None, "no tool call and no content"
 
@@ -510,8 +530,10 @@ class HttpLlm:
             if unwrapped is None:
                 return None, f"schema: {reason}"
             self._note("protocol", "function envelope in content, unwrapped")
+            self._leave_the_native_rung(in_content)
             return json.dumps(unwrapped), ""
 
+        self._leave_the_native_rung(in_content)
         return content, ""
 
     def _attempt_loop(

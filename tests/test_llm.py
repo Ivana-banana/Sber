@@ -175,7 +175,7 @@ def test_plain_completion_never_requests_a_response_format() -> None:
     assert "tools" not in endpoint.bodies[0]
 
 
-def test_a_function_envelope_in_content_costs_no_rung() -> None:
+def test_a_function_envelope_in_content_costs_no_request() -> None:
     """The reply this model really sends, measured 36 times out of 36.
 
     `{"name": "list_dir", "arguments": {...}}` in `content`: the OpenAI function shape,
@@ -191,11 +191,16 @@ def test_a_function_envelope_in_content_costs_no_rung() -> None:
     assert isinstance(result, LlmReply)
     assert json.loads(result.text) == {"tool": "list_dir", "path": "/app"}
     assert len(endpoint.bodies) == 1, "a usable answer must not cost a request"
-    assert client.style == llm.NATIVE_TOOLS, "nor a rung"
+    assert client.style == llm.JSON_SCHEMA, (
+        "a call that arrives as text says the server is not serving tool calls; "
+        "E037 kept the rung and paid 63.1 s a first call against 44.7, 84 planning "
+        "steps against 128 and a deliverable on 3 tasks of 18 against 14"
+    )
     assert [detail for _, detail in events] == [
         "tool call arrived in content, not tool_calls",
         "function envelope in content, unwrapped",
-    ], "two facts, both worth seeing in a trace: where the call arrived and what it was"
+        "tool calls arrive in content -> call style json_schema",
+    ], "the trace has to say where the call arrived, what it was, and what changed"
 
 
 def test_an_envelope_naming_the_offered_function_unwraps_to_its_arguments() -> None:
