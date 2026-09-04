@@ -1,0 +1,19 @@
+task	repeat	reward	tokens	ep_tokens	ep_calls	ep_late	wall_s	steps	stop	claim	failure	phases	note
+audit-hardcoded-token	1	0	?	5393	4	0	180.1	?	killed	-	timeout	inspect=0.003/1 plan=89.994/5 act=0.009/3 verify=0.005/1 open=plan@6	
+audit-parser-trust-boundary	1	0	?	0	0	0	95.1	?	killed	-	timeout	inspect=0.010/1 plan=90.132/1 open=plan@2	
+audit-path-normalization	1	0	?	0	0	0	180.1	?	killed	-	timeout	inspect=0.004/1 plan=90.054/1 open=plan@2	
+ctf-duplicate-parameter	1	0	?	0	0	2	95.1	?	killed	-	timeout	inspect=0.004/1 plan=90.103/1 open=plan@2	
+ctf-header-override	1	0	5201	6409	5	6	176.7	5	stuck	False	reasoning	inspect=0.005/1 plan=176.353/5 act=0.004/4 verify=0.000/1	
+ctf-signed-cookie	1	0	?	16499	11	0	180.1	?	killed	-	timeout	inspect=0.003/1 plan=178.504/10 act=0.069/8 open=plan@11	
+fix-cache-key-scope	1	0	?	6017	4	1	95.1	?	killed	-	timeout	inspect=0.005/1 plan=89.998/5 act=0.000/4 open=plan@6	
+fix-redirect-scheme	1	0	5116	7862	6	2	155.7	5	verified	True	verification	inspect=0.004/1 plan=154.591/5 act=0.001/3 verify=0.034/1	
+fix-zip-slip-extract	1	0	?	12959	10	0	180.1	?	killed	-	timeout	inspect=0.003/1 plan=166.724/9 act=0.002/8 open=plan@10	
+forensics-sharded-exfil	1	0	?	4016	3	1	95.1	?	killed	-	timeout	inspect=0.012/1 plan=89.994/4 act=0.016/3 open=plan@5	
+forensics-ssh-bruteforce	1	0	?	11630	9	2	180.1	?	killed	-	timeout	inspect=0.013/1 plan=154.303/8 act=0.009/6 verify=0.016/1 open=plan@9	
+forensics-webshell-chain	1	0	?	14987	12	0	180.1	?	killed	-	timeout	inspect=0.004/1 plan=175.654/11 act=0.011/10 open=plan@12	
+mut-audit-query-gate	1	1	?	11396	8	1	180.1	?	killed	-	-	inspect=0.005/1 plan=155.707/8 act=0.018/5 verify=0.013/1 open=plan@9	
+mut-fix-inventory-filter	1	0	?	7453	5	0	180.1	?	killed	-	timeout	inspect=0.004/1 plan=90.003/6 act=0.000/5 open=plan@7	
+mut-fix-session-lookup	1	0	?	0	0	0	180.1	?	killed	-	timeout	inspect=0.007/1 plan=90.116/1 open=plan@2	
+mut-forensics-egress-ledger	1	0	?	0	0	0	180.1	?	killed	-	timeout	inspect=0.006/1 plan=90.116/1 open=plan@2	
+mut-greeting-farewell	1	0	?	0	0	5	180.1	?	killed	-	timeout	inspect=0.004/1 plan=90.111/1 open=plan@2	
+mut-salutation-beacon	1	1	2350	2350	2	3	79.1	2	verified	True	-	inspect=0.006/1 plan=77.825/2 act=0.001/1 verify=0.017/1	
