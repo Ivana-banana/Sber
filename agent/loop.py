@@ -129,7 +129,7 @@ def run(
 
             assert deliverable is not None
             command = str(act.get("verify", "") or "")
-            refusal = _reads_without_checking(command, deliverable)
+            refusal = _cannot_fail(command, deliverable)
             if refusal:
                 state.record("verify", "refused", refusal)
                 observations.append(f"[step {step}] {refusal}")
@@ -302,22 +302,49 @@ answered before `verify` is reached.
 """
 
 
-def _reads_without_checking(command: str, deliverable: Path) -> str:
+ALWAYS_OK = frozenset({"echo", "printf", "true", ":"})
+"""Commands that exit 0 unconditionally, so a `||` branch ending in one never fails."""
+
+
+def _cannot_fail(command: str, deliverable: Path) -> str:
     """Refuse a `verify` that cannot fail on a wrong answer. Returns the reason, or "".
 
-    Ten of the fifteen `finish` calls the night's runs made offered `cat <deliverable>`,
-    and the two tasks that reproduced a false win 5/5 each offered exactly that. It
-    passes on any bytes, so the loop stops at a green self-check holding a wrong file --
-    the most expensive class of zero we have, because the run believed it was done and
-    gave back the rest of its budget.
+    Two shapes, both measured rather than imagined, and both producing the same zero:
+    the run stops as `verified` holding a wrong file, which is the most expensive class
+    we have because it gives back the rest of its budget as well.
 
-    Deliberately narrow. Anything with a `&&`, a pipe or a second command is left to
-    `agent.verify`: every real check the model wrote had one -- `grep -q … && grep -q …`
-    was the night's only true win -- and refusing a real check costs the task outright,
-    while missing a fake one costs at most what is already being lost.
+    * **A lone reader.** Ten of the night's fifteen `finish` calls offered
+      `cat <deliverable>`, and the two tasks that reproduced a false win 5/5 each
+      offered exactly that. `cat` exits 0 on any bytes, and existence and non-emptiness
+      are what the finish gate has already established before `verify` is reached.
+    * **A swallowed failure.** E031's `audit-hardcoded-token` offered a real check,
+      was told no, and came back with `grep -q … && echo 'PASS' || echo 'FAIL'`. The
+      `|| echo` makes the exit code 0 whatever `grep` decided. This one is worse than
+      the first: the model was shown a red verdict and repaired the check rather than
+      the result.
     """
     stripped = command.strip()
-    if not stripped or any(token in stripped for token in ("&&", "||", ";", "|", "\n", "`", "$(")):
+    if not stripped:
+        return ""
+
+    tail = stripped.rsplit("||", 1)[-1].strip() if "||" in stripped else ""
+    if tail:
+        try:
+            words = shlex.split(tail)
+        except ValueError:
+            words = []
+        if words and PurePosixPath(words[0]).name in ALWAYS_OK:
+            return (
+                f"finish refused: `{stripped}` заканчивается ветвью `|| {words[0]} …`, "
+                f"поэтому выходит с нулём даже когда проверка не прошла. Дай команду, "
+                f"код возврата которой зависит от результата, и не глуши её провал."
+            )
+
+    if any(token in stripped for token in ("&&", "||", ";", "|", "\n", "`", "$(")):
+        # Left to `agent.verify`: every real check the model wrote had one of these --
+        # `grep -q … && grep -q …` was the night's only true win -- and refusing a real
+        # check costs the task outright, while missing a fake one costs what is already
+        # being lost.
         return ""
     try:
         parts = shlex.split(stripped)

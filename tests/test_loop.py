@@ -351,6 +351,38 @@ def test_a_verify_command_that_only_reads_the_deliverable_is_refused(tmp_path: P
     assert outcome.solved is True, "the run recovers once it offers a real check"
 
 
+def test_a_verify_command_whose_failure_is_swallowed_is_refused(tmp_path: Path) -> None:
+    """E031's new false win, and the first one written *after* a red verdict.
+
+    `audit-hardcoded-token` offered a real check first, was told no, and came back with
+    `grep -q … && echo 'PASS' || echo 'FAIL'`. The `|| echo` makes the exit code 0
+    whatever `grep` decided, so the run stopped as `verified` holding a wrong report.
+    The model repaired the check instead of the result, which is the one thing the
+    project rules say a run must never do.
+    """
+    target = tmp_path / "audit_report.json"
+    swallowed = f"grep -q secret {target} && echo 'PASS' || echo 'FAIL'"
+    honest = f"grep -q secret {target}"
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(target), content="{}"),
+            action("finish", path=str(target), verify=swallowed, summary="готово"),
+            action("write_file", path=str(target), content="secret"),
+            action("finish", path=str(target), verify=honest, summary="готово"),
+        ]
+    )
+    verify = FakeVerify((True, "command", ""))
+    state = make_state(tmp_path)
+
+    outcome = run(state, llm, verify)
+
+    assert [call[1] for call in verify.calls] == [honest], (
+        "a command whose failure branch always exits 0 never reaches the verifier"
+    )
+    assert state.budget.recovery_passes_used == 0
+    assert outcome.solved is True
+
+
 def test_a_verify_command_that_can_fail_is_left_alone(tmp_path: Path) -> None:
     """The one true win of the night passed `grep -q … && grep -q …`, and every other
     command the model proposed contained `grep`, `python3` or a comparison. Only a lone
