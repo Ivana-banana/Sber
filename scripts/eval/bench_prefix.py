@@ -141,7 +141,10 @@ def main() -> int:
         # repeat: the identical request, the easiest possible cache hit.
         record("repeat", *ask(url, args.model, filler(run * 7 + 1), [TAILS[0]], args.timeout))
 
-        # adjacent: same resident block, different task, nothing in between.
+        # adjacent: same resident block, different task, nothing in between. The
+        # priming call is what makes the block shared at all -- without it the first
+        # round measures a cold prompt and calls it adjacent.
+        ask(url, args.model, SHARED, [TAILS[0]], args.timeout)
         seconds, count = ask(url, args.model, SHARED, [TAILS[1]], args.timeout)
         record("adjacent", seconds, count)
 

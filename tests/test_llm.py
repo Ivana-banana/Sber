@@ -165,6 +165,32 @@ def test_plain_completion_never_requests_a_response_format() -> None:
     assert "tools" not in endpoint.bodies[0]
 
 
+def test_a_fresh_run_starts_on_the_rung_this_model_answers() -> None:
+    """Measured on the stand: the native rung is a wasted request on every task.
+
+    In all 36 task runs of E033 and E034 the first reply came back as
+    `{"name": "list_dir", "arguments": {...}}` written as prose -- the function shape,
+    naming the tool it wants instead of calling the one function the request offered.
+    `_read_reply` salvages the JSON and `validate_against_schema` then rejects it,
+    because `ACTION_SCHEMA` requires a `tool` key. The ladder demotes and asks again.
+    Benched at 21.6 s for the pair against 7.9 s for `json_schema` alone, inside the
+    step that already costs 39-49 s (`scripts/eval/bench_first_call.py`).
+    """
+    endpoint = FakeEndpoint(responses=[(200, chat_reply('{"action":"ls"}'))])
+    client = llm.HttpLlm(
+        settings=llm.LlmSettings.from_env(ENV),
+        transport=endpoint,
+        sleep=lambda _: None,
+        on_event=lambda *_: None,
+    )
+
+    client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert len(endpoint.bodies) == 1, "a fresh run must not spend a call on a rung"
+    assert "tools" not in endpoint.bodies[0]
+    assert endpoint.bodies[0]["response_format"]["type"] == "json_schema"
+
+
 # --- the ladder -------------------------------------------------------------
 
 
