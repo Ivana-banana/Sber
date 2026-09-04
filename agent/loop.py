@@ -314,7 +314,7 @@ ALWAYS_OK = frozenset({"echo", "printf", "true", ":"})
 def _cannot_fail(command: str, deliverable: Path) -> str:
     """Refuse a `verify` that cannot fail on a wrong answer. Returns the reason, or "".
 
-    Two shapes, both measured rather than imagined, and both producing the same zero:
+    Three shapes, all measured rather than imagined, and all producing the same zero:
     the run stops as `verified` holding a wrong file, which is the most expensive class
     we have because it gives back the rest of its budget as well.
 
@@ -327,6 +327,16 @@ def _cannot_fail(command: str, deliverable: Path) -> str:
       `|| echo` makes the exit code 0 whatever `grep` decided. This one is worse than
       the first: the model was shown a red verdict and repaired the check rather than
       the result.
+    * **A pipeline of readers.** `cat <deliverable> | od -A x -t x1z -v`, offered once
+      the lone reader was refused. Nothing in it compares anything, so it exits 0 for
+      any bytes; the pipe alone made it pass a rule that let every `|` through.
+
+    The exemption for a pipe is narrowed, not withdrawn: one stage that can disagree
+    with the file -- `grep`, `diff`, `python3` -- and the whole command is left to
+    `agent.verify`, because refusing a real check costs the task outright while missing
+    a fake one costs what is already being lost. Known gap, shared with the lone reader
+    and not widened here: a stage whose flag takes the path as a value, such as
+    `head -c 4 <deliverable>`, reads as an operand list we do not recognise and passes.
     """
     stripped = command.strip()
     if not stripped:
@@ -345,33 +355,54 @@ def _cannot_fail(command: str, deliverable: Path) -> str:
                 f"код возврата которой зависит от результата, и не глуши её провал."
             )
 
-    if any(token in stripped for token in ("&&", "||", ";", "|", "\n", "`", "$(")):
+    if any(token in stripped for token in ("&&", "||", ";", "\n", "`", "$(")):
         # Left to `agent.verify`: every real check the model wrote had one of these --
         # `grep -q … && grep -q …` was the night's only true win -- and refusing a real
         # check costs the task outright, while missing a fake one costs what is already
         # being lost.
         return ""
+
+    stages = stripped.split("|")
+    if not all(
+        _only_reads(stage, deliverable, first=index == 0) for index, stage in enumerate(stages)
+    ):
+        # One stage that can disagree with the file makes the pipeline a real check,
+        # and the exit code is that stage's when it is last. Same reasoning as above:
+        # refusing a real check costs the task, letting a fake one through costs what
+        # is already lost.
+        return ""
+
+    what = "конвейер" if len(stages) > 1 else "команда"
+    return (
+        f"finish refused: `{stripped}` — {what}, который только читает {deliverable.name} "
+        f"и выходит с нулём при любом содержимом, а существование и непустоту этого файла "
+        f"проверка уже прошла. Дай команду, которая падает, если результат неверный: "
+        f"сравни содержимое с тем, что требует задание (`grep -q`, `diff`, `python3 -c ...`)."
+    )
+
+
+def _only_reads(stage: str, deliverable: Path, *, first: bool) -> bool:
+    """Whether one stage exits 0 for every possible content of the deliverable.
+
+    The two positions are read differently because a bare word means different things
+    in them. The first stage names its input, so every operand of it has to be the
+    deliverable. A later stage reads the pipe, and its bare words are mostly values of
+    flags -- `od -A x -t x1z` carries no operand at all -- so only a token that looks
+    like a path is evidence that it reads something else.
+    """
     try:
-        parts = shlex.split(stripped)
+        parts = shlex.split(stage.strip())
     except ValueError:
         # An unbalanced quote is not our problem to diagnose; `agent.verify` will run
         # it and report the shell's own complaint, which is more useful than a guess.
-        return ""
+        return False
     if not parts or PurePosixPath(parts[0]).name not in READERS:
-        return ""
+        return False
 
     operands = [part for part in parts[1:] if not part.startswith("-")]
-    if any(not _names(operand, deliverable) for operand in operands):
-        # It reads something else as well, so its exit code can depend on more than the
-        # deliverable's existence. Not our case.
-        return ""
-
-    return (
-        f"finish refused: `{stripped}` только читает {deliverable.name} и выходит с нулём "
-        f"при любом содержимом, а существование и непустоту этого файла проверка уже "
-        f"прошла. Дай команду, которая падает, если результат неверный: сравни содержимое "
-        f"с тем, что требует задание (`grep -q`, `diff`, `python3 -c ...`)."
-    )
+    if not first:
+        operands = [part for part in operands if "/" in part]
+    return all(_names(operand, deliverable) for operand in operands)
 
 
 def _names(operand: str, deliverable: Path) -> bool:

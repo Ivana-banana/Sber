@@ -383,6 +383,55 @@ def test_a_verify_command_whose_failure_is_swallowed_is_refused(tmp_path: Path) 
     assert outcome.solved is True
 
 
+def test_a_pipeline_of_readers_is_refused_like_a_lone_reader(tmp_path: Path) -> None:
+    """The fifth shape: `cat marker | od -A x -t x1z -v`, seen once the lone reader was
+    refused. Every stage is a reader, nothing compares anything, and the exit code is
+    the last stage's -- zero for any bytes the file holds. The pipe made it look like a
+    real check to a rule that let anything with a `|` through.
+    """
+    target = tmp_path / "farewell.marker"
+    piped = f"cat {target} | od -A x -t x1z -v"
+    honest = f"grep -qx Ciao {target}"
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(target), content="43616f"),
+            action("finish", path=str(target), verify=piped, summary="готово"),
+            action("write_file", path=str(target), content="Ciao"),
+            action("finish", path=str(target), verify=honest, summary="готово"),
+        ]
+    )
+    verify = FakeVerify((True, "command", ""))
+    state = make_state(tmp_path)
+
+    outcome = run(state, llm, verify)
+
+    assert [call[1] for call in verify.calls] == [honest], (
+        "a pipeline that only reads never reaches the verifier"
+    )
+    assert state.budget.recovery_passes_used == 0
+    assert outcome.solved is True
+
+
+def test_a_pipeline_that_compares_something_is_left_alone(tmp_path: Path) -> None:
+    """The rule narrows the pipe exemption; it does not withdraw it. A pipeline with a
+    stage that can disagree with the file is the check the gate exists to protect.
+    """
+    target = tmp_path / "findings.json"
+    command = f"cat {target} | grep -q sql_injection"
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(target), content="sql_injection"),
+            action("finish", path=str(target), verify=command, summary="готово"),
+        ]
+    )
+    verify = FakeVerify((True, "command", ""))
+
+    outcome = run(make_state(tmp_path), llm, verify)
+
+    assert outcome.solved is True
+    assert [call[1] for call in verify.calls] == [command]
+
+
 def test_a_verify_command_that_can_fail_is_left_alone(tmp_path: Path) -> None:
     """The one true win of the night passed `grep -q … && grep -q …`, and every other
     command the model proposed contained `grep`, `python3` or a comparison. Only a lone
