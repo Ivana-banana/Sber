@@ -62,32 +62,16 @@ need to hand it a quarter of an hour."""
 MAX_STEPS = 30
 """Hard cap on act/observe iterations. The loop counts them, the model cannot."""
 
-OBSERVATION_BUDGET_CHARS = 8000
-"""How much observation history travels back to the model, in characters.
+OBSERVATION_WINDOW = 8
+"""How many recent observations travel back to the model on each call.
 
-Was a window of the last eight observations, which was cheap to reason about and
-expensive to run. A window slides: on the ninth step the oldest observation leaves and
-the text right after the system block changes, so the server re-reads the whole prompt
-at full price. Measured on this stand, steps 2-8 cost 7-9 s a call and step 9 costs
-22-24 s, in two runs independently (`docs/research/observation-window-cost.md`).
+Resident context is paid on every call and total tokens are the second ranking
+criterion, so the history is a window rather than the whole transcript. Eight and not
+fewer because the verifier reserve can need the error from several steps back; eight
+and not more because an old directory listing has no bearing on the next action.
 
-A budget does not slide. While the kept history fits, every request is a strict
-extension of the one before it and the server pays for the new tail alone. When it no
-longer fits, the history is re-laid once -- one full prefill, then extensions again.
-
-Eight thousand characters is about two thousand tokens, which leaves room beside the
-thousand-token system block inside a 4096-token context. A single observation may be
-6000 bytes (`TOOL_OUTPUT_HEAD_BYTES` plus `TOOL_OUTPUT_TAIL_BYTES`), so the budget is
-not a guarantee that two large observations both fit; it is a bound on the ordinary
-case, and `OBSERVATION_RELAY_KEEP` is what holds the exceptional one.
-"""
-
-OBSERVATION_RELAY_KEEP = 4
-"""How many observations survive a re-lay.
-
-Four and not one because the verifier reserve can need the error from several steps
-back; four and not more because a re-lay that keeps most of the history spends its
-prefill again almost immediately.
+A starting value. Its effect on solved count has not been measured, and per the
+ninth Karpathy rule it does not get tightened before that measurement exists.
 """
 
 MAX_CONSECUTIVE_LLM_FAILURES = 3

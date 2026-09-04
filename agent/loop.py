@@ -75,7 +75,6 @@ def run(
     """Drive one task to a checked result, or to an honest account of why not."""
     system = prompt.build_system(brief, playbook, state.instruction)
     observations: list[str] = []
-    history_base = 0
     llm_failures = 0
     blocks_in_a_row = 0
     last_verdict: VerifyResult | None = None
@@ -92,12 +91,8 @@ def run(
             )
 
         plan_started = state.start_phase("plan")
-        # Anchored, not sliding: the base moves only when the kept history stops
-        # fitting its budget, so every other request extends the previous one and the
-        # server pays for the new tail alone.
-        history_base = prompt.history_base(observations, history_base)
         reply = llm.complete_structured(
-            prompt.build_messages(system, observations, history_base),
+            prompt.build_messages(system, observations),
             schema=prompt.ACTION_SCHEMA,
             max_output_tokens=limits.LLM_MAX_OUTPUT_TOKENS,
             timeout_s=max(1.0, state.budget.llm_timeout_s()),

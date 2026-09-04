@@ -146,39 +146,21 @@ def build_system(brief: EnvironmentBrief, playbook: Playbook, instruction: str) 
     )
 
 
-OMISSION_NOTICE = "[earlier observations omitted]"
-"""Said once and worded the same however many were dropped.
-
-The count used to be in this line. That made it change on every call once dropping
-began, and it sits directly after the system block, so the prefix diverged there and
-the server re-read everything behind it. The fact that history was trimmed is what the
-model needs; the number was for us, and it cost a full prefill per call to say.
-"""
-
-
-def history_base(observations: list[str], base: int) -> int:
-    """Index of the first observation that travels. Moves only when the budget is spent.
-
-    This is what keeps each request an extension of the last one. A sliding window
-    changes the front of the history every step and throws away the server's prefix
-    with it; an anchored base changes the front only when the kept history no longer
-    fits, and then pays one prefill instead of one per call.
-    """
-    if sum(len(text) for text in observations[base:]) <= limits.OBSERVATION_BUDGET_CHARS:
-        return base
-    return max(base, len(observations) - limits.OBSERVATION_RELAY_KEEP)
-
-
-def build_messages(system: str, observations: list[str], base: int = 0) -> list[Message]:
-    """The full request: one system message and the observation history from `base`.
+def build_messages(system: str, observations: list[str]) -> list[Message]:
+    """The full request: one system message and the observation history.
 
     Observations are already bounded and already redacted by `agent.tools`; this
-    function only decides how many of them travel. It is a window and not a summary, so
-    nothing here can silently drop the error the model needs to read -- and `base` comes
-    from `history_base`, so what travels grows by one message a step until a re-lay.
+    function only decides how many of them travel. The window is the last
+    `limits.OBSERVATION_WINDOW`, because resident context is paid on every call and an
+    old listing has no bearing on the next action -- but it is a window and not a
+    summary, so nothing here can silently drop the error the model needs to read.
     """
+    kept = observations[-limits.OBSERVATION_WINDOW :]
+    dropped = len(observations) - len(kept)
     messages: list[Message] = [{"role": "system", "content": system}]
-    if base:
-        messages.append({"role": "user", "content": OMISSION_NOTICE})
-    messages.extend({"role": "user", "content": text} for text in observations[base:])
+    if dropped:
+        messages.append(
+            {"role": "user", "content": f"[{dropped} more earlier observations omitted]"}
+        )
+    messages.extend({"role": "user", "content": text} for text in kept)
     return messages
