@@ -3,8 +3,8 @@
 The design injects exactly one playbook into the system prompt, chosen after
 classifying the task text -- never all five. Resident context is paid on every model
 call, so at MAX_STEPS a set of five routers would cost tens of thousands of input
-tokens per task, the second ranking criterion. One active playbook, <=400 cl100k_base
-tokens, keeps that bound (`docs/decisions.md`, 2026-08-25).
+tokens per task, the second ranking criterion. One active playbook, <=400 tokens,
+keeps that bound (`docs/decisions.md`, 2026-08-25).
 
 The classifier is a keyword heuristic, not an LLM call. A separate routing call would
 cost a step and tokens on every task; it is only justified if an ablation shows more
@@ -29,7 +29,12 @@ import re
 from dataclasses import dataclass
 
 TOKEN_BUDGET = 400
-"""Resident-context ceiling for a single active playbook, in cl100k_base tokens."""
+"""Resident-context ceiling for a single active playbook, in Qwen2.5 tokens.
+
+The number is the one accepted on 2026-08-25 in cl100k_base and kept unchanged when
+the unit moved to the model's own tokenizer: every body got cheaper in the new unit,
+so the ceiling still binds and re-deriving it would be a second, unmeasured change.
+"""
 
 
 @dataclass(frozen=True)
@@ -39,132 +44,139 @@ class Playbook:
     name: str
     body: str
     token_count: int
-    """cl100k_base tokens of `body`, measured externally with tiktoken on 2026-08-25.
+    """Qwen2.5 tokens of `body`, measured externally on 2026-09-04.
 
-    tiktoken 0.13.0 is in fact installed in the target image -- probed there directly
-    on 2026-08-26 -- but it is unusable: `get_encoding("cl100k_base")` downloads the
-    BPE file from `openaipublic.blob.core.windows.net`, and under `--network none` it
-    raises `ConnectionError`. So this stays a recorded measurement rather than
-    something computed at import time. The line count is what regresses locally; see
-    `tests/test_playbooks.py`.
+    The unit changed with the English translation. It used to be cl100k_base, measured
+    with tiktoken on 2026-08-25, which was a stand-in for a tokenizer nobody had: the
+    model being evaluated is Qwen2.5 and its vocabulary splits Cyrillic very
+    differently from Latin, so a budget in cl100k said little about what the endpoint
+    would actually charge. Counted with the `Qwen/Qwen2.5-VL-7B-Instruct` tokenizer,
+    whose text vocabulary is the Qwen2.5 one, against a local cache -- see
+    `docs/research/prompt-language.md` for the command and the caveat.
+
+    It stays a recorded measurement rather than something computed at import time: no
+    tokenizer is usable in the target image. tiktoken 0.13.0 is installed there --
+    probed directly on 2026-08-26 -- but `get_encoding("cl100k_base")` downloads the
+    BPE file from `openaipublic.blob.core.windows.net`, and the run is offline. The
+    line count is what regresses locally; see `tests/test_playbooks.py`.
     """
 
 
 CODE_AUDIT = Playbook(
     name="code-audit",
-    token_count=305,
+    token_count=226,
     body="""\
-Картируй стек, входы, конфиги и deps; сохрани component map.
-Свяжи HTTP, CLI, файлы и env с handlers; сохрани source map.
-Картируй SQL, shell, file, URL, template, auth и secrets; сохрани sink map.
-Трассируй source→sink и trust boundaries; получи ranked chains.
-Отбери полные chains и critical boundaries; сохрани read queue.
-Прочитай calls, validation и config вокруг file; сохрани line evidence.
-Проверь identity, authz, encoding, params и allowlist; отметь gaps.
-Выбери local safe test или trace; сохрани expected signal.
-Выполни test; сохрани output, exit code и effect.
-Брось chain, если path closed или два cheap tests пусты; получи next chain.
-Подтверди effect independent test, log или trace; сохрани second evidence.
-Отдели proven findings от suspicions; сохрани два list.
-Для finding сохрани path, source→sink, preconditions, effect и evidence.
-Повтори external verification line/effect; сохрани PASS или «не подтверждено».
-Заверши с verified report; сохрани status.""",
+Map the stack, entry points, configs and deps; save a component map.
+Link HTTP, CLI, files and env to handlers; save a source map.
+Map SQL, shell, file, URL, template, auth and secrets; save a sink map.
+Trace source->sink and trust boundaries; get ranked chains.
+Select the complete chains and critical boundaries; save a read queue.
+Read the calls, validation and config around the file; save line evidence.
+Check identity, authz, encoding, params and allowlist; note the gaps.
+Choose a local safe test or a trace; save the expected signal.
+Run the test; save output, exit code and effect.
+Drop a chain when the path is closed or two cheap tests come back empty; get the next chain.
+Confirm the effect with an independent test, log or trace; save second evidence.
+Separate proven findings from suspicions; save two lists.
+For a finding save path, source->sink, preconditions, effect and evidence.
+Repeat the external verification of the line or effect; save PASS or "not confirmed".
+Finish with a verified report; save status.""",
 )
 
 
 CODE_FIX = Playbook(
     name="code-fix",
-    token_count=332,
+    token_count=248,
     body="""\
-Прочитай contract, исходный diff и limits; сохрани baseline.
-Найди code, связанный с symptom; сохрани candidates и lines.
-Заморозь tests и evaluator; сохрани diff без их changes.
-Создай minimal reproducer; сохрани command и expected failure.
-Запусти reproducer до patch; сохрани output, exit code и preconditions.
-При пустом result проверь input, version и env; сохрани refined hypothesis.
-Брось hypothesis после двух empty reproductions; получи next candidate.
-Трассируй data и invariants до cause; сохрани root cause.
-Спланируй minimal source patch без смены contract; сохрани scope.
-Не меняй и не ослабляй tests, evaluator, expected-answer; сохрани allowed diff.
-Внеси patch в cause, не symptom; сохрани small diff.
-Повтори reproducer; сохрани исчезновение failure.
-Проверь edge cases и security-invariant; сохрани results.
-Запусти independent test oracle; сохрани external PASS/FAIL.
-Сверь diff с baseline; сохрани отсутствие лишних changes.
-При FAIL отбрось hypothesis и локализуй cause; сохрани next step.
-Заверши при reproducer и external PASS; сохрани status.""",
+Read the contract, the original diff and the limits; save a baseline.
+Find the code tied to the symptom; save candidates and lines.
+Freeze the tests and the evaluator; save a diff without changes to them.
+Build a minimal reproducer; save the command and the expected failure.
+Run the reproducer before the patch; save output, exit code and preconditions.
+On an empty result check input, version and env; save a refined hypothesis.
+Drop a hypothesis after two empty reproductions; get the next candidate.
+Trace data and invariants down to the cause; save the root cause.
+Plan a minimal source patch that leaves the contract alone; save the scope.
+Do not change or weaken tests, evaluator or expected answers; save the allowed diff.
+Patch the cause, not the symptom; save a small diff.
+Repeat the reproducer; save the failure going away.
+Check edge cases and the security invariant; save the results.
+Run an independent test oracle; save the external PASS or FAIL.
+Compare the diff against the baseline; save that no extra changes crept in.
+On FAIL drop the hypothesis and localise the cause; save the next step.
+Finish when the reproducer and the external check both pass; save status.""",
 )
 
 
 FORENSICS = Playbook(
     name="forensics",
-    token_count=342,
+    token_count=260,
     body="""\
-Сохрани артефакты и хеши; получи manifest.
-Инвентаризируй файлы, форматы, хосты, интервалы; получи artifact map.
-Проверь журналы и утилиты; получи available list.
-Не предполагай journalctl, auditd, ausearch; получи «есть/нет».
-Определи timezone, точность и gaps; получи time map.
-Нормализуй timestamps с originals; получи rule.
-Извлеки time, subject, object, action, raw line; получи events.
-Разметь auth, process, network, file, privilege; получи groups.
-Построй source-tagged timeline; получи event order.
-Извлеки IP, account, hash, domain, path, command; получи IOC.
-Коррелируй subject, time, sequence; получи links.
-Проверь link в primary artifact; сохрани evidence.
-Брось hypothesis без двух sources или при time conflict; получи next hypothesis.
-Отдели facts от claims; сохрани alternatives.
-Сверь timeline другим parser или artifact; получи confirm/conflict.
-Укажи IOC type, value, source, interval; получи list.
-Дай claim, evidence, alternatives, confidence; получи conclusion.
-Понизь confidence при gaps, conflict, one source; сохрани reason.
-Проверь artifact reference каждого claim; получи evidence-check.""",
+Save the artifacts and their hashes; get a manifest.
+Inventory files, formats, hosts and intervals; get an artifact map.
+Check the logs and the utilities; get an available list.
+Do not assume journalctl, auditd or ausearch; get a yes or no.
+Determine timezone, precision and gaps; get a time map.
+Normalise timestamps alongside the originals; get a rule.
+Extract time, subject, object, action and the raw line; get events.
+Label auth, process, network, file and privilege; get groups.
+Build a source-tagged timeline; get the event order.
+Extract IP, account, hash, domain, path and command; get IOCs.
+Correlate subject, time and sequence; get links.
+Check a link in the primary artifact; save evidence.
+Drop a hypothesis with fewer than two sources or a time conflict; get the next one.
+Separate facts from claims; save the alternatives.
+Cross-check the timeline with another parser or artifact; get confirm or conflict.
+Give IOC type, value, source and interval; get a list.
+Give claim, evidence, alternatives and confidence; get a conclusion.
+Lower confidence on gaps, conflict or a single source; save the reason.
+Check the artifact reference of every claim; get an evidence check.""",
 )
 
 
 CTF = Playbook(
     name="ctf",
-    token_count=327,
+    token_count=261,
     body="""\
-Инвентаризируй files, services, source, hints и commands; получи surface map.
-Определи type и role каждого object; получи object table.
-Для binary собери strings, headers, arch, protections; получи profile.
-Для service проверь ports, protocol, responses, routes; получи snapshot.
-Прочитай config, source, comments, metadata; получи hints.
-Разметь logic, web, binary, crypto, forensics, misc; получи ranked hypotheses.
-Начни с cheapest reversible hypothesis; сохрани expected signal.
-Проверь config, local data, input validation, logic bypass; сохрани results.
-Сохрани command, input, output попытки; получи journal.
-Сравни response с expected signal; получи verdict.
-Брось hypothesis после двух cheap empty checks; получи next hypothesis.
-Перед complex chain повтори simple-path search; сохрани triage.
-При успехе получи artifact, доказывающий mechanism; сохрани evidence.
-Проверь artifact повторным run, service response или unique match; получи external confirmation.
-Отдели effect от assumptions и decoys; сохрани confirmations.
-Зафиксируй steps, commands, inputs, outputs, conditions; получи reproducible write-up.
-Повтори проверку с clean state, если возможно; получи final PASS/FAIL.""",
+Inventory files, services, source, hints and commands; get a surface map.
+Determine the type and role of every object; get an object table.
+For a binary collect strings, headers, arch and protections; get a profile.
+For a service check ports, protocol, responses and routes; get a snapshot.
+Read config, source, comments and metadata; get hints.
+Label logic, web, binary, crypto, forensics and misc; get ranked hypotheses.
+Start with the cheapest reversible hypothesis; save the expected signal.
+Check config, local data, input validation and logic bypass; save the results.
+Save the command, input and output of the attempt; get a journal.
+Compare the response against the expected signal; get a verdict.
+Drop a hypothesis after two cheap empty checks; get the next one.
+Before a complex chain repeat the simple-path search; save the triage.
+On success get an artifact that proves the mechanism; save evidence.
+Check that artifact with a repeat run, a service response or a unique match; get external confirmation.
+Separate the effect from assumptions and decoys; save the confirmations.
+Record steps, commands, inputs, outputs and conditions; get a reproducible write-up.
+Repeat the check from a clean state where possible; get a final PASS or FAIL.""",
 )
 
 
 GENERAL = Playbook(
     name="general",
-    token_count=340,
+    token_count=181,
     body="""\
-Прочитай задачу и каталог; получи первую гипотезу о результате.
-Не выбирай класс по одному слову; собери больше признаков.
-Найди oracle: тест, сервис, путь, формат ответа.
-При отсутствии oracle ищи его в конфиге или коде рядом.
-Сделай минимальный проверяемый артефакт; сохрани путь.
-Запусти oracle рано, даже на черновике; сохрани exit code.
-Доверяй exit code, не своему чтению результата.
-При провале извлеки причину; уточни гипотезу.
-Брось гипотезу после двух пустых попыток; возьми другую.
-При признаках другого класса смени подход рано.
-Не меняй и не ослабляй tests и evaluator; сохрани allowed diff.
-Держи резерв времени на проверку, не на разведку.
-Оставляй артефакт на диске после каждого шага.
-Проверь инструменты и права раньше догадок.
-Заверши только после внешнего PASS; сохрани status.""",
+Read the task and the directory; get a first hypothesis about the result.
+Do not pick a class from a single word; collect more signals.
+Find an oracle: a test, a service, a path, an answer format.
+With no oracle, look for one in nearby config or code.
+Make a minimal checkable artifact; save its path.
+Run the oracle early, even on a draft; save the exit code.
+Trust the exit code, not your own reading of the result.
+On failure extract the reason; refine the hypothesis.
+Drop a hypothesis after two empty attempts; take another.
+On signs of a different class, change approach early.
+Do not change or weaken tests or evaluator; save the allowed diff.
+Keep the time reserve for checking, not for exploring.
+Leave an artifact on disk after every step.
+Check tools and permissions before guessing.
+Finish only after an external PASS; save status.""",
 )
 """Original text, not third-party-derived like the other four: there is no generic
 generalist skill from which to distil a "no assumptions yet" procedure. Written to
