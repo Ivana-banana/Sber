@@ -317,6 +317,61 @@ def test_a_run_that_never_reached_finish_is_never_reported_as_solved(tmp_path: P
     assert outcome.verdict is not None and outcome.verdict.stage == "unverified"
 
 
+def test_a_verify_command_that_only_reads_the_deliverable_is_refused(tmp_path: Path) -> None:
+    """The two false wins the night reproduced 5/5 each, and the same command both times.
+
+    `mut-greeting-farewell` had to write the four bytes `Ciao`; the model wrote `43616f`
+    and offered `cat /srv/bootstrap/farewell.marker` as its check. `ctf-signed-cookie`
+    offered `cat /app/flag.txt` while its own summary said the proof string had probably
+    not been released. `cat` on a file the finish gate has already found and already
+    called non-empty exits 0 whatever the bytes are, so both runs stopped at a green
+    self-check with two thirds of the budget unspent and scored zero.
+
+    A defect in the shape of the claim, so it is refused where a directory is refused
+    and costs no recovery pass: what the check contains is still `agent.verify`'s.
+    """
+    target = tmp_path / "farewell.marker"
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(target), content="43616f"),
+            action("finish", path=str(target), verify=f"cat {target}", summary="готово"),
+            action("write_file", path=str(target), content="Ciao"),
+            action("finish", path=str(target), verify=f"grep -qx Ciao {target}", summary="готово"),
+        ]
+    )
+    verify = FakeVerify((True, "command", ""))
+    state = make_state(tmp_path)
+
+    outcome = run(state, llm, verify)
+
+    assert [call[1] for call in verify.calls] == [f"grep -qx Ciao {target}"], (
+        "the reading command never reaches the verifier"
+    )
+    assert state.budget.recovery_passes_used == 0, "a check that is not a check is not a red check"
+    assert outcome.solved is True, "the run recovers once it offers a real check"
+
+
+def test_a_verify_command_that_can_fail_is_left_alone(tmp_path: Path) -> None:
+    """The one true win of the night passed `grep -q … && grep -q …`, and every other
+    command the model proposed contained `grep`, `python3` or a comparison. Only a lone
+    reader is refused: rejecting a real check would cost the task the gate exists for.
+    """
+    target = tmp_path / "findings.json"
+    command = f"grep -q sql_injection {target} && grep -q authorize {target}"
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(target), content="sql_injection authorize"),
+            action("finish", path=str(target), verify=command, summary="готово"),
+        ]
+    )
+    verify = FakeVerify((True, "command", ""))
+
+    outcome = run(make_state(tmp_path), llm, verify)
+
+    assert outcome.solved is True
+    assert [call[1] for call in verify.calls] == [command]
+
+
 def test_a_stuck_run_holding_a_readable_file_is_still_a_zero(tmp_path: Path) -> None:
     target = tmp_path / "note.txt"
     target.write_text("something", encoding="utf-8")

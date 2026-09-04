@@ -25,10 +25,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import json
+import shlex
 
 from agent import detectors, limits, prompt, tools
 from agent.playbooks import Playbook
@@ -128,6 +129,12 @@ def run(
 
             assert deliverable is not None
             command = str(act.get("verify", "") or "")
+            refusal = _reads_without_checking(command, deliverable)
+            if refusal:
+                state.record("verify", "refused", refusal)
+                observations.append(f"[step {step}] {refusal}")
+                continue
+
             verify_started = state.start_phase("verify")
             last_verdict = verify(state, deliverable=deliverable, command=command)
             state.finish_phase("verify", verify_started)
@@ -278,6 +285,66 @@ def _deliverable(act: dict[str, Any], state: AgentState) -> tuple[Path | None, s
             f"Назови файл с результатом."
         )
     return candidate, ""
+
+
+READERS = frozenset(
+    {
+        "cat", "head", "tail", "less", "more", "ls", "stat", "file",
+        "wc", "od", "xxd", "hexdump", "strings", "echo",
+    }
+)
+"""Commands whose exit code says the file is readable and nothing else.
+
+Not a security list -- `run_shell` is not confined and this is not where confinement
+lives. It is the set of programs that, pointed at one existing non-empty file, exit 0
+for every possible content, which is exactly the question the finish gate has already
+answered before `verify` is reached.
+"""
+
+
+def _reads_without_checking(command: str, deliverable: Path) -> str:
+    """Refuse a `verify` that cannot fail on a wrong answer. Returns the reason, or "".
+
+    Ten of the fifteen `finish` calls the night's runs made offered `cat <deliverable>`,
+    and the two tasks that reproduced a false win 5/5 each offered exactly that. It
+    passes on any bytes, so the loop stops at a green self-check holding a wrong file --
+    the most expensive class of zero we have, because the run believed it was done and
+    gave back the rest of its budget.
+
+    Deliberately narrow. Anything with a `&&`, a pipe or a second command is left to
+    `agent.verify`: every real check the model wrote had one -- `grep -q … && grep -q …`
+    was the night's only true win -- and refusing a real check costs the task outright,
+    while missing a fake one costs at most what is already being lost.
+    """
+    stripped = command.strip()
+    if not stripped or any(token in stripped for token in ("&&", "||", ";", "|", "\n", "`", "$(")):
+        return ""
+    try:
+        parts = shlex.split(stripped)
+    except ValueError:
+        # An unbalanced quote is not our problem to diagnose; `agent.verify` will run
+        # it and report the shell's own complaint, which is more useful than a guess.
+        return ""
+    if not parts or PurePosixPath(parts[0]).name not in READERS:
+        return ""
+
+    operands = [part for part in parts[1:] if not part.startswith("-")]
+    if any(not _names(operand, deliverable) for operand in operands):
+        # It reads something else as well, so its exit code can depend on more than the
+        # deliverable's existence. Not our case.
+        return ""
+
+    return (
+        f"finish refused: `{stripped}` только читает {deliverable.name} и выходит с нулём "
+        f"при любом содержимом, а существование и непустоту этого файла проверка уже "
+        f"прошла. Дай команду, которая падает, если результат неверный: сравни содержимое "
+        f"с тем, что требует задание (`grep -q`, `diff`, `python3 -c ...`)."
+    )
+
+
+def _names(operand: str, deliverable: Path) -> bool:
+    """Whether an argument refers to the deliverable, absolutely or workspace-relative."""
+    return operand == str(deliverable) or PurePosixPath(operand).name == deliverable.name
 
 
 REQUIRED: dict[str, str] = {
