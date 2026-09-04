@@ -366,8 +366,16 @@ class HttpLlm:
         json_schema 7.9 s -- and the reading was not carried through.
 
         The answer in hand is still used, so this costs no request. And it is not the
-        bet that E036 lost: a server that genuinely serves tool calls returns them in
-        `tool_calls`, `in_content` stays false, and the rung is kept.
+        bet that E036 lost: the ladder still starts on `native_tools`, so a server that
+        only takes `tools` is always offered them first.
+
+        Known and unfixed: `_read_tool_call` documents a fourth dialect -- vLLM or LM
+        Studio failing to parse a call it does serve, leaving it in `content`. That
+        reply is shaped exactly like a server that does not do tool calls at all, so
+        this demotes on it too, and one parser glitch then costs the rung for the rest
+        of the run. Waiting for a second such reply before demoting would tell the two
+        apart, at the price of a second native call on every task of the model we
+        actually measure. Which is cheaper is a measurement nobody has made.
         """
         if in_content:
             self._demote("tool calls arrive in content")
