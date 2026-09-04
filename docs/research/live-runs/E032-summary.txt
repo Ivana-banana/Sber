@@ -1,0 +1,81 @@
+E032 refuse a verify command that cannot fail (BEST LOCAL RESULT: 5/18)
+Date: 2026-09-04 09:20 - 10:03 MSK
+Commit: f406b46 (branch eval/e032-verify-cannot-fail)
+Archive: build/e032-verify-gate.zip sha256=22641c159824cda27bb92603b3920dc61d19889e9d31ed060f785b7f8aa2625e size=65334
+Control: E031 (the accepted S1 factor), same stand, same model, same day.
+Model/runtime: qwen2.5-coder:7b-instruct-q4_K_M dae161e27b0e, n_ctx=4096, temperature 0,
+  network sber-eval, timeout_scale=1.0, AGENT_TIMEOUT_S not passed.
+
+Factor: finish refuses a verify command whose exit code cannot depend on the
+answer. Two shapes, both taken from the logs:
+  1. a lone reader over the deliverable   -- cat /app/flag.txt
+  2. a swallowed failure                  -- grep -q ... && echo PASS || echo FAIL
+Refused where a directory is refused, so it costs no recovery pass.
+
+Commands:
+
+  python3 scripts/build_submission.py --out build/e032-verify-gate.zip
+  python3 scripts/check_submission.py build/e032-verify-gate.zip
+  python3 scripts/eval/run_suite.py --archive build/e032-verify-gate.zip \
+      --model qwen2.5-coder:7b-instruct-q4_K_M \
+      --base-url http://sber-proxy:8000/v1 --api-key ollama \
+      --counter-container sber-proxy --timeout-scale 1.0 \
+      --label E032-verify-gate --out build/eval-E032-verify-gate
+  python3 scripts/eval/summarise.py build/eval-E031-stuck-guarded build/eval-E032-verify-gate
+
+What the three affected tasks did:
+
+  mut-greeting-farewell  offered 'cat /srv/bootstrap/farewell.marker' again, was
+                         refused, kept working, wrote the right bytes, and was
+                         stopped by the S1 guard at stuck on 134.7 s holding it.
+                         reward 1 -- first time outside E022.
+  ctf-signed-cookie      no longer a false win; ran to the 180 s kill, reward 0.
+  audit-hardcoded-token  offered a real check, failed it honestly, ran to kill.
+
+false wins went 3 -> 0. The category is absent from the E032 summary.
+
+Output:
+
+
+=== eval-E031-stuck-guarded ===
+solved      3/18   fix-redirect-scheme mut-audit-query-gate mut-salutation-beacon
+tokens      199550
+wall        2598s (43 min)
+failures    verification 3, timeout 12, - 3
+phase plan  median 93.5% of wall, min 73.8% (mut-fix-session-lookup), max 99.7% (ctf-signed-cookie)
+phase cost  149 plan calls, mean 15.7 s; dearest fix-redirect-scheme at 43.4 s/call
+phase kill  none 4, plan 14; deepest step 14 (ctf-header-override)
+false wins  3: audit-hardcoded-token ctf-signed-cookie mut-greeting-farewell
+
+=== eval-E032-verify-gate ===
+solved      5/18   ctf-header-override fix-redirect-scheme mut-audit-query-gate mut-greeting-farewell mut-salutation-beacon
+tokens      203813
+wall        2608s (43 min)
+failures    reasoning 1, timeout 12, - 5
+phase plan  median 92.9% of wall, min 50.3% (ctf-signed-cookie), max 99.5% (mut-salutation-beacon)
+phase cost  153 plan calls, mean 15.1 s; dearest fix-redirect-scheme at 41.1 s/call
+phase kill  none 4, plan 14; deepest step 14 (mut-audit-query-gate)
+
+=== per task ===
+task                         eval-E031-stuck-guarded  eval-E032-verify-gate
+audit-hardcoded-token          0/verificati       0/timeout
+audit-parser-trust-boundary       0/timeout       0/timeout
+audit-path-normalization          0/timeout       0/timeout
+ctf-duplicate-parameter           0/timeout       0/timeout
+ctf-header-override               0/timeout             1/-
+ctf-signed-cookie              0/verificati       0/timeout
+fix-cache-key-scope               0/timeout       0/timeout
+fix-redirect-scheme                     1/-             1/-
+fix-zip-slip-extract              0/timeout     0/reasoning
+forensics-sharded-exfil           0/timeout       0/timeout
+forensics-ssh-bruteforce          0/timeout       0/timeout
+forensics-webshell-chain          0/timeout       0/timeout
+mut-audit-query-gate                    1/-             1/-
+mut-fix-inventory-filter          0/timeout       0/timeout
+mut-fix-session-lookup            0/timeout       0/timeout
+mut-forensics-egress-ledger       0/timeout       0/timeout
+mut-greeting-farewell          0/verificati             1/-
+mut-salutation-beacon                   1/-             1/-
+
+gained 2: ctf-header-override mut-greeting-farewell
+lost   0: -
