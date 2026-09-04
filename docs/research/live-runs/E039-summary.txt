@@ -1,0 +1,77 @@
+E039 anchored observation history instead of a sliding window (3/18) -- mechanism CONFIRMED
+Date: 2026-09-04 16:26 - 17:10 MSK
+Commit: 8c416e4 (branch eval/e034-prompt-order), tree clean at build time
+Archive: build/e039-anchored-history.zip
+  sha256=36c6cb4d34733d0dc538a0e19e05d03daf76ff146216defc6ffee3305e0824a7 size=68471
+Control: E038 -- same archive minus this one factor.
+Model/runtime: qwen2.5-coder:7b-instruct-q4_K_M, n_ctx=4096, temperature 0,
+  network sber-eval, timeout_scale=1.0, AGENT_TIMEOUT_S not passed.
+
+Factor: agent/prompt.py -- the observation history stops being a sliding window of
+  eight and becomes a character budget with an anchored base. The index of the first
+  observation passed moves only when the history no longer fits in
+  OBSERVATION_BUDGET_CHARS = 8000; one full prefill is paid then and
+  OBSERVATION_RELAY_KEEP = 4 observations are kept. The count in
+  "[N more earlier observations omitted]" is gone, so the text is constant.
+  Prediction written before the run: docs/research/live-runs/E039-prediction.md.
+
+Commands:
+
+  python3 scripts/build_submission.py --out build/e039-anchored-history.zip
+  python3 scripts/check_submission.py build/e039-anchored-history.zip
+  python3 scripts/eval/run_suite.py --archive build/e039-anchored-history.zip \
+      --model qwen2.5-coder:7b-instruct-q4_K_M \
+      --base-url http://sber-proxy:8000/v1 --api-key ollama \
+      --counter-container sber-proxy --timeout-scale 1.0 \
+      --label E039-anchored-history --out build/eval-E039-anchored-history
+  python3 scripts/eval/summarise.py build/eval-E038-unwrap-and-demote build/eval-E039-anchored-history
+  python3 scripts/eval/timing.py    build/eval-E038-unwrap-and-demote build/eval-E039-anchored-history
+
+Numbers (control E038 -> E039):
+
+  solved                  3/18 -> 3/18   gained 0 lost 0, the same three tasks
+  tasks that wrote        13/18 -> 13/18
+  steps 9-12 call, med    31.6 s -> 13.2 s   prediction asked 9-13, refutation >= 18
+  same, normalised        3.62 -> 1.38
+  steps 7+ call, med      17.8 s -> 10.5 s   normalised 2.04 -> 1.10
+  steady 2-6 call, med    8.7 s -> 9.6 s     the stand is 10% slower this hour
+  first plan call, med    37.3 s -> 38.4 s
+  normalised first call   4.29 -> 4.02   prediction asked 4.0-4.6, factor does not touch it
+  plan steps              139 -> 147     prediction asked 150-175
+  endpoint calls          139 -> 145
+  calls per plan step     1.00 -> 0.99
+  tokens                  172547 -> 187428   per call 1241 -> 1293, prediction asked 1350-1600
+  deepest step reached    11 -> 14
+  wall                    2609 s -> 2638 s
+  degrade lines per task  1 -> 1  (step=1, "tool calls arrive in content -> json_schema")
+
+The cliff is gone and the shape of what replaced it is the design working. Per-step
+medians, control first:
+
+  step   7     8     9    10    11    12    13    14
+  E038   8.3  11.1  31.7  28.0  29.4   --    --    --
+  E039   7.8  20.8  18.8  18.9   9.1   9.3   7.6   9.3
+
+E038 pays a diverged prefix on every call from step 9 to the end of the task. E039 pays
+one dear step around 8-10 and returns to the steady rate, which is what "one full
+prefill when the budget overflows" predicts. It is a timing signature, not a logged
+event -- the prompt is not written to the trace -- so it is evidence for the mechanism
+and not a direct observation of the re-base.
+
+Three of six prediction bands were missed, all in the same direction: the run is
+cheaper than predicted. Steps 150-175 got 147, tokens per call 1350-1600 got 1293. The
+history being a budget rather than a window is the reason: most tasks die before 8000
+characters, so they never pay for the longer history at all, and the removed omission
+counter takes a little off every call that used to carry it. The prediction treated the
+budget as if it were always full.
+
+The written criterion is in absolute seconds, which the day's own rule says are not
+comparable between runs hours apart. It survives here only because the drift went the
+wrong way for the factor: steady 2-6 rose 8.7 -> 9.6 s, so a slower stand still gave
+31.6 -> 13.2. Normalised the drop is larger, 3.62 -> 1.38. The next prediction states
+its criterion normalised.
+
+Solved is unchanged and no task moved either way. Nothing about task-solving is claimed
+from this run: what is confirmed is that the per-call cost of a long task stops growing.
+E038's false win on fix-redirect-scheme did not recur, but that task timed out here
+instead of reaching a verdict, so it is not evidence of a repaired class.
