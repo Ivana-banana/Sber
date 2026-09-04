@@ -1,0 +1,78 @@
+E029 repeat of the stuck-as-advice treatment
+Date: 2026-09-04 05:13 - 05:56 MSK
+Archive: build/e028-stuck-advice.zip (identical to E028)
+
+Across both treatment repeats and both control repeats:
+  fix-redirect-scheme    control 0, 0   treatment 1, 1   <- stable gain
+  mut-salutation-beacon  control 1, 1   treatment 0, 0   <- stable loss
+  ctf-header-override    control 1, 1   treatment 0, 1   <- unstable under treatment
+  mut-audit-query-gate   control 1, 1   treatment 1, 1
+
+Output:
+
+
+=== eval-E029-stuck-repeat ===
+solved      3/18   ctf-header-override fix-redirect-scheme mut-audit-query-gate
+tokens      200537
+wall        2663s (44 min)
+failures    reasoning 1, verification 2, timeout 12, - 3
+phase plan  median 94.8% of wall, min 81.7% (mut-fix-session-lookup), max 99.8% (ctf-signed-cookie)
+phase cost  155 plan calls, mean 16.1 s; dearest fix-redirect-scheme at 43.0 s/call
+phase kill  none 4, plan 14; deepest step 16 (mut-salutation-beacon)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+
+=== eval-E024-control-repeat ===
+solved      3/18   ctf-header-override mut-audit-query-gate mut-salutation-beacon
+tokens      192696
+wall        2394s (40 min)
+failures    reasoning 3, verification 2, timeout 10, - 3
+phase plan  median 95.8% of wall, min 73.0% (mut-fix-inventory-filter), max 99.8% (ctf-signed-cookie)
+phase cost  147 plan calls, mean 15.2 s; dearest mut-forensics-egress-ledger at 23.2 s/call
+phase kill  none 7, plan 11; deepest step 12 (mut-audit-query-gate)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+=== eval-E028-stuck-advice ===
+solved      2/18   fix-redirect-scheme mut-audit-query-gate
+tokens      200585
+wall        2662s (44 min)
+failures    reasoning 1, verification 2, timeout 13, - 2
+phase plan  median 94.8% of wall, min 81.5% (mut-fix-session-lookup), max 99.8% (ctf-signed-cookie)
+phase cost  154 plan calls, mean 16.3 s; dearest fix-redirect-scheme at 42.8 s/call
+phase kill  none 4, plan 14; deepest step 16 (mut-salutation-beacon)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+=== eval-E029-stuck-repeat ===
+solved      3/18   ctf-header-override fix-redirect-scheme mut-audit-query-gate
+tokens      200537
+wall        2663s (44 min)
+failures    reasoning 1, verification 2, timeout 12, - 3
+phase plan  median 94.8% of wall, min 81.7% (mut-fix-session-lookup), max 99.8% (ctf-signed-cookie)
+phase cost  155 plan calls, mean 16.1 s; dearest fix-redirect-scheme at 43.0 s/call
+phase kill  none 4, plan 14; deepest step 16 (mut-salutation-beacon)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+=== per task ===
+task                         eval-E024-control-repeat  eval-E028-stuck-advice  eval-E029-stuck-repeat
+audit-hardcoded-token             0/timeout       0/timeout       0/timeout
+audit-parser-trust-boundary       0/timeout       0/timeout       0/timeout
+audit-path-normalization          0/timeout       0/timeout       0/timeout
+ctf-duplicate-parameter           0/timeout       0/timeout       0/timeout
+ctf-header-override                     1/-       0/timeout             1/-
+ctf-signed-cookie              0/verificati    0/verificati    0/verificati
+fix-cache-key-scope             0/reasoning       0/timeout       0/timeout
+fix-redirect-scheme             0/reasoning             1/-             1/-
+fix-zip-slip-extract            0/reasoning     0/reasoning     0/reasoning
+forensics-sharded-exfil           0/timeout       0/timeout       0/timeout
+forensics-ssh-bruteforce          0/timeout       0/timeout       0/timeout
+forensics-webshell-chain          0/timeout       0/timeout       0/timeout
+mut-audit-query-gate                    1/-             1/-             1/-
+mut-fix-inventory-filter          0/timeout       0/timeout       0/timeout
+mut-fix-session-lookup            0/timeout       0/timeout       0/timeout
+mut-forensics-egress-ledger       0/timeout       0/timeout       0/timeout
+mut-greeting-farewell          0/verificati    0/verificati    0/verificati
+mut-salutation-beacon                   1/-       0/timeout       0/timeout
+
+gained 1: fix-redirect-scheme
+lost   1: mut-salutation-beacon
+a regression on any single task blocks the change, whatever the total says
