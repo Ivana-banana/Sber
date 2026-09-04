@@ -12,7 +12,16 @@ import os
 from pathlib import Path
 
 from agent import limits
-from agent.main import EXIT_OK, EXIT_USAGE, build_state, fingerprint, main, resolve_workspace
+from agent.state import Event
+from agent.main import (
+    EXIT_OK,
+    EXIT_USAGE,
+    build_state,
+    emit_phase,
+    fingerprint,
+    main,
+    resolve_workspace,
+)
 from agent.ports import LlmReply
 from tests.stub_llm import StubLlm
 
@@ -502,3 +511,31 @@ def test_the_status_line_is_readable_before_the_process_is_killed(tmp_path: Path
         for conn in accepted:
             conn.close()
         listener.close()
+
+
+def test_a_ladder_demotion_is_printed_and_not_only_recorded(capsys) -> None:
+    """A demotion is the difference between one request per step and two.
+
+    Recorded into the audit and printed nowhere, it made E037's refutation criterion
+    unreadable: no artefact of any run could show whether the rung was still being
+    paid for.
+    """
+    emit_phase(Event(step=1, kind="degrade", name="llm", detail="schema: x -> call style json_schema"))
+
+    assert capsys.readouterr().out == (
+        "agent degrade: step=1 schema: x -> call style json_schema\n"
+    )
+
+
+def test_a_protocol_note_is_bounded_because_the_endpoint_wrote_part_of_it(capsys) -> None:
+    emit_phase(Event(step=2, kind="protocol", name="llm", detail="e" * 400))
+
+    printed = capsys.readouterr().out
+    assert printed == f"agent protocol: step=2 {'e' * 120}\n"
+
+
+def test_events_that_are_neither_timing_nor_protocol_stay_out_of_the_log(capsys) -> None:
+    """`retry` and the tool audit are already visible in the phase line's duration."""
+    emit_phase(Event(step=3, kind="retry", name="llm", detail="attempt 1 failed"))
+
+    assert capsys.readouterr().out == ""

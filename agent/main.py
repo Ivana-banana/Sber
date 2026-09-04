@@ -27,8 +27,30 @@ EXIT_USAGE = 2
 FINGERPRINT_CHARS = 12
 
 
+PROTOCOL_KINDS = frozenset({"degrade", "protocol"})
+"""Event kinds about the request shape, printed alongside the timing telemetry.
+
+They were recorded into the audit and shown to nobody, and that cost an experiment:
+E037 registered "the log must show the envelope being unwrapped" as its refutation
+criterion, and no run of this agent has ever printed such a line. A criterion that
+cannot be read off the artefacts is not a criterion, and a ladder demotion is exactly
+the kind of thing a trace should say out loud -- it is the difference between one
+request per step and two.
+"""
+
+PROTOCOL_DETAIL_CHARS = 120
+"""Bound on the printed detail. `degrade` quotes the endpoint's own complaint, which
+is neither ours to trust nor bounded by us; the events are already redacted."""
+
+
 def emit_phase(event: Event) -> None:
     """Print bounded timing telemetry that remains useful after an outer kill."""
+    if event.kind in PROTOCOL_KINDS:
+        print(
+            f"agent {event.kind}: step={event.step} {event.detail[:PROTOCOL_DETAIL_CHARS]}",
+            flush=True,
+        )
+        return
     if event.kind != "phase":
         return
     print(
