@@ -1,0 +1,56 @@
+E046 repeat of the English resident prompt (2/18) -- the cheap prompt reproduces,
+the third solved task does not
+Date: 2026-09-04 21:20 - 22:04 MSK
+Commit: dedc319 (branch eval/e042-english-prompt); the archive is the E042 file,
+  not rebuilt.
+Archive: build/e042-english-prompt.zip
+  sha256=0e2e707c364af27c7c96d0d12431655125e77b1d8494cd15c2c51f1f329ed95e size=78055
+Control: E042 -- the same file. No factor: this run measures spread.
+Model/runtime: qwen2.5-coder:7b-instruct-q4_K_M, n_ctx=4096, temperature 0,
+  network sber-eval, timeout_scale=1.0.
+Prediction written before the run: docs/research/live-runs/E046-prediction.md.
+
+Numbers (E042 -> E046, control pair E039/E040 in brackets):
+
+  solved              3/18 -> 2/18   [3, 3]   prediction asked 2-5      HIT
+  solved tasks        mut-greeting-farewell, mut-salutation-beacon in both;
+                      the third slot: fix-cache-key-scope in E042, empty in E046
+  tasks that wrote    13/18 -> 14/18 [13, 13] prediction asked 11-15    HIT
+  tokens per call     1156 -> 1103   [1293, 1243] prediction asked 1100-1210  HIT
+  total tokens        177961 -> 138911  (not a criterion, spread 17% on unchanged code)
+  endpoint calls      154 -> 126
+  calls per plan step 0.99 -> 0.98   prediction asked 0.95-1.05         HIT
+  first plan call     30.5 -> 35.8 s
+  steady 2-6 call     9.4 -> 11.2 s   the stand is 19% slower this hour
+  normalised first    3.24 -> 3.21   [4.02, 3.92] prediction asked 2.9-3.6  HIT
+  steps 9-12, med     8.8 -> 10.6 s
+  same, normalised    0.94 -> 0.95   [1.38, 1.44] prediction asked 0.8-1.3   HIT
+  deepest step        15 -> 12
+  wall                2514 -> 2642 s
+  degrade lines       18 tasks x step=1, one each
+  false wins          1 in both: fix-redirect-scheme
+
+No refutation condition fired. Every band was hit.
+
+What the pair of English runs now establishes:
+
+- the token saving is real and reproduces: 1156 and 1103 against 1293 and 1243 on the
+  same suite with the same control archive. That is the second ranking criterion;
+- the normalised timings reproduce to two decimal places (3.24 / 3.21 first call,
+  0.94 / 0.95 late steps) across a 19% swing in the stand's own rate. The normalised
+  first call is the sharpest number this project has: it separates the factor from the
+  hour better than any absolute second.
+
+What it also establishes, against the factor:
+
+- mut-audit-query-gate is solved 2/2 under the Russian resident prompt and 0/2 under
+  the English one. In all four runs it is killed externally at 180 s and in all four it
+  writes findings.json; under English the file is written and the checker rejects it
+  (360 and 370 bytes, sizes in the same range). So the loss is NOT the race against the
+  kill that E042 assumed -- the deliverable exists and is wrong;
+- by the ranking rule, solved comes first and tokens only count at equal solvability.
+  Two English runs give 3 and 2; two control runs give 3 and 3.
+
+Diagnosis is blocked by the harness, not by the evidence: run_suite does not keep the
+task workspace after the container is removed, so the two findings.json files cannot be
+diffed after the fact. Nothing in build/eval-*/ holds the deliverable's content.
