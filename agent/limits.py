@@ -181,27 +181,28 @@ LLM_MAX_ATTEMPTS = 6
 Six because the worst legitimate path is one retry plus three rungs of fallback, and
 a cap that cuts the ladder short would look like an unsupported endpoint."""
 
-DEFAULT_CALL_STYLE = "json_schema"
+DEFAULT_CALL_STYLE = "native_tools"
 """Which request shape we start from.
 
-Was `native_tools`, on the reasoning that the organisers' reference agent registers
-its tools through pydantic-ai with no text fallback, so their endpoint must support
-native function calling. That reasoning is still sound about the *endpoint* and says
-nothing about the *model*, and the model is what answers.
+Not a guess. The organisers' own reference agent builds a pydantic-ai
+`OpenAIChatModel` and registers `bash`, `read_file`, `apply_diff` and `append_file`
+with `@agent.tool`, which is native function calling with no text fallback anywhere
+in it. An evaluation endpoint that did not support native tool calls would score
+their own baseline zero on every task, so the endpoint supports them.
 
-Measured, and it is not close. In all 36 task runs of E033 and E034 the first reply
-came back as `{"name": "list_dir", "arguments": {...}}` written as prose: the function
-shape, naming the tool it wants rather than calling the one function the request
-offered. `agent.llm` salvages the JSON and then rejects it, because `ACTION_SCHEMA`
-requires a `tool` key, so the rung fails 36 times out of 36 and the ladder asks again.
-On the stand the pair costs 21.6 s against 7.9 s for `json_schema` alone, and it is
-spent inside the first step of every task, the step that already costs 39-49 s
-(`scripts/eval/bench_first_call.py`).
+Deliberately a constant and not a run-time probe: the evaluated model is the same for
+all fifteen tasks, so probing on every run would pay for the same answer fifteen
+times in tokens, which is the second ranking criterion. Lazy fallback in `agent.llm`
+covers the case where this reasoning is wrong.
 
-Starting one rung down is not a bet against native tools: the ladder is unchanged, so
-an endpoint that rejects `response_format` demotes exactly as it always did, at the
-same price as today's wasted rung. What is given up is the native path on a *future*
-model that would have used it, and that model is not the one being evaluated.
+Briefly changed to `json_schema` on 04.09 and changed back the same hour. The measured
+defect was real -- the rung failed 36 times out of 36 and cost every task a second
+request -- but the cure was wrong: `LADDER` only ever moves down, so starting one rung
+lower makes `native_tools` unreachable for the whole run. On an endpoint that accepts
+`tools` and rejects `response_format` -- the configuration the organisers' baseline
+actually documents -- the agent would spend three requests falling to `text` and never
+try the one shape that works. The defect is fixed where it belongs, in
+`agent.llm._unwrap_function_envelope`, which reads the reply this model really sends.
 """
 
 # --- Where the task lives ----------------------------------------------------

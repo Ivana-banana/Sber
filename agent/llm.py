@@ -225,6 +225,48 @@ def _first_message(payload: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _unwrap_function_envelope(value: Any, schema: dict[str, Any]) -> dict[str, Any] | None:
+    """A function call written as prose, mapped onto the action schema. None if it isn't one.
+
+    Measured, not imagined: in all 36 task runs of E033 and E034 the first reply of a
+    task came back as `{"name": "list_dir", "arguments": {"path": "/app"}}` in
+    `content` -- the OpenAI function shape, but naming the tool the model wants instead
+    of the one function the request offers. The salvaged JSON then failed the schema on
+    a missing `tool` key, the rung was declared unsupported and the same question was
+    asked again one rung down. Two requests for the first action of every task, inside
+    the step that already costs 39-49 s; benched at 21.6 s against 7.9 s
+    (`scripts/eval/bench_first_call.py`).
+
+    This is the fourth dialect of the decision of 25.08 that accepts a tool call stuck
+    in `content`, and it is read off the schema rather than told about it: either the
+    arguments are the action, or some required key of the schema takes an enum that the
+    function name belongs to and the name is that key's value. Nothing here knows that
+    the key is called `tool`.
+
+    A reply that does not fit is left alone, so a genuinely malformed answer still
+    costs a rung exactly as before.
+    """
+    if not isinstance(value, dict) or set(value) - {"name", "arguments"}:
+        return None
+    name = value.get("name")
+    arguments = value.get("arguments")
+    if not isinstance(name, str) or not isinstance(arguments, dict):
+        return None
+
+    if validate_against_schema(arguments, schema) is None:
+        return arguments
+
+    properties = schema.get("properties")
+    properties = properties if isinstance(properties, dict) else {}
+    for key in schema.get("required", []):
+        allowed = (properties.get(key) or {}).get("enum")
+        if isinstance(allowed, list) and name in allowed:
+            candidate = {key: name, **arguments}
+            if validate_against_schema(candidate, schema) is None:
+                return candidate
+    return None
+
+
 def _salvage_json(text: str) -> str | None:
     """Pull the outermost JSON object out of prose.
 
@@ -464,7 +506,11 @@ class HttpLlm:
 
         reason = validate_against_schema(parsed, dict(schema))
         if reason is not None:
-            return None, f"schema: {reason}"
+            unwrapped = _unwrap_function_envelope(parsed, dict(schema))
+            if unwrapped is None:
+                return None, f"schema: {reason}"
+            self._note("protocol", "function envelope in content, unwrapped")
+            return json.dumps(unwrapped), ""
 
         return content, ""
 

@@ -21,6 +21,16 @@ SCHEMA: dict[str, object] = {
     "required": ["action"],
 }
 
+ACTION_LIKE: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "tool": {"type": "string", "enum": ["list_dir", "read_range"]},
+        "path": {"type": "string"},
+    },
+    "required": ["tool"],
+}
+"""`agent.prompt.ACTION_SCHEMA` in miniature: one enum key that names the action."""
+
 
 def chat_reply(content: str, *, usage: bool = True) -> bytes:
     payload: dict[str, object] = {"choices": [{"message": {"content": content}}]}
@@ -165,18 +175,64 @@ def test_plain_completion_never_requests_a_response_format() -> None:
     assert "tools" not in endpoint.bodies[0]
 
 
-def test_a_fresh_run_starts_on_the_rung_this_model_answers() -> None:
-    """Measured on the stand: the native rung is a wasted request on every task.
+def test_a_function_envelope_in_content_costs_no_rung() -> None:
+    """The reply this model really sends, measured 36 times out of 36.
 
-    In all 36 task runs of E033 and E034 the first reply came back as
-    `{"name": "list_dir", "arguments": {...}}` written as prose -- the function shape,
-    naming the tool it wants instead of calling the one function the request offered.
-    `_read_reply` salvages the JSON and `validate_against_schema` then rejects it,
-    because `ACTION_SCHEMA` requires a `tool` key. The ladder demotes and asks again.
-    Benched at 21.6 s for the pair against 7.9 s for `json_schema` alone, inside the
-    step that already costs 39-49 s (`scripts/eval/bench_first_call.py`).
+    `{"name": "list_dir", "arguments": {...}}` in `content`: the OpenAI function shape,
+    naming the tool it wants instead of the one function the request offered. Salvaged
+    and then refused on a missing `tool` key, it cost a second request for the first
+    action of every task, inside the step that already costs 39-49 s.
     """
-    endpoint = FakeEndpoint(responses=[(200, chat_reply('{"action":"ls"}'))])
+    envelope = '{"name": "list_dir", "arguments": {"path": "/app"}}'
+    client, endpoint, events = make_client([(200, chat_reply(envelope))])
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert json.loads(result.text) == {"tool": "list_dir", "path": "/app"}
+    assert len(endpoint.bodies) == 1, "a usable answer must not cost a request"
+    assert client.style == llm.NATIVE_TOOLS, "nor a rung"
+    assert [detail for _, detail in events] == [
+        "tool call arrived in content, not tool_calls",
+        "function envelope in content, unwrapped",
+    ], "two facts, both worth seeing in a trace: where the call arrived and what it was"
+
+
+def test_an_envelope_naming_the_offered_function_unwraps_to_its_arguments() -> None:
+    """A model that does call `emit_action`, but in prose rather than in `tool_calls`."""
+    envelope = '{"name": "emit_action", "arguments": {"tool": "list_dir", "path": "/app"}}'
+    client, _, _ = make_client([(200, chat_reply(envelope))])
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert json.loads(result.text) == {"tool": "list_dir", "path": "/app"}
+
+
+def test_an_envelope_naming_nothing_the_schema_knows_still_costs_a_rung() -> None:
+    """The repair reads the schema; it does not invent a way to accept any object."""
+    envelope = '{"name": "sudo_rm", "arguments": {"path": "/"}}'
+    client, endpoint, _ = make_client(
+        [(200, chat_reply(envelope)), (200, chat_reply('{"tool": "list_dir"}'))]
+    )
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert client.style == llm.JSON_SCHEMA
+    assert len(endpoint.bodies) == 2
+
+
+def test_an_endpoint_that_only_takes_tools_is_still_reachable() -> None:
+    """Why the starting rung stays `native_tools`.
+
+    The organisers' reference agent registers its tools through pydantic-ai and has no
+    text path at all, so an endpoint shaped like theirs may well reject
+    `response_format` and accept `tools`. `LADDER` only ever moves down: start one rung
+    lower and that endpoint is never offered the shape it accepts, and the run spends
+    three requests reaching `text` instead of one reaching an action.
+    """
+    endpoint = FakeEndpoint(responses=[(200, tool_reply('{"action":"ls"}'))])
     client = llm.HttpLlm(
         settings=llm.LlmSettings.from_env(ENV),
         transport=endpoint,
@@ -184,11 +240,11 @@ def test_a_fresh_run_starts_on_the_rung_this_model_answers() -> None:
         on_event=lambda *_: None,
     )
 
-    client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
 
-    assert len(endpoint.bodies) == 1, "a fresh run must not spend a call on a rung"
-    assert "tools" not in endpoint.bodies[0]
-    assert endpoint.bodies[0]["response_format"]["type"] == "json_schema"
+    assert isinstance(result, LlmReply)
+    assert "tools" in endpoint.bodies[0], "a fresh run must offer the native shape first"
+    assert len(endpoint.bodies) == 1
 
 
 # --- the ladder -------------------------------------------------------------
