@@ -38,13 +38,28 @@ PROMPT = [{"role": "user", "content": "Return the word ok as the answer field."}
 
 
 def probe_one(settings: llm.LlmSettings, style: str, timeout_s: float) -> tuple[bool, str]:
-    """Try exactly one style. Fallback is off: we want the truth about this rung."""
-    client = llm.HttpLlm(settings=settings, style=style, allow_fallback=False)
+    """Try exactly one style. Fallback is off: we want the truth about this rung.
+
+    A `native_tools` answer can arrive two ways: in `tool_calls`, which is the rung
+    working, or in `content`, which is the model writing a call the server did not
+    parse. Both give a usable reply, so both read as PASS unless the events are
+    watched -- and the whole point of the probe is to tell them apart.
+    """
+    events: list[str] = []
+    client = llm.HttpLlm(
+        settings=settings,
+        style=style,
+        allow_fallback=False,
+        on_event=lambda kind, detail: events.append(detail),
+    )
     result = client.complete_structured(
         PROMPT, schema=SCHEMA, max_output_tokens=64, timeout_s=timeout_s
     )
     if isinstance(result, LlmReply):
-        return True, f"ok, {result.input_tokens}+{result.output_tokens} tokens"
+        detail = f"ok, {result.input_tokens}+{result.output_tokens} tokens"
+        if any("arrived in content" in event for event in events):
+            detail += "; call arrived in content, not tool_calls"
+        return True, detail
     if isinstance(result, LlmError):
         return False, result.reason
     return False, "unknown result type"
@@ -66,18 +81,24 @@ def main() -> int:
 
     print(json.dumps(settings.sanitized_summary(), indent=2))
 
-    supported: list[str] = []
+    supported: list[tuple[str, str]] = []
     for style in llm.LADDER:
         ok, detail = probe_one(settings, style, args.timeout)
         print(f"{'PASS' if ok else 'FAIL'}  {style:<13} {detail}")
         if ok:
-            supported.append(style)
+            supported.append((style, detail))
 
     if not supported:
         print("\nno request shape worked; the endpoint or the model is the problem")
         return 1
 
-    print(f"\nset limits.DEFAULT_CALL_STYLE = {supported[0]!r}")
+    best, detail = supported[0]
+    print(f"\nset limits.DEFAULT_CALL_STYLE = {best!r}")
+    if "arrived in content" in detail:
+        print(
+            "but this rung passed on a call salvaged from content: the server offered "
+            "tools and did not parse the answer as one. The agent demotes on that reply."
+        )
     print("record this run in docs/experiments.md with the model name before relying on it")
     return 0
 

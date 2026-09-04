@@ -580,6 +580,11 @@ def test_a_tool_call_stranded_in_content_is_recovered() -> None:
     assert isinstance(result, LlmReply)
     assert json.loads(result.text) == {"action": "ls"}
     assert any(kind == "protocol" for kind, _ in events)
+    assert client.style == llm.JSON_SCHEMA, (
+        "the reply is shaped like a server that does not do tool calls, and the rung "
+        "is left on it. That is the accepted cost of telling a parser glitch from a "
+        "server without tools: see docs/decisions.md"
+    )
 
 
 def test_several_tool_calls_are_recorded_not_silently_dropped() -> None:

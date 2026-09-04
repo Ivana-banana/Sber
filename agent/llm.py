@@ -369,13 +369,16 @@ class HttpLlm:
         bet that E036 lost: the ladder still starts on `native_tools`, so a server that
         only takes `tools` is always offered them first.
 
-        Known and unfixed: `_read_tool_call` documents a fourth dialect -- vLLM or LM
+        Weighed and kept: `_read_tool_call` documents a fourth dialect -- vLLM or LM
         Studio failing to parse a call it does serve, leaving it in `content`. That
         reply is shaped exactly like a server that does not do tool calls at all, so
-        this demotes on it too, and one parser glitch then costs the rung for the rest
-        of the run. Waiting for a second such reply before demoting would tell the two
-        apart, at the price of a second native call on every task of the model we
-        actually measure. Which is cheaper is a measurement nobody has made.
+        this demotes on it too, and one parser glitch costs the rung for the rest of
+        the run. Waiting for a second such reply would tell the two apart and cost a
+        second native call on every task: 16.1 s against 7.9 on the stand, where the
+        rung has never once answered in `tool_calls` and the demotion is therefore
+        always right. A wrong demotion lands on `json_schema`, which is constrained by
+        the same schema, and the ladder keeps descending if that fails too. See
+        `docs/decisions.md`, 2026-09-04.
         """
         if in_content:
             self._demote("tool calls arrive in content")
