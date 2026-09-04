@@ -201,12 +201,22 @@ def run(
 
         signal = detectors.stuck(state)
         if signal is not None:
-            # Advice, not an ending. E024 measured what ending costs: four of eighteen
-            # runs quit as `stuck` with a third to a half of the budget unspent, and
-            # two of the three *solved* tasks were among them -- their verifier was
-            # already satisfied while the loop was calling them stuck. A detector that
-            # can end a winning run has to hand the model its observation instead.
             state.record("budget", signal.name, signal.detail)
+            if state.artifacts:
+                # Circling with something to lose. E028/E029 removed this stop
+                # unconditionally and measured both halves of the trade: without it
+                # `fix-redirect-scheme` was gained twice, and `mut-salutation-beacon`
+                # was lost twice because the run spent its remaining steps rewriting a
+                # file whose verifier was already green. The run has no oracle telling
+                # it which version was the good one, so the only version it can protect
+                # is the one on disk right now.
+                stop_reason = "stuck"
+                summary = signal.detail
+                break
+            # Nothing written yet, so there is nothing to protect and ending is a
+            # certain zero: `_finalise` has no deliverable to name. E024's
+            # `fix-redirect-scheme` quit here after 67.5 s of 180 s without a single
+            # write. Hand the model the observation and let the clock do the ending.
             observations.append(
                 f"[step {step}] похоже, ты ходишь по кругу: {signal.detail}. "
                 f"Смени подход или проверь другую гипотезу."

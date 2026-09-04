@@ -11,8 +11,9 @@ Two different answers come out of this module, and collapsing them would be wron
 * `blocked` refuses **one action** before it runs and hands the reason back to the
   model. A repeated broken command is usually a misread error message, and the
   cheapest correction is saying so while there is still budget.
-* `stuck` ends the **loop** and sends it to finalisation. Once the history has the
-  shape of a cycle, more steps buy tokens and nothing else.
+* `stuck` reports that the **history** has the shape of a cycle. What that costs
+  depends on whether a deliverable exists yet, so the loop and not this module decides
+  between ending the run and handing the model the observation.
 
 The thresholds live in `agent.limits`. Two of them are OpenHands defaults read from
 their source; the other two are starting values and are documented as such. Nothing

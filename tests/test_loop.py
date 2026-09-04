@@ -326,7 +326,7 @@ def test_a_stuck_run_holding_a_readable_file_is_still_a_zero(tmp_path: Path) -> 
 
     outcome = run(state, llm, FakeVerify((True, "unverified", "")))
 
-    assert outcome.stop_reason in {"steps", "budget"}
+    assert outcome.stop_reason == "stuck"
     assert outcome.solved is False
 
 
@@ -524,12 +524,14 @@ def test_finish_pointing_at_a_directory_is_refused_by_the_gate(tmp_path: Path) -
     assert any("directory" in text for text in outcome.observations)
 
 
-def test_a_stuck_signal_becomes_advice_rather_than_an_ending(tmp_path: Path) -> None:
+def test_a_stuck_signal_with_nothing_on_disk_is_advice_rather_than_an_ending(
+    tmp_path: Path,
+) -> None:
     """E024 measured what stopping costs: four runs quit with half the budget unused.
 
-    `fix-redirect-scheme` stopped after 67.5 s of a 180 s budget, and two of the three
-    solved tasks stopped as `stuck` while their verifier had already been satisfied --
-    the detector was ending runs that still had both time and a real chance.
+    `fix-redirect-scheme` stopped after 67.5 s of a 180 s budget having written no file
+    at all -- its trace is six `read_range` calls and nothing else. A run in that state
+    has no deliverable to protect, so ending it converts a maybe into a certain zero.
     """
     repeated = action("list_dir", path=str(tmp_path))
     llm = StubLlm(replies=[repeated for _ in range(limits.NO_PROGRESS_STOP + 3)])
@@ -538,3 +540,28 @@ def test_a_stuck_signal_becomes_advice_rather_than_an_ending(tmp_path: Path) -> 
 
     assert outcome.stop_reason != "stuck"
     assert any("по кругу" in text for text in outcome.observations)
+
+
+def test_a_stuck_signal_ends_the_run_once_a_deliverable_exists(tmp_path: Path) -> None:
+    """The other half of E028, and the more expensive one.
+
+    `mut-salutation-beacon` and `ctf-header-override` both wrote a deliverable their
+    verifier was already satisfied with, then circled. E024 stopped them there and
+    scored 1 twice; E028/E029 let them run on and each spent its remaining steps
+    rewriting the file it had already got right, twice scoring 0. Circling with
+    something to lose is the one case where stopping is the cheaper move.
+    """
+    target = tmp_path / "answer.txt"
+    repeated = action("list_dir", path=str(tmp_path))
+    llm = StubLlm(
+        replies=[action("write_file", path=str(target), content="earned")]
+        + [repeated for _ in range(limits.NO_PROGRESS_STOP + 3)]
+    )
+    state = make_state(tmp_path)
+
+    outcome = run(state, llm, FakeVerify())
+
+    assert outcome.stop_reason == "stuck"
+    assert outcome.deliverable == target
+    assert target.read_text(encoding="utf-8") == "earned", "the earned file is left alone"
+    assert outcome.solved is False, "a detector never proves a task, only a verifier does"
