@@ -113,6 +113,12 @@ def summarise(label: str, rows: list[dict[str, str]]) -> None:
     wall = sum(float(row["wall_s"]) for row in rows)
     print(f"\n=== {label} ===")
     print(f"solved      {len(solved)}/{len(rows)}   {' '.join(r['task'] for r in solved) or '-'}")
+    wrote = [row for row in rows if row.get("wrote") == "yes"]
+    if any(row.get("wrote", "-") != "-" for row in rows):
+        # Second gate, and E037 is why it exists. That run held solved at 2/18 while
+        # the tasks leaving any deliverable fell from 14 of 18 to 3 -- the two solved
+        # ones are short and survived a collapse that took eleven others.
+        print(f"wrote       {len(wrote)}/{len(rows)}")
     print(f"tokens      {tokens}")
     print(f"wall        {wall:.0f}s ({wall / 60:.0f} min)")
 

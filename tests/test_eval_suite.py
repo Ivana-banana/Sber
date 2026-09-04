@@ -88,6 +88,33 @@ def test_the_breakdown_renders_seconds_and_call_counts_in_phase_order() -> None:
     )
 
 
+def test_the_table_says_whether_a_run_ever_wrote_anything(tmp_path: Path) -> None:
+    """The second gate. E037 kept solved at 2/18 while deliverables fell 14 -> 3."""
+    rows = [
+        TaskResult(
+            task="t1", repeat=1, reward=0, agent_exit=124, wall_s=95.1, tokens=None,
+            steps=None, stop_reason="killed", solved_claim="-", workspace="/app",
+            failure_mode="timeout", wrote="yes",
+        ),
+        TaskResult(
+            task="t2", repeat=1, reward=0, agent_exit=124, wall_s=95.1, tokens=None,
+            steps=None, stop_reason="killed", solved_claim="-", workspace="/app",
+            failure_mode="timeout", wrote="no",
+        ),
+    ]
+    suite = SuiteResult(
+        label="test", model="stub", base_url="http://127.0.0.1:8000/v1",
+        timeout_scale=1.0, started="2026-09-03T00:00:00", rows=rows,
+    )
+
+    write_report(tmp_path, suite)
+
+    lines = (tmp_path / "results.tsv").read_text(encoding="utf-8").splitlines()
+    header = lines[0].split("\t")
+    column = header.index("wrote")
+    assert [line.split("\t")[column] for line in lines[1:]] == ["yes", "no"]
+
+
 def test_the_results_table_carries_the_breakdown_for_every_row(tmp_path: Path) -> None:
     """A per-task breakdown that only exists in a log is a manual grep, not a metric."""
     row = TaskResult(

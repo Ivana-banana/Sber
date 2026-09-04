@@ -66,6 +66,9 @@ DONE_LINE = re.compile(
     r"recovery=(?P<recovery>\d+) tokens=(?P<tokens>\d+)"
 )
 READY_LINE = re.compile(r"agent ready: workspace=(?P<workspace>\S+) \((?P<why>[^)]*)\)")
+WRITE_CALL = re.compile(r'"tool"\s*:\s*"write_file"')
+"""A write in the trace. Read from the exchanges rather than the agent's last line,
+because a killed run never prints a last line and most runs here are killed."""
 PHASE_LINE = re.compile(
     r"agent phase: step=(?P<step>\d+) phase=(?P<phase>\w+) "
     r"status=(?P<status>start|end) duration_s=(?P<duration>[0-9.]+)"
@@ -176,6 +179,15 @@ class TaskResult:
     endpoint_late: int | None = None
     """Replies that arrived after their task was killed. Non-zero means the previous
     task outlived its deadline at the endpoint, not that this one misbehaved."""
+
+    wrote: str = "-"
+    """Whether the run ever asked for a `write_file`.
+
+    A separate gate from `reward`, and E037 is why. That run kept solved at 2/18 while
+    the tasks leaving any deliverable fell from 14 of 18 to 3: the two solved tasks are
+    short ones and survived a collapse that took eleven others. Solved alone did not
+    show it.
+    """
 
     phases: str = "-"
     """Rendered `PhaseBreakdown`: where the wall clock went, per task and per repeat."""
@@ -441,6 +453,14 @@ class Runner:
 
             trace = self.counter_call("/__exchanges", "GET")
             if trace and trace.get("exchanges"):
+                base.wrote = (
+                    "yes"
+                    if any(
+                        WRITE_CALL.search(str(item.get("content") or ""))
+                        for item in trace["exchanges"]
+                    )
+                    else "no"
+                )
                 (self.logs / f"{spec.name}.r{repeat}.trace").write_text(
                     "\n".join(
                         f"--- call {item.get('call')} ---\n"
@@ -472,7 +492,7 @@ def write_report(out: Path, suite: SuiteResult) -> None:
     )
     lines = [
         "task\trepeat\treward\ttokens\tep_tokens\tep_calls\tep_late\twall_s\tsteps\tstop\t"
-        "claim\tfailure\tphases\tnote"
+        "claim\twrote\tfailure\tphases\tnote"
     ]
     for row in suite.rows:
         lines.append(
@@ -487,7 +507,8 @@ def write_report(out: Path, suite: SuiteResult) -> None:
                     "?" if row.endpoint_late is None else row.endpoint_late,
                     row.wall_s,
                     "?" if row.steps is None else row.steps,
-                    row.stop_reason, row.solved_claim, row.failure_mode, row.phases, row.note,
+                    row.stop_reason, row.solved_claim, row.wrote, row.failure_mode,
+                    row.phases, row.note,
                 )
             )
         )
