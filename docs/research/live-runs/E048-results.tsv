@@ -1,0 +1,7 @@
+task	repeat	reward	tokens	ep_tokens	ep_calls	ep_late	wall_s	steps	stop	claim	wrote	failure	phases	note
+bye-file	1	1	8843	8843	8	0	62.5	8	stuck	False	no	-	inspect=0.005/1 plan=61.975/8 act=0.027/7 verify=0.001/1	
+find-sqli-login	1	0	55307	57308	28	0	110.9	28	stuck	False	yes	reasoning	inspect=0.006/1 plan=110.452/28 act=0.013/27 verify=0.000/1	
+fix-sqli-login	1	0	50551	52298	26	0	168.7	26	stuck	False	yes	reasoning	inspect=0.005/1 plan=168.222/26 act=0.037/25 verify=0.000/1	
+fix-sqli-search	1	0	50220	52170	26	0	169.2	26	stuck	False	yes	reasoning	inspect=0.005/1 plan=168.636/26 act=0.048/25 verify=0.001/1	
+hello-file	1	1	8830	8830	8	0	35.7	8	stuck	False	no	-	inspect=0.004/1 plan=35.220/8 act=0.042/7 verify=0.001/1	
+incident-log-forensics	1	0	57471	60403	24	0	208.5	24	stuck	False	yes	reasoning	inspect=0.006/1 plan=207.914/24 act=0.019/22 verify=0.001/1	
