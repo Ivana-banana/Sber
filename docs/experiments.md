@@ -2098,6 +2098,57 @@ task image не запускался, solved count не менялся.
   `audit-path-normalization` строже собственной инструкции (формат `location` в тексте
   не задан), поэтому подгонка под него была бы хардкодом под public case.
 
+### E045 — macro на полной сюите, прерван на 13/18
+
+- Date/time (MSK): 2026-09-04
+- Commit / dirty state: `3fd6bb9`, worktree чистый
+- Model: `qwen2.5-coder:7b-instruct-q4_K_M` через `sber-proxy`
+- Hypothesis: единственный изменённый фактор — `AGENT_CONTROLLER=macro` против control
+  E040 (`loop`) на том же архиве `build/e044-macro.zip` (sha256 `47b631f0ec09634c…`).
+  Проверялось предзарегистрированное условие переключения умолчания: три стабильные
+  задачи control остаются решёнными **и** суммарные токены ниже control.
+- Command:
+  `python3 scripts/eval/run_suite.py --archive build/e044-macro.zip --model qwen2.5-coder:7b-instruct-q4_K_M --base-url http://sber-proxy:8000/v1 --api-key ollama --counter-container sber-proxy --timeout-scale 1.0 --controller macro --label E045-macro-full --out build/eval-E045-macro-full`
+- Raw log: `build/e045-macro-run.log`, SHA-256 `21463abedf9802d0…`
+- Прогон **остановлен вручную на 13-й задаче из 18** (нагрузка на машину). Оставшиеся
+  пять — `mut-fix-inventory-filter`, `mut-fix-session-lookup`, `mut-forensics-egress-ledger`,
+  `mut-greeting-farewell`, `mut-salutation-beacon` — не выполнялись.
+- Result: **0/13 решено**, 7 804 токена.
+
+| stop | задач | задачи |
+|---|---|---|
+| `verify-failed` (reasoning) | 5 | `audit-hardcoded-token`, `ctf-header-override`, `ctf-signed-cookie`, `fix-zip-slip-extract`, `mut-audit-query-gate` |
+| `llm-unusable` (endpoint) | 4 | `audit-path-normalization`, `fix-redirect-scheme`, `forensics-ssh-bruteforce`, `forensics-webshell-chain` |
+| `killed` (timeout) | 4 | `audit-parser-trust-boundary`, `ctf-duplicate-parameter`, `fix-cache-key-scope`, `forensics-sharded-exfil` |
+
+- Решение по гейту принято до конца прогона и не зависит от неисполненных задач:
+  `mut-audit-query-gate` — одна из трёх задач, которые control решает стабильно, — под
+  macro дала reward 0 (`verify-failed`, 1 909 токенов). Предзарегистрированное условие
+  прямо запрещает переключение при потере хотя бы одной из трёх. **`DEFAULT_CONTROLLER`
+  остаётся `loop`**, macro остаётся opt-in через `AGENT_CONTROLLER`.
+- Два новых наблюдения, которых пятизадачный пилот E044 не мог показать:
+  1. **Четыре задачи имеют внешний kill 95 с** (`[agent] timeout_sec = 95.0` в
+     `task.toml`), тогда как `MACRO_TOTAL_S = 170` даёт дедлайн 165 с. Агент внешнего
+     числа не видит (в логе всегда `budget=600s`), а первый вызов стоит 57–110 с, так
+     что до kill macro физически не успевает ничего положить на диск. Это не
+     стохастика, а следствие константы: четыре гарантированных нуля. Понижение
+     константы до 85 с не помогает — E043 измерил, что вызов к 73 с не возвращается.
+  2. **Под длинным последовательным прогоном эндпоинт медленнее**, чем на пилоте: в
+     E044 те же задачи получали ответ за 85 с, здесь четыре вызова упёрлись в
+     `LLM_TIMEOUT_S = 120` с нулём токенов. Macro это бьёт сильнее control: у loop к
+     120-й секунде уже есть ранние шаги на диске, у macro — ничего.
+- Conclusion: macro дешевле control примерно на порядок по токенам, но по первому
+  критерию ранжирования проигрывает — теряет ранее стабильно решаемую задачу и
+  добавляет два класса отказов (`killed`, `llm-unusable`), которых у control нет.
+  Экономия токенов засчитывается только при равной решаемости, поэтому внедрение
+  умолчанием не оправдано. По букве плана следующий шаг — абляция текущего ReAct:
+  передавать следующему запросу точный предыдущий action вместе с observation.
+- Limitations: один прогон, 13 из 18 задач, без повторов, поэтому «0/13» — не оценка
+  стабильной решаемости, а достаточное свидетельство против переключения умолчания.
+  Пять невыполненных задач включают две из трёх стабильных, так что полная картина
+  macro по сюите остаётся неизмеренной. Локальные фикстуры не доказывают переносимость
+  на закрытый набор.
+
 ## Карточка эксперимента
 
 Для значимого прогона добавить под таблицами:
