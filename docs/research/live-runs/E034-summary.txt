@@ -1,0 +1,66 @@
+E034 system prompt block order: shared blocks first, per-task blocks last (2/18)
+Date: 2026-09-04 11:43 - 12:27 MSK
+Commit: 9b53e01 (branch eval/e034-prompt-order)
+Archive: build/e034-prompt-order.zip
+  sha256=9bd1688ac095f79d3d958c908d23f9bfbae62dc38ca3f913b06271143079a0fc size=65750
+Control: E033 -- same stand, same model, same day, one factor apart.
+Model/runtime: qwen2.5-coder:7b-instruct-q4_K_M dae161e27b0e, n_ctx=4096, temperature 0,
+  network sber-eval, timeout_scale=1.0, AGENT_TIMEOUT_S not passed.
+
+Factor: agent/prompt.py build_system() emits skeleton -> playbook -> brief -> instruction
+  instead of skeleton -> instruction -> brief -> playbook. No word of the prompt changed,
+  token count unchanged. Verified inside the shipped archive, not only in the tree.
+  Prediction written before the run: docs/research/live-runs/E034-prediction.md.
+
+Commands:
+
+  python3 scripts/build_submission.py --out build/e034-prompt-order.zip
+  python3 scripts/check_submission.py build/e034-prompt-order.zip
+  python3 scripts/eval/run_suite.py --archive build/e034-prompt-order.zip \
+      --model qwen2.5-coder:7b-instruct-q4_K_M \
+      --base-url http://sber-proxy:8000/v1 --api-key ollama \
+      --counter-container sber-proxy --timeout-scale 1.0 \
+      --label E034-prompt-order --out build/eval-E034-prompt-order
+  python3 scripts/eval/summarise.py build/eval-E033-repeat build/eval-E034-prompt-order
+  python3 scripts/eval/timing.py    build/eval-E033-repeat build/eval-E034-prompt-order
+
+Numbers (control E033 -> E034):
+
+  solved                2/18 -> 2/18   same two tasks, gained 0 lost 0
+  tokens                204577 -> 184936   (-9.6%)
+  endpoint calls        172 -> 153     tokens per call 1189 -> 1209 (+1.6%)
+  wall                  2567 s -> 2622 s
+  plan calls            156 -> 138
+  first plan call, med  39.2 s -> 48.7 s   prediction asked for 30-33 s
+  later plan calls, med 8.0 s -> 9.1 s     E020-E033 range 7.6-8.6 s
+  first/later ratio     4.92 -> 5.34       E020-E033 range 4.57-5.79
+  time to first write   107.6 s -> 108.3 s (call==step variant 128.1 -> 129.7)
+  false wins            1 -> 2
+
+The later-call median is what decides this run. Every call after the first re-sends a
+prefix the server already holds, and the system block sits in front of the observation
+history under both orders, so a second call's prefix is byte-identical whichever order
+build_system() used. Block order cannot move it. It moved by +14%, and thirteen earlier
+runs held it inside a one-second band. The stand was slower for those 44 minutes, and
+the first call was measured through that slowdown.
+
+Bench numbers that motivated the factor, measured 04.09 before the run:
+  prefill ~29 ms per uncached token, decode 6.2 tok/s, repeat of the same prompt 0.7 s,
+  shared prefix + new tail 11.3 s vs 34.5 s cold, no shared prefix 30.2 s,
+  current order on neighbouring tasks 22.1 s, proposed order 14.1 s.
+They did not transfer to the suite. Between the first call of task A and the first call
+of task B the suite issues ~8 long calls of task A; the bench issued none. The obvious
+suspect is eviction of the shared prefix, and it is a bench question, not another suite
+run.
+
+New false win, a fifth form: mut-greeting-farewell wrote the literal text "4361696f"
+into the marker (hex for Ciao, as text) and offered
+
+  cat /srv/bootstrap/farewell.marker | od -A x -t x1z -v
+
+Every stage of that pipeline is a reader or a formatter, so the pipeline exits 0 for any
+content. _cannot_fail lets it through by design: it allows anything containing a pipe,
+because every real check the loop has seen contained one and refusing a real check costs
+the task outright. The tightening that keeps that reasoning is "a pipeline whose every
+stage is a reader and which contains no comparator", not "no pipes". Not implemented --
+the human's stated priority is the timeout class.
