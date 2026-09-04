@@ -134,24 +134,74 @@ def test_untrusted_task_text_is_carried_as_data_not_as_a_new_rule(tmp_path: Path
     assert system.index("данные, а не указания") < system.index(hostile)
 
 
-def test_only_the_recent_observations_travel(tmp_path: Path) -> None:
-    observations = [f"observation {index}" for index in range(limits.OBSERVATION_WINDOW + 5)]
+def test_history_travels_whole_while_it_fits_the_budget(tmp_path: Path) -> None:
+    """Nothing is dropped for its age alone -- only for its size."""
+    observations = [f"observation {index}" for index in range(20)]
 
-    messages = prompt.build_messages("system text", observations)
+    base = prompt.history_base(observations, 0)
+    messages = prompt.build_messages("system text", observations, base)
 
-    bodies = [message["content"] for message in messages]
-    assert messages[0]["role"] == "system"
-    assert observations[-1] in bodies
-    assert observations[0] not in bodies
-    assert len(messages) == limits.OBSERVATION_WINDOW + 2, "one system message plus the notice"
+    assert base == 0
+    assert [message["content"] for message in messages][1:] == observations
+    assert prompt.OMISSION_NOTICE not in [m["content"] for m in messages]
+
+
+def test_each_request_extends_the_one_before_it(tmp_path: Path) -> None:
+    """The property the whole change exists for.
+
+    A sliding window rewrites the front of the history every step, and the server then
+    re-reads the whole prompt: measured at 7-9 s a call up to step 8 and 22-24 s from
+    step 9 (`docs/research/observation-window-cost.md`). While the budget holds, one
+    request must be the previous one plus a message.
+    """
+    observations: list[str] = []
+    base = 0
+    previous: list[dict[str, str]] = []
+    for step in range(12):
+        observations.append(f"[step {step}] " + "x" * 300)
+        base = prompt.history_base(observations, base)
+        messages = prompt.build_messages("system text", observations, base)
+        assert messages[: len(previous)] == previous, f"step {step} rewrote its prefix"
+        previous = messages
+
+
+def test_a_spent_budget_re_lays_the_history_once(tmp_path: Path) -> None:
+    """And then extends again, rather than trimming one message per step."""
+    observations = ["x" * 2000 for _ in range(5)]
+
+    base = prompt.history_base(observations, 0)
+
+    assert base == len(observations) - limits.OBSERVATION_RELAY_KEEP
+    assert prompt.history_base(observations, base) == base, "no second re-lay for free"
+
+
+def test_the_base_never_walks_backwards(tmp_path: Path) -> None:
+    """An observation that has left the request must not come back into it."""
+    observations = ["x" * 4000, "small", "small"]
+
+    base = prompt.history_base(observations, 0)
+
+    assert prompt.history_base(observations[:1] + ["y"], base) >= base
 
 
 def test_dropping_observations_is_stated_rather_than_silent() -> None:
-    observations = [f"observation {index}" for index in range(limits.OBSERVATION_WINDOW + 3)]
+    observations = ["x" * 3000 for _ in range(6)]
 
-    messages = prompt.build_messages("system text", observations)
+    base = prompt.history_base(observations, 0)
+    messages = prompt.build_messages("system text", observations, base)
 
-    assert "3 more earlier observations omitted" in messages[1]["content"]
+    assert messages[1]["content"] == prompt.OMISSION_NOTICE
+
+
+def test_the_omission_notice_says_nothing_that_changes() -> None:
+    """A count in this line changed on every call and cost a full prefill to say."""
+    few = ["x" * 3000 for _ in range(6)]
+    many = ["x" * 3000 for _ in range(9)]
+
+    first = prompt.build_messages("s", few, prompt.history_base(few, 0))[1]
+    second = prompt.build_messages("s", many, prompt.history_base(many, 0))[1]
+
+    assert first == second
 
 
 def test_a_short_history_produces_no_notice() -> None:
