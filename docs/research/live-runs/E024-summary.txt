@@ -1,0 +1,69 @@
+E024 control repeat -- jitter measurement (same archive as E020)
+Date: 2026-09-04 02:14 - 02:54 MSK
+Archive: build/e020-phase-control.zip sha256=67418f4ac4ca9bdb20cec212a6ba2080190468c72626d7ef312aabc319acadf4
+Nothing changed between E020 and E024: same archive, same stand, same commands.
+
+E020 -> E024:
+  solved            3/18 -> 3/18, identical task set
+  endpoint tokens   154811 -> 192696   (+24.5%)
+  wall              2411 s -> 2394 s   (-0.7%)
+  completed plans   118    -> 147      (+24.6%)
+  seconds per plan  18.0   -> 15.2     (-15.6%)
+
+Output:
+
+
+=== eval-E024-control-repeat ===
+solved      3/18   ctf-header-override mut-audit-query-gate mut-salutation-beacon
+tokens      192696
+wall        2394s (40 min)
+failures    reasoning 3, verification 2, timeout 10, - 3
+phase plan  median 95.8% of wall, min 73.0% (mut-fix-inventory-filter), max 99.8% (ctf-signed-cookie)
+phase cost  147 plan calls, mean 15.2 s; dearest mut-forensics-egress-ledger at 23.2 s/call
+phase kill  none 7, plan 11; deepest step 12 (mut-audit-query-gate)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+
+=== eval-E020-phase-control ===
+solved      3/18   ctf-header-override mut-audit-query-gate mut-salutation-beacon
+tokens      154811
+wall        2411s (40 min)
+failures    reasoning 3, verification 2, timeout 10, - 3
+phase plan  median 94.7% of wall, min 50.0% (audit-hardcoded-token), max 99.8% (ctf-signed-cookie)
+phase cost  118 plan calls, mean 18.0 s; dearest audit-path-normalization at 90.1 s/call
+phase kill  none 7, plan 11; deepest step 12 (mut-audit-query-gate)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+=== eval-E024-control-repeat ===
+solved      3/18   ctf-header-override mut-audit-query-gate mut-salutation-beacon
+tokens      192696
+wall        2394s (40 min)
+failures    reasoning 3, verification 2, timeout 10, - 3
+phase plan  median 95.8% of wall, min 73.0% (mut-fix-inventory-filter), max 99.8% (ctf-signed-cookie)
+phase cost  147 plan calls, mean 15.2 s; dearest mut-forensics-egress-ledger at 23.2 s/call
+phase kill  none 7, plan 11; deepest step 12 (mut-audit-query-gate)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+=== per task ===
+task                         eval-E020-phase-control  eval-E024-control-repeat
+audit-hardcoded-token             0/timeout       0/timeout
+audit-parser-trust-boundary       0/timeout       0/timeout
+audit-path-normalization          0/timeout       0/timeout
+ctf-duplicate-parameter           0/timeout       0/timeout
+ctf-header-override                     1/-             1/-
+ctf-signed-cookie              0/verificati    0/verificati
+fix-cache-key-scope             0/reasoning     0/reasoning
+fix-redirect-scheme             0/reasoning     0/reasoning
+fix-zip-slip-extract            0/reasoning     0/reasoning
+forensics-sharded-exfil           0/timeout       0/timeout
+forensics-ssh-bruteforce          0/timeout       0/timeout
+forensics-webshell-chain          0/timeout       0/timeout
+mut-audit-query-gate                    1/-             1/-
+mut-fix-inventory-filter          0/timeout       0/timeout
+mut-fix-session-lookup            0/timeout       0/timeout
+mut-forensics-egress-ledger       0/timeout       0/timeout
+mut-greeting-farewell          0/verificati    0/verificati
+mut-salutation-beacon                   1/-             1/-
+
+gained 0: -
+lost   0: -

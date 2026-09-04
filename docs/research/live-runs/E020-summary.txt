@@ -1,0 +1,90 @@
+E020 phase-telemetry control on the current HEAD
+Date: 2026-09-04 00:15 MSK (run 2026-09-03 23:35 - 2026-09-04 00:15)
+Commit: d119a8330cfa2229a799c854b9696900767360c5
+Working tree at start: tracked files clean; untracked plan drafts only
+
+Commands:
+
+  sh scripts/eval/start_model.sh
+  sh scripts/eval/start_proxy.sh
+  python3 scripts/build_submission.py --out build/e020-phase-control.zip
+  python3 scripts/check_submission.py build/e020-phase-control.zip
+  python3 scripts/eval/run_suite.py --tasks-root local_task_extra/tasks --model qwen2.5-coder:7b-instruct-q4_K_M --base-url http://sber-proxy:8000/v1 --api-key ollama --network sber-eval --counter-container sber-proxy --timeout-scale 1.0 --archive build/e020-phase-control.zip --out build/eval-E020-phase-control --label E020-phase-control
+  python3 scripts/eval/summarise.py build/eval-E020-phase-control
+  python3 scripts/eval/summarise.py build/eval-E017-accepted-control build/eval-E020-phase-control
+
+Archive:
+
+  size=63204 bytes
+  sha256=67418f4ac4ca9bdb20cec212a6ba2080190468c72626d7ef312aabc319acadf4
+  preflight=5 PASS, 0 blocking problems
+
+Model/runtime:
+
+  qwen2.5-coder:7b-instruct-q4_K_M manifest=dae161e27b0e
+  Ollama=0.20.5, image ollama/ollama@sha256:662109db8037f17257cfc6e816289c0d4c9ae8a2a4ff760b653d8d410e234ba0
+  temperature=0
+  n_ctx=4096 served (n_ctx_train=32768; OLLAMA_CONTEXT_LENGTH unset, Ollama default)
+  network=sber-eval, counter=sber-proxy, timeout_scale=1.0
+  AGENT_TIMEOUT_S not passed to the agent (Harbor contract)
+
+Telemetry gate:
+
+  logs without 'agent phase' lines: 0 of 18
+  results.tsv rows with an empty phases column: 0 of 18
+
+Output:
+
+
+=== eval-E020-phase-control ===
+solved      3/18   ctf-header-override mut-audit-query-gate mut-salutation-beacon
+tokens      154811
+wall        2411s (40 min)
+failures    reasoning 3, verification 2, timeout 10, - 3
+phase plan  median 94.7% of wall, min 50.0% (audit-hardcoded-token), max 99.8% (ctf-signed-cookie)
+phase cost  118 plan calls, mean 18.0 s; dearest audit-path-normalization at 90.1 s/call
+phase kill  none 7, plan 11; deepest step 12 (mut-audit-query-gate)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+
+=== eval-E017-accepted-control ===
+solved      4/18   ctf-header-override mut-audit-query-gate mut-greeting-farewell mut-salutation-beacon
+tokens      154549
+wall        2729s (45 min)
+failures    verification 1, timeout 13, - 4
+false wins  1: ctf-signed-cookie
+
+=== eval-E020-phase-control ===
+solved      3/18   ctf-header-override mut-audit-query-gate mut-salutation-beacon
+tokens      154811
+wall        2411s (40 min)
+failures    reasoning 3, verification 2, timeout 10, - 3
+phase plan  median 94.7% of wall, min 50.0% (audit-hardcoded-token), max 99.8% (ctf-signed-cookie)
+phase cost  118 plan calls, mean 18.0 s; dearest audit-path-normalization at 90.1 s/call
+phase kill  none 7, plan 11; deepest step 12 (mut-audit-query-gate)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+=== per task ===
+task                         eval-E017-accepted-control  eval-E020-phase-control
+audit-hardcoded-token             0/timeout       0/timeout
+audit-parser-trust-boundary       0/timeout       0/timeout
+audit-path-normalization          0/timeout       0/timeout
+ctf-duplicate-parameter           0/timeout       0/timeout
+ctf-header-override                     1/-             1/-
+ctf-signed-cookie              0/verificati    0/verificati
+fix-cache-key-scope               0/timeout     0/reasoning
+fix-redirect-scheme               0/timeout     0/reasoning
+fix-zip-slip-extract              0/timeout     0/reasoning
+forensics-sharded-exfil           0/timeout       0/timeout
+forensics-ssh-bruteforce          0/timeout       0/timeout
+forensics-webshell-chain          0/timeout       0/timeout
+mut-audit-query-gate                    1/-             1/-
+mut-fix-inventory-filter          0/timeout       0/timeout
+mut-fix-session-lookup            0/timeout       0/timeout
+mut-forensics-egress-ledger       0/timeout       0/timeout
+mut-greeting-farewell                   1/-    0/verificati
+mut-salutation-beacon                   1/-             1/-
+
+gained 0: -
+lost   1: mut-greeting-farewell
+a regression on any single task blocks the change, whatever the total says

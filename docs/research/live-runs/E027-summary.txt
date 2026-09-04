@@ -1,0 +1,13 @@
+E027 borderline task, five repeats on the unchanged control archive
+Date: 2026-09-04 04:15 - 04:22 MSK
+Command: python3 scripts/eval/run_suite.py --only ctf-header-override --repeats 5 ... --archive build/e020-phase-control.zip
+
+repeat  reward  wall_s  ep_calls  stop
+1       1       139.1   11        stuck
+2       1       85.8    10        stuck
+3       1       85.6    10        stuck
+4       1       85.5    10        stuck
+5       1       85.8    10        stuck
+
+5/5 solved. The first repeat pays a cold model load (139.1 s); the other four
+finish in 85.5-85.8 s against a 180 s budget, i.e. with half the budget unused.

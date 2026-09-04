@@ -1,0 +1,86 @@
+E022 anytime-incumbent treatment (REJECTED)
+Date: 2026-09-04 00:16 - 00:50 MSK
+Commit: 47f9968d5de365c2f588e5ad05b257ff2cca719b
+Branch: eval/e022-anytime-incumbent (single factor on top of the E020 control d119a83)
+
+Factor: the production checkpoint became a state instead of a clock reading.
+  control:   prompt fires at EARLY_DELIVERABLE_DEADLINE_S (90 s) with no artifact
+  treatment: prompt fires as soon as one action has worked and no artifact exists;
+             the 90 s deadline stays as the backstop
+Nothing else changed: no limits, no prompt skeleton, no model or backend settings.
+
+Commands:
+
+  python3 scripts/build_submission.py --out build/e022-anytime.zip
+  python3 scripts/check_submission.py build/e022-anytime.zip
+  python3 scripts/eval/run_suite.py --tasks-root local_task_extra/tasks --model qwen2.5-coder:7b-instruct-q4_K_M --base-url http://sber-proxy:8000/v1 --api-key ollama --network sber-eval --counter-container sber-proxy --timeout-scale 1.0 --archive build/e022-anytime.zip --out build/eval-E022-anytime --label E022-anytime
+  python3 scripts/eval/summarise.py build/eval-E020-phase-control build/eval-E022-anytime
+
+Archive:
+
+  size=63356 bytes
+  sha256=8e8c3b8bfa85698c27703e5b09ba98d895184fd18ed5f14400270013a6ae486a
+  preflight=5 PASS, 0 blocking problems
+
+Model/runtime: identical to E020 -- qwen2.5-coder:7b-instruct-q4_K_M dae161e27b0e,
+  Ollama 0.20.5, n_ctx=4096, temperature=0, network sber-eval, timeout_scale=1.0,
+  AGENT_TIMEOUT_S not passed.
+
+Output:
+
+
+=== eval-E022-anytime ===
+solved      2/18   mut-greeting-farewell mut-salutation-beacon
+tokens      175613
+wall        2054s (34 min)
+failures    reasoning 8, verification 1, timeout 7, - 2
+phase plan  median 99.1% of wall, min 80.1% (mut-fix-session-lookup), max 99.6% (ctf-signed-cookie)
+phase cost  138 plan calls, mean 14.0 s; dearest forensics-sharded-exfil at 23.3 s/call
+phase kill  act 1, none 11, plan 6; deepest step 16 (forensics-ssh-bruteforce)
+false wins  1: forensics-sharded-exfil
+
+
+=== eval-E020-phase-control ===
+solved      3/18   ctf-header-override mut-audit-query-gate mut-salutation-beacon
+tokens      154811
+wall        2411s (40 min)
+failures    reasoning 3, verification 2, timeout 10, - 3
+phase plan  median 94.7% of wall, min 50.0% (audit-hardcoded-token), max 99.8% (ctf-signed-cookie)
+phase cost  118 plan calls, mean 18.0 s; dearest audit-path-normalization at 90.1 s/call
+phase kill  none 7, plan 11; deepest step 12 (mut-audit-query-gate)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+=== eval-E022-anytime ===
+solved      2/18   mut-greeting-farewell mut-salutation-beacon
+tokens      175613
+wall        2054s (34 min)
+failures    reasoning 8, verification 1, timeout 7, - 2
+phase plan  median 99.1% of wall, min 80.1% (mut-fix-session-lookup), max 99.6% (ctf-signed-cookie)
+phase cost  138 plan calls, mean 14.0 s; dearest forensics-sharded-exfil at 23.3 s/call
+phase kill  act 1, none 11, plan 6; deepest step 16 (forensics-ssh-bruteforce)
+false wins  1: forensics-sharded-exfil
+
+=== per task ===
+task                         eval-E020-phase-control  eval-E022-anytime
+audit-hardcoded-token             0/timeout     0/reasoning
+audit-parser-trust-boundary       0/timeout     0/reasoning
+audit-path-normalization          0/timeout     0/reasoning
+ctf-duplicate-parameter           0/timeout     0/reasoning
+ctf-header-override                     1/-       0/timeout
+ctf-signed-cookie              0/verificati     0/reasoning
+fix-cache-key-scope             0/reasoning       0/timeout
+fix-redirect-scheme             0/reasoning     0/reasoning
+fix-zip-slip-extract            0/reasoning     0/reasoning
+forensics-sharded-exfil           0/timeout    0/verificati
+forensics-ssh-bruteforce          0/timeout       0/timeout
+forensics-webshell-chain          0/timeout       0/timeout
+mut-audit-query-gate                    1/-     0/reasoning
+mut-fix-inventory-filter          0/timeout       0/timeout
+mut-fix-session-lookup            0/timeout       0/timeout
+mut-forensics-egress-ledger       0/timeout       0/timeout
+mut-greeting-farewell          0/verificati             1/-
+mut-salutation-beacon                   1/-             1/-
+
+gained 1: mut-greeting-farewell
+lost   2: ctf-header-override mut-audit-query-gate
+a regression on any single task blocks the change, whatever the total says

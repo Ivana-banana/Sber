@@ -1,0 +1,19 @@
+task	repeat	reward	tokens	ep_tokens	ep_calls	ep_late	wall_s	steps	stop	claim	failure	phases	note
+audit-hardcoded-token	1	0	?	10931	9	0	180.1	?	killed	-	timeout	inspect=0.011/1 plan=162.456/8 act=0.011/6 verify=0.005/1 open=plan@9	
+audit-parser-trust-boundary	1	0	?	11751	10	0	95.0	?	killed	-	timeout	inspect=0.004/1 plan=90.520/10 act=0.008/6 open=plan@11	
+audit-path-normalization	1	0	?	13370	11	2	180.1	?	killed	-	timeout	inspect=0.005/1 plan=173.787/10 act=0.032/9 open=plan@11	
+ctf-duplicate-parameter	1	0	?	7388	6	1	95.1	?	killed	-	timeout	inspect=0.006/1 plan=89.930/6 act=0.066/5 open=plan@7	
+ctf-header-override	1	1	11197	13721	11	1	133.1	10	stuck	False	-	inspect=0.005/1 plan=132.674/10 act=0.009/8 verify=0.000/1	
+ctf-signed-cookie	1	0	12553	15386	11	0	150.8	10	verified	True	verification	inspect=0.003/1 plan=150.509/10 act=0.074/8 verify=0.004/1	
+fix-cache-key-scope	1	0	7556	8811	7	0	85.6	6	stuck	False	reasoning	inspect=0.011/1 plan=85.150/6 act=0.000/6	
+fix-redirect-scheme	1	0	5124	6325	6	0	67.5	5	stuck	False	reasoning	inspect=0.003/1 plan=67.100/5 act=0.000/3	
+fix-zip-slip-extract	1	0	8391	9584	9	0	82.8	8	stuck	False	reasoning	inspect=0.003/1 plan=82.412/8 act=0.000/6	
+forensics-sharded-exfil	1	0	?	9447	8	0	95.1	?	killed	-	timeout	inspect=0.004/1 plan=89.990/8 act=0.008/6 open=plan@9	
+forensics-ssh-bruteforce	1	0	?	11022	10	2	180.1	?	killed	-	timeout	inspect=0.011/1 plan=165.593/9 act=0.020/7 verify=0.017/1 open=plan@10	
+forensics-webshell-chain	1	0	?	11647	10	1	180.1	?	killed	-	timeout	inspect=0.012/1 plan=170.420/9 act=0.009/7 verify=0.005/1 open=plan@10	
+mut-audit-query-gate	1	1	?	14145	12	1	180.1	?	killed	-	-	inspect=0.013/1 plan=163.494/11 act=0.011/10 open=plan@12	
+mut-fix-inventory-filter	1	0	?	11661	9	1	180.1	?	killed	-	timeout	inspect=0.004/1 plan=131.489/8 act=0.001/6 open=plan@9	
+mut-fix-session-lookup	1	0	?	13007	10	0	180.1	?	killed	-	timeout	inspect=0.003/1 plan=173.307/9 act=0.001/7 verify=0.034/1 open=plan@10	
+mut-forensics-egress-ledger	1	0	?	9949	8	1	180.1	?	killed	-	timeout	inspect=0.006/1 plan=162.333/7 act=0.019/5 verify=0.005/1 open=plan@8	
+mut-greeting-farewell	1	0	4667	5810	6	0	63.4	5	verified	True	verification	inspect=0.011/1 plan=63.000/5 act=0.001/4 verify=0.005/1	
+mut-salutation-beacon	1	1	7607	8741	9	0	84.9	8	stuck	False	-	inspect=0.011/1 plan=84.449/8 act=0.002/8 verify=0.001/1	

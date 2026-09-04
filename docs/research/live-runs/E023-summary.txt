@@ -1,0 +1,87 @@
+E023 first-call timeout cap lifted (REJECTED by the gate, mechanism confirmed)
+Date: 2026-09-04 00:52 - 01:33 MSK
+Commit: 5dc11ecf6ceb2380e669fa24b0c1d98fd45c92a5
+Branch: eval/e023-first-call-timeout (single factor on top of the E020 control d119a83)
+
+Factor: Budget.llm_timeout_s no longer caps a call at the early checkpoint until
+  one action has worked. LLM_TIMEOUT_S and the spendable bound are untouched.
+
+Commands:
+
+  python3 scripts/build_submission.py --out build/e023-first-call.zip
+  python3 scripts/check_submission.py build/e023-first-call.zip
+  python3 scripts/eval/run_suite.py --tasks-root local_task_extra/tasks --model qwen2.5-coder:7b-instruct-q4_K_M --base-url http://sber-proxy:8000/v1 --api-key ollama --network sber-eval --counter-container sber-proxy --timeout-scale 1.0 --archive build/e023-first-call.zip --out build/eval-E023-first-call --label E023-first-call
+  python3 scripts/eval/summarise.py build/eval-E020-phase-control build/eval-E023-first-call
+
+Archive:
+
+  size=63524 bytes
+  sha256=f2ffb0c6825e0b14df008709c23c6125b135a639e7ca2f522ae32b4a5ad524b1
+  preflight=5 PASS, 0 blocking problems
+
+Model/runtime: identical to E020.
+
+The three tasks the factor targeted, control -> treatment:
+
+  audit-hardcoded-token        plan=90.103/1 open=plan@2  ->  plan=168.624/8 act=0.012/6 verify=0.005/1
+  audit-parser-trust-boundary  plan=90.105/1 open=plan@2  ->  plan=89.991/8 act=0.008/5
+  audit-path-normalization     plan=90.112/1 open=plan@2  ->  plan=175.302/10 act=0.031/9
+
+Output:
+
+
+=== eval-E023-first-call ===
+solved      2/18   mut-audit-query-gate mut-salutation-beacon
+tokens      192213
+wall        2441s (41 min)
+failures    reasoning 3, verification 2, timeout 11, - 2
+phase plan  median 94.8% of wall, min 73.5% (mut-fix-inventory-filter), max 99.6% (ctf-signed-cookie)
+phase cost  146 plan calls, mean 15.6 s; dearest ctf-duplicate-parameter at 30.0 s/call
+phase kill  none 6, plan 12; deepest step 15 (ctf-header-override)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+
+=== eval-E020-phase-control ===
+solved      3/18   ctf-header-override mut-audit-query-gate mut-salutation-beacon
+tokens      154811
+wall        2411s (40 min)
+failures    reasoning 3, verification 2, timeout 10, - 3
+phase plan  median 94.7% of wall, min 50.0% (audit-hardcoded-token), max 99.8% (ctf-signed-cookie)
+phase cost  118 plan calls, mean 18.0 s; dearest audit-path-normalization at 90.1 s/call
+phase kill  none 7, plan 11; deepest step 12 (mut-audit-query-gate)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+=== eval-E023-first-call ===
+solved      2/18   mut-audit-query-gate mut-salutation-beacon
+tokens      192213
+wall        2441s (41 min)
+failures    reasoning 3, verification 2, timeout 11, - 2
+phase plan  median 94.8% of wall, min 73.5% (mut-fix-inventory-filter), max 99.6% (ctf-signed-cookie)
+phase cost  146 plan calls, mean 15.6 s; dearest ctf-duplicate-parameter at 30.0 s/call
+phase kill  none 6, plan 12; deepest step 15 (ctf-header-override)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+=== per task ===
+task                         eval-E020-phase-control  eval-E023-first-call
+audit-hardcoded-token             0/timeout       0/timeout
+audit-parser-trust-boundary       0/timeout       0/timeout
+audit-path-normalization          0/timeout       0/timeout
+ctf-duplicate-parameter           0/timeout       0/timeout
+ctf-header-override                     1/-       0/timeout
+ctf-signed-cookie              0/verificati    0/verificati
+fix-cache-key-scope             0/reasoning     0/reasoning
+fix-redirect-scheme             0/reasoning     0/reasoning
+fix-zip-slip-extract            0/reasoning     0/reasoning
+forensics-sharded-exfil           0/timeout       0/timeout
+forensics-ssh-bruteforce          0/timeout       0/timeout
+forensics-webshell-chain          0/timeout       0/timeout
+mut-audit-query-gate                    1/-             1/-
+mut-fix-inventory-filter          0/timeout       0/timeout
+mut-fix-session-lookup            0/timeout       0/timeout
+mut-forensics-egress-ledger       0/timeout       0/timeout
+mut-greeting-farewell          0/verificati    0/verificati
+mut-salutation-beacon                   1/-             1/-
+
+gained 0: -
+lost   1: ctf-header-override
+a regression on any single task blocks the change, whatever the total says

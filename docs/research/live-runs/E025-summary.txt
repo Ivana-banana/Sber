@@ -1,0 +1,67 @@
+E025 append-only repeat (same archive as E021)
+Date: 2026-09-04 03:01 - 03:33 MSK
+Archive: build/e021-append-only.zip sha256=d39030f6b346af3b133ce363143a2bf8830079a49f238b0b4bd49910843ee838
+
+Both append-only runs, against both control runs:
+  solved            E021 3/18, E025 3/18 -- identical task set, and identical to control
+  endpoint tokens   control 154811 / 192696 (mean 173754); append 217617 / 213650 (mean 215634) = +24.1%
+  seconds per plan  control 18.0 / 15.2 (mean 16.6);       append 13.8 / 14.1 (mean 13.95)  = -16.0%
+  completed plans   control 118 / 147 (mean 132.5);        append 162 / 159 (mean 160.5)    = +21.1%
+
+Output:
+
+
+=== eval-E025-append-repeat ===
+solved      3/18   ctf-header-override mut-audit-query-gate mut-salutation-beacon
+tokens      213650
+wall        2356s (39 min)
+failures    reasoning 3, verification 2, timeout 10, - 3
+phase plan  median 96.1% of wall, min 85.8% (mut-fix-inventory-filter), max 99.7% (ctf-signed-cookie)
+phase cost  159 plan calls, mean 14.1 s; dearest audit-hardcoded-token at 19.9 s/call
+phase kill  none 7, plan 11; deepest step 16 (mut-audit-query-gate)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+
+=== eval-E021-append-only ===
+solved      3/18   ctf-header-override mut-audit-query-gate mut-salutation-beacon
+tokens      217617
+wall        2362s (39 min)
+failures    reasoning 3, verification 2, timeout 10, - 3
+phase plan  median 95.6% of wall, min 85.8% (mut-fix-inventory-filter), max 99.8% (ctf-signed-cookie)
+phase cost  162 plan calls, mean 13.8 s; dearest audit-hardcoded-token at 20.6 s/call
+phase kill  none 7, plan 11; deepest step 16 (mut-audit-query-gate)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+=== eval-E025-append-repeat ===
+solved      3/18   ctf-header-override mut-audit-query-gate mut-salutation-beacon
+tokens      213650
+wall        2356s (39 min)
+failures    reasoning 3, verification 2, timeout 10, - 3
+phase plan  median 96.1% of wall, min 85.8% (mut-fix-inventory-filter), max 99.7% (ctf-signed-cookie)
+phase cost  159 plan calls, mean 14.1 s; dearest audit-hardcoded-token at 19.9 s/call
+phase kill  none 7, plan 11; deepest step 16 (mut-audit-query-gate)
+false wins  2: ctf-signed-cookie mut-greeting-farewell
+
+=== per task ===
+task                         eval-E021-append-only  eval-E025-append-repeat
+audit-hardcoded-token             0/timeout       0/timeout
+audit-parser-trust-boundary       0/timeout       0/timeout
+audit-path-normalization          0/timeout       0/timeout
+ctf-duplicate-parameter           0/timeout       0/timeout
+ctf-header-override                     1/-             1/-
+ctf-signed-cookie              0/verificati    0/verificati
+fix-cache-key-scope             0/reasoning     0/reasoning
+fix-redirect-scheme             0/reasoning     0/reasoning
+fix-zip-slip-extract            0/reasoning     0/reasoning
+forensics-sharded-exfil           0/timeout       0/timeout
+forensics-ssh-bruteforce          0/timeout       0/timeout
+forensics-webshell-chain          0/timeout       0/timeout
+mut-audit-query-gate                    1/-             1/-
+mut-fix-inventory-filter          0/timeout       0/timeout
+mut-fix-session-lookup            0/timeout       0/timeout
+mut-forensics-egress-ledger       0/timeout       0/timeout
+mut-greeting-farewell          0/verificati    0/verificati
+mut-salutation-beacon                   1/-             1/-
+
+gained 0: -
+lost   0: -

@@ -1,0 +1,19 @@
+task	repeat	reward	tokens	ep_tokens	ep_calls	ep_late	wall_s	steps	stop	claim	failure	phases	note
+audit-hardcoded-token	1	0	5312	6533	6	0	66.8	5	stuck	False	reasoning	inspect=0.011/1 plan=66.389/5 act=0.004/5 verify=0.000/1	
+audit-parser-trust-boundary	1	0	5584	6847	6	0	69.0	5	stuck	False	reasoning	inspect=0.004/1 plan=68.543/5 act=0.004/5 verify=0.000/1	
+audit-path-normalization	1	0	5349	6577	6	0	68.6	5	stuck	False	reasoning	inspect=0.003/1 plan=68.196/5 act=0.004/5 verify=0.001/1	
+ctf-duplicate-parameter	1	0	7589	8814	8	0	77.6	7	stuck	False	reasoning	inspect=0.003/1 plan=77.271/7 act=0.027/7 verify=0.000/1	
+ctf-header-override	1	0	?	16990	14	0	180.1	?	killed	-	timeout	inspect=0.003/1 plan=166.562/13 act=0.129/11 open=plan@14	
+ctf-signed-cookie	1	0	14504	16888	15	1	157.4	14	stuck	False	reasoning	inspect=0.004/1 plan=156.810/14 act=0.022/13 verify=0.001/1	
+fix-cache-key-scope	1	0	?	4440	4	0	95.1	?	killed	-	timeout	inspect=0.004/1 plan=90.033/4 act=0.001/3 open=plan@5	
+fix-redirect-scheme	1	0	6713	9171	8	2	99.1	7	stuck	False	reasoning	inspect=0.004/1 plan=98.550/7 act=0.001/6 verify=0.001/1	
+fix-zip-slip-extract	1	0	6336	7529	7	0	73.1	6	stuck	False	reasoning	inspect=0.003/1 plan=72.611/6 act=0.001/6 verify=0.000/1	
+forensics-sharded-exfil	1	0	3301	4557	4	0	70.4	3	verified	True	verification	inspect=0.003/1 plan=69.977/3 act=0.001/2 verify=0.017/1	
+forensics-ssh-bruteforce	1	0	?	18086	16	0	180.1	?	killed	-	timeout	inspect=0.003/1 plan=176.819/15 act=0.019/12 open=plan@16	
+forensics-webshell-chain	1	0	?	12477	11	1	180.1	?	killed	-	timeout	inspect=0.006/1 plan=154.400/10 act=0.021/9 open=plan@11	
+mut-audit-query-gate	1	0	8943	10176	9	1	90.7	8	stuck	False	reasoning	inspect=0.003/1 plan=89.809/8 act=0.009/8 verify=0.001/1	
+mut-fix-inventory-filter	1	0	?	14266	12	0	180.1	?	killed	-	timeout	inspect=0.003/1 plan=162.216/11 act=0.044/10 open=plan@12	
+mut-fix-session-lookup	1	0	?	10469	9	0	180.1	?	killed	-	timeout	inspect=0.003/1 plan=144.273/8 act=0.039/6 open=act@8	
+mut-forensics-egress-ledger	1	0	?	13893	12	0	180.1	?	killed	-	timeout	inspect=0.003/1 plan=164.061/11 act=0.054/10 open=plan@12	
+mut-greeting-farewell	1	1	2825	3968	4	1	54.7	3	verified	True	-	inspect=0.012/1 plan=53.706/3 act=0.001/2 verify=0.005/1	
+mut-salutation-beacon	1	1	2798	3932	4	0	51.3	3	verified	True	-	inspect=0.011/1 plan=50.930/3 act=0.001/2 verify=0.005/1	
