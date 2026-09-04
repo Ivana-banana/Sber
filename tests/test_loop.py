@@ -165,14 +165,22 @@ def test_the_same_failing_call_is_refused_before_it_runs_a_third_time(tmp_path: 
     assert outcome.solved is False
 
 
-def test_a_loop_that_goes_in_circles_stops_itself(tmp_path: Path) -> None:
-    llm = StubLlm(replies=[action("list_dir", path=str(tmp_path)) for _ in range(20)])
+def test_a_loop_that_goes_in_circles_is_told_so_and_bounded_by_the_caps(
+    tmp_path: Path,
+) -> None:
+    """Going in circles is no longer an ending, so the caps have to be the ending.
+
+    E028's factor turned the stuck detector into advice; what must not change is that
+    a model repeating itself still terminates, on the step cap or the clock rather
+    than on the detector's own verdict.
+    """
+    llm = StubLlm(replies=[action("list_dir", path=str(tmp_path)) for _ in range(40)])
 
     outcome = run(make_state(tmp_path), llm, FakeVerify())
 
-    assert outcome.stop_reason == "stuck"
     assert outcome.solved is False
-    assert len(llm.calls) < limits.MAX_STEPS, "stopping early is the whole point"
+    assert outcome.stop_reason in {"steps", "budget"}
+    assert len(llm.calls) <= limits.MAX_STEPS
 
 
 def test_the_step_cap_ends_a_model_that_never_finishes(tmp_path: Path) -> None:
@@ -312,13 +320,13 @@ def test_a_run_that_never_reached_finish_is_never_reported_as_solved(tmp_path: P
 def test_a_stuck_run_holding_a_readable_file_is_still_a_zero(tmp_path: Path) -> None:
     target = tmp_path / "note.txt"
     target.write_text("something", encoding="utf-8")
-    llm = StubLlm(replies=[action("list_dir", path=str(tmp_path)) for _ in range(20)])
+    llm = StubLlm(replies=[action("list_dir", path=str(tmp_path)) for _ in range(40)])
     state = make_state(tmp_path)
     state.artifacts.append(target)
 
     outcome = run(state, llm, FakeVerify((True, "unverified", "")))
 
-    assert outcome.stop_reason == "stuck"
+    assert outcome.stop_reason in {"steps", "budget"}
     assert outcome.solved is False
 
 
@@ -514,3 +522,19 @@ def test_finish_pointing_at_a_directory_is_refused_by_the_gate(tmp_path: Path) -
         "the directory never reaches the verifier"
     )
     assert any("directory" in text for text in outcome.observations)
+
+
+def test_a_stuck_signal_becomes_advice_rather_than_an_ending(tmp_path: Path) -> None:
+    """E024 measured what stopping costs: four runs quit with half the budget unused.
+
+    `fix-redirect-scheme` stopped after 67.5 s of a 180 s budget, and two of the three
+    solved tasks stopped as `stuck` while their verifier had already been satisfied --
+    the detector was ending runs that still had both time and a real chance.
+    """
+    repeated = action("list_dir", path=str(tmp_path))
+    llm = StubLlm(replies=[repeated for _ in range(limits.NO_PROGRESS_STOP + 3)])
+
+    outcome = run(make_state(tmp_path), llm, FakeVerify())
+
+    assert outcome.stop_reason != "stuck"
+    assert any("по кругу" in text for text in outcome.observations)

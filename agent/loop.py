@@ -201,10 +201,16 @@ def run(
 
         signal = detectors.stuck(state)
         if signal is not None:
-            stop_reason = "stuck"
-            summary = signal.detail
+            # Advice, not an ending. E024 measured what ending costs: four of eighteen
+            # runs quit as `stuck` with a third to a half of the budget unspent, and
+            # two of the three *solved* tasks were among them -- their verifier was
+            # already satisfied while the loop was calling them stuck. A detector that
+            # can end a winning run has to hand the model its observation instead.
             state.record("budget", signal.name, signal.detail)
-            break
+            observations.append(
+                f"[step {step}] похоже, ты ходишь по кругу: {signal.detail}. "
+                f"Смени подход или проверь другую гипотезу."
+            )
 
     if not stop_reason:
         stop_reason = "steps" if state.budget.steps_used >= state.budget.max_steps else "budget"
