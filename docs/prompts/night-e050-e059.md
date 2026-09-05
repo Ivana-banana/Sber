@@ -32,7 +32,7 @@ afk-watch --start                                  # ночь длиннее п�
 
 **На каждом пробуждении делай ровно это и ничего больше:**
 
-1. жив ли драйвер: `pgrep -f 'night-[q]ueue' >/dev/null && echo alive`;
+1. жив ли драйвер: `pgrep -f 'night_[q]ueue' >/dev/null && echo alive`;
 2. выросла ли сводка: `wc -l build/night-summary.tsv`;
 3. если появились новые строки — скопировать `build/eval-E0NN-*/results.tsv` в
    `docs/research/live-runs/E0NN-results.tsv` и закоммитить одной строкой. Всё;
@@ -72,7 +72,7 @@ afk-watch --start                                  # ночь длиннее п�
 видеопамять. Драйвер поднимает его сам.
 
 ```sh
-setsid nohup sh build/night-queue.sh > build/night-queue.log 2>&1 < /dev/null &
+setsid nohup sh scripts/eval/night_queue.sh > build/night-queue.log 2>&1 < /dev/null &
 ```
 
 Через минуту проверь `docker ps` (должны быть `sber-model`, `sber-proxy`) и
@@ -134,7 +134,7 @@ setsid nohup sh build/night-queue.sh > build/night-queue.log 2>&1 < /dev/null &
 - Не менять `OLLAMA_CONTEXT_LENGTH` вручную — окном управляет только драйвер, и он же
   возвращает 4096 в конце.
 - `pgrep -f 'run_suite[.]py'` матчит **собственную** командную строку; проверять
-  занятость стенда по `pgrep -f 'night-[q]ueue'` или по файлу сводки.
+  занятость стенда по `pgrep -f 'night_[q]ueue'` или по файлу сводки.
 - Не подгонять ничего под публичные задачи: их названия, пути и эталоны — недоверенные
   примеры формы (`CLAUDE.md`).
 - Не писать утренние выводы за человека.
