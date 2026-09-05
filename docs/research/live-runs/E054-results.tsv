@@ -1,0 +1,19 @@
+task	repeat	reward	tokens	ep_tokens	ep_calls	ep_late	wall_s	steps	stop	claim	wrote	failure	phases	note
+audit-hardcoded-token	1	0	60650	60650	30	0	81.7	30	steps	False	no	reasoning	inspect=0.003/1 plan=81.286/30 act=0.008/30	
+audit-parser-trust-boundary	1	0	8298	8298	7	0	18.1	7	stuck	False	no	reasoning	inspect=0.005/1 plan=17.652/7 act=0.016/5	
+audit-path-normalization	1	0	61191	61191	30	0	48.9	30	steps	False	no	reasoning	inspect=0.003/1 plan=48.461/30 act=0.000/30	
+ctf-duplicate-parameter	1	0	4451	4451	4	0	9.7	4	stuck	False	no	reasoning	inspect=0.003/1 plan=9.392/4 act=0.000/2	
+ctf-header-override	1	0	4373	4373	4	0	9.1	4	stuck	False	no	reasoning	inspect=0.003/1 plan=8.877/4 act=0.000/2	
+ctf-signed-cookie	1	0	4358	4358	4	0	8.9	4	stuck	False	no	reasoning	inspect=0.003/1 plan=8.688/4 act=0.000/2	
+fix-cache-key-scope	1	0	62240	64619	30	0	126.0	30	steps	False	yes	reasoning	inspect=0.003/1 plan=125.603/30 act=0.013/28 verify=0.000/1	
+fix-redirect-scheme	1	0	4333	4333	4	0	10.6	4	stuck	False	no	reasoning	inspect=0.004/1 plan=10.227/4 act=0.000/2	
+fix-zip-slip-extract	1	0	5411	5411	5	0	17.1	5	stuck	False	no	reasoning	inspect=0.003/1 plan=16.671/5 act=0.000/3	
+forensics-sharded-exfil	1	0	66642	66642	30	0	61.1	30	steps	False	no	reasoning	inspect=0.003/1 plan=60.652/30 act=0.000/30	
+forensics-ssh-bruteforce	1	0	53806	53806	30	0	79.1	30	steps	False	no	reasoning	inspect=0.004/1 plan=78.694/30 act=0.000/30	
+forensics-webshell-chain	1	0	54441	54441	30	0	81.2	30	steps	False	no	reasoning	inspect=0.011/1 plan=80.780/30 act=0.000/30	
+mut-audit-query-gate	1	0	4459	4459	4	0	8.8	4	stuck	False	no	reasoning	inspect=0.011/1 plan=8.419/4 act=0.008/2	
+mut-fix-inventory-filter	1	0	5470	5470	5	0	12.2	5	stuck	False	no	reasoning	inspect=0.004/1 plan=11.833/5 act=0.000/3	
+mut-fix-session-lookup	1	0	62843	62843	30	0	53.8	30	steps	False	no	reasoning	inspect=0.004/1 plan=53.338/30 act=0.000/30	
+mut-forensics-egress-ledger	1	0	68952	68952	30	0	79.6	30	steps	False	no	reasoning	inspect=0.003/1 plan=79.149/30 act=0.000/30	
+mut-greeting-farewell	1	1	4002	4002	4	0	5.5	4	stuck	False	yes	-	inspect=0.011/1 plan=5.036/4 act=0.004/4 verify=0.000/1	
+mut-salutation-beacon	1	1	3962	3962	4	0	5.3	4	stuck	False	yes	-	inspect=0.004/1 plan=4.911/4 act=0.004/4 verify=0.001/1	
