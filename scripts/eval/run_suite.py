@@ -500,6 +500,15 @@ class Runner:
                     encoding="utf-8",
                 )
 
+            # The per-call series and the sampled request bodies. Saved unconditionally
+            # because the question they answer -- is the server truncating, or is the
+            # agent not sending the history at all -- cannot be asked after the fact.
+            calls = self.counter_call("/__calls", "GET")
+            if calls and calls.get("calls"):
+                (self.logs / f"{spec.name}.r{repeat}.calls").write_text(
+                    json.dumps(calls, indent=1, ensure_ascii=False), encoding="utf-8"
+                )
+
             reward, note = self.verify(container, spec)
             base.reward = reward
             if reward != 1:

@@ -41,6 +41,19 @@ EXCHANGE_CHARS = 2000
 """Bounds on what one task's trace may hold. A run is capped at 30 steps, so 200 leaves
 room for retries and protocol fallbacks without letting a wedged run fill memory."""
 
+CALLS_PATH = "/__calls"
+REQUESTS_KEPT = 3
+REQUEST_CHARS = 24000
+"""How many whole request bodies one task keeps, and how much of each.
+
+Three and not all of them because every request carries the system block and the whole
+observation history, so keeping each would store the same kilobytes thirty times. Three
+and not one because the question they answer is a curve: the first call, a middle one
+and the last say whether the history the agent believes it is sending is actually in the
+body. That is the rival hypothesis to server-side truncation, and it is the one that
+would make a negative E055 mean nothing.
+"""
+
 UPSTREAM_TIMEOUT_S = 900.0
 """Long, because one CPU-bound completion legitimately takes minutes here. A proxy that
 gives up first would be recorded as an endpoint failure the endpoint never had."""
@@ -65,6 +78,14 @@ class Counters:
 
     def _zero(self) -> None:
         self.exchanges: list[dict[str, object]] = []
+        self.calls: list[dict[str, object]] = []
+        """Per-call `usage`, kept as a series rather than a sum.
+
+        The sum answers what a run cost; only the series answers whether the server is
+        truncating. A prompt whose history keeps growing while `prompt_tokens` stops
+        growing has been cut, and a plateau is a fingerprint no aggregate can show.
+        """
+        self.bodies: list[dict[str, object]] = []
         self.requests = 0
         self.late_responses = 0
         self.input_tokens = 0
@@ -78,12 +99,13 @@ class Counters:
             self.epoch += 1
             self._zero()
 
-    def record(self, payload: bytes, epoch: int) -> None:
+    def record(self, payload: bytes, epoch: int, sent: bytes = b"") -> None:
         with self.lock:
             if epoch != self.epoch:
                 self.late_responses += 1
                 return
             self.requests += 1
+            self.measure_request(sent)
             try:
                 usage = json.loads(payload).get("usage") or {}
             except (ValueError, AttributeError):
@@ -95,9 +117,48 @@ class Counters:
             self.remember(payload)
             self.input_tokens += int(usage.get("prompt_tokens", 0))
             self.output_tokens += int(usage.get("completion_tokens", 0))
+            if self.calls:
+                self.calls[-1]["prompt_tokens"] = int(usage.get("prompt_tokens", 0))
+                self.calls[-1]["completion_tokens"] = int(usage.get("completion_tokens", 0))
             self.total_tokens += int(
                 usage.get("total_tokens", 0)
                 or usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
+            )
+
+    def measure_request(self, sent: bytes) -> None:
+        """Record what we sent, beside what the server said it received.
+
+        Called with the lock already held. Two numbers matter and neither is stored
+        anywhere else: how many characters of conversation left the agent, and how many
+        tokens the server admits to having read. They are different units, so no ratio
+        is computed here -- the point is the shape of the two series, which only a
+        reader comparing them can see.
+        """
+        entry: dict[str, object] = {
+            "call": self.requests,
+            "sent_chars": len(sent),
+            "messages": 0,
+            "history_chars": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+        }
+        try:
+            body = json.loads(sent) if sent else {}
+            messages = body.get("messages") or []
+            entry["messages"] = len(messages)
+            # Everything after the system block is history the agent chose to carry.
+            entry["history_chars"] = sum(
+                len(str(message.get("content") or ""))
+                for message in messages
+                if message.get("role") != "system"
+            )
+            entry["max_tokens"] = body.get("max_tokens") or body.get("max_completion_tokens") or 0
+        except (ValueError, AttributeError, TypeError):
+            pass
+        self.calls.append(entry)
+        if len(self.bodies) < REQUESTS_KEPT:
+            self.bodies.append(
+                {"call": self.requests, "body": sent.decode("utf-8", "replace")[:REQUEST_CHARS]}
             )
 
     def remember(self, payload: bytes) -> None:
@@ -165,6 +226,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == COUNTERS_PATH:
             self._json(COUNTERS.snapshot())
             return
+        if self.path == CALLS_PATH:
+            with COUNTERS.lock:
+                self._json({"calls": list(COUNTERS.calls), "bodies": list(COUNTERS.bodies)})
+            return
         if self.path == EXCHANGES_PATH:
             with COUNTERS.lock:
                 self._json({"exchanges": list(COUNTERS.exchanges)})
@@ -211,7 +276,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": f"upstream unreachable: {exc}"}, status=502)
             return
         else:
-            COUNTERS.record(payload, epoch)
+            COUNTERS.record(payload, epoch, body)
 
         self.send_response(status)
         self.send_header("Content-Type", content_type)
