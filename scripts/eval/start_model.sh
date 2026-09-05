@@ -14,6 +14,12 @@ set -eu
 NETWORK=${NETWORK:-sber-eval}
 NAME=${NAME:-sber-model}
 STORE=${STORE:-/var/lib/ollama}
+# Serving context window. 4096 is ollama's own default and is what every run up to
+# E049 was measured under; it is kept as the default so that number stays comparable.
+# It is a variable because it is a factor: the agent's prompt is about 3000 tokens by
+# `OBSERVATION_BUDGET_CHARS` plus the system block, and `LLM_MAX_OUTPUT_TOKENS` is
+# 2048, so 4096 cannot hold both and the server truncates without saying so.
+CONTEXT=${CONTEXT:-4096}
 
 docker network inspect "$NETWORK" >/dev/null 2>&1 || \
   docker network create --internal --subnet 172.28.0.0/24 --gateway 172.28.0.1 "$NETWORK"
@@ -34,6 +40,7 @@ docker run -d --name "$NAME" --network "$NETWORK" $GPU_FLAGS \
   -e OLLAMA_MODELS=/models \
   -e OLLAMA_MAX_LOADED_MODELS=1 \
   -e OLLAMA_KEEP_ALIVE=30m \
+  -e OLLAMA_CONTEXT_LENGTH="$CONTEXT" \
   ollama/ollama:latest >/dev/null
 
 printf 'waiting for %s' "$NAME"
