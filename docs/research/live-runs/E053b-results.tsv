@@ -1,0 +1,19 @@
+task	repeat	reward	tokens	ep_tokens	ep_calls	ep_late	wall_s	steps	stop	claim	wrote	failure	phases	note
+audit-hardcoded-token	1	0	2223	2223	2	0	43.7	2	verify-failed	False	no	reasoning	inspect=0.004/1 plan=43.181/2 act=0.043/2 verify=0.003/2	
+audit-parser-trust-boundary	1	0	1134	1134	1	0	31.5	1	verified	True	no	verification	inspect=0.013/1 plan=31.079/1 act=0.034/1 verify=0.001/1	
+audit-path-normalization	1	0	2926	2926	2	0	81.2	2	verify-failed	False	no	reasoning	inspect=0.003/1 plan=80.734/2 act=0.071/2 verify=0.002/2	
+ctf-duplicate-parameter	1	0	1777	1777	2	0	31.7	2	verify-failed	False	no	reasoning	inspect=0.003/1 plan=26.381/2 act=5.022/2 verify=0.003/2	
+ctf-header-override	1	0	1945	1945	2	0	35.3	2	verify-failed	False	no	reasoning	inspect=0.003/1 plan=35.034/2 act=0.042/2 verify=0.002/2	
+ctf-signed-cookie	1	0	2442	2442	2	0	74.8	2	verify-failed	False	no	reasoning	inspect=0.003/1 plan=74.520/2 act=0.043/2 verify=0.002/2	
+fix-cache-key-scope	1	0	2158	2158	2	0	32.7	2	verify-failed	False	no	reasoning	inspect=0.004/1 plan=32.231/2 act=0.035/2 verify=0.002/2	
+fix-redirect-scheme	1	0	1823	1823	2	0	27.1	2	verify-failed	False	no	reasoning	inspect=0.003/1 plan=26.597/2 act=0.066/2 verify=0.002/2	
+fix-zip-slip-extract	1	0	1809	2744	3	0	57.8	2	verify-failed	False	no	reasoning	inspect=0.003/1 plan=57.286/2 act=0.098/2 verify=0.003/2	
+forensics-sharded-exfil	1	0	2873	2873	2	0	95.9	2	verify-failed	False	no	reasoning	inspect=0.003/1 plan=95.386/2 act=0.043/2 verify=0.002/2	
+forensics-ssh-bruteforce	1	0	2218	2218	2	0	59.3	2	verified	True	no	verification	inspect=0.003/1 plan=58.801/2 act=0.050/2 verify=0.002/2	
+forensics-webshell-chain	1	0	2256	2256	2	0	59.9	2	verify-failed	False	no	reasoning	inspect=0.003/1 plan=59.455/2 act=0.043/2 verify=0.003/2	
+mut-audit-query-gate	1	0	1915	1915	2	0	28.2	2	verify-failed	False	no	reasoning	inspect=0.003/1 plan=27.681/2 act=0.035/2 verify=0.002/2	
+mut-fix-inventory-filter	1	0	2211	2211	2	0	44.2	2	verify-failed	False	no	reasoning	inspect=0.003/1 plan=43.710/2 act=0.058/2 verify=0.003/2	
+mut-fix-session-lookup	1	0	2261	2261	2	0	43.3	2	verify-failed	False	no	reasoning	inspect=0.003/1 plan=42.842/2 act=0.051/2 verify=0.002/2	
+mut-forensics-egress-ledger	1	0	1241	2554	2	0	116.5	1	verify-failed	False	no	reasoning	inspect=0.012/1 plan=116.020/1 act=0.022/1 verify=0.002/1	
+mut-greeting-farewell	1	1	1454	1454	2	0	14.5	2	verified	True	no	-	inspect=0.003/1 plan=14.006/2 act=0.034/2 verify=0.003/2	
+mut-salutation-beacon	1	1	750	750	1	0	8.2	1	verified	True	no	-	inspect=0.011/1 plan=7.758/1 act=0.017/1 verify=0.001/1	
