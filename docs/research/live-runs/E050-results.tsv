@@ -1,0 +1,19 @@
+task	repeat	reward	tokens	ep_tokens	ep_calls	ep_late	wall_s	steps	stop	claim	wrote	failure	phases	note
+audit-hardcoded-token	1	0	11089	12426	10	0	102.7	10	stuck	False	yes	reasoning	inspect=0.003/1 plan=102.259/10 act=0.015/9 verify=0.000/1	
+audit-parser-trust-boundary	1	0	40012	42006	27	0	108.8	27	stuck	False	yes	reasoning	inspect=0.004/1 plan=108.346/27 act=0.019/18 verify=0.001/1	
+audit-path-normalization	1	0	42145	44411	24	0	157.8	24	stuck	False	yes	reasoning	inspect=0.003/1 plan=157.334/24 act=0.041/21 verify=0.005/2	
+ctf-duplicate-parameter	1	0	9887	9887	7	0	23.1	7	stuck	False	no	reasoning	inspect=0.003/1 plan=22.809/7 act=0.069/5	
+ctf-header-override	1	0	36659	38761	20	0	141.2	20	stuck	False	yes	reasoning	inspect=0.003/1 plan=140.916/20 act=0.036/17 verify=0.000/1	
+ctf-signed-cookie	1	0	15855	15855	10	0	70.1	10	stuck	False	no	reasoning	inspect=0.003/1 plan=69.764/10 act=0.071/7	
+fix-cache-key-scope	1	0	57170	58824	30	0	199.0	30	stuck	False	yes	reasoning	inspect=0.003/1 plan=198.564/30 act=0.011/29 verify=0.000/1	
+fix-redirect-scheme	1	0	13989	13989	12	0	48.6	12	stuck	False	no	reasoning	inspect=0.004/1 plan=48.201/12 act=0.000/8	
+fix-zip-slip-extract	1	0	44344	46726	26	0	167.0	26	stuck	False	yes	reasoning	inspect=0.003/1 plan=166.503/26 act=0.009/24 verify=0.065/2	
+forensics-sharded-exfil	1	0	61308	62905	28	0	139.9	28	stuck	False	yes	reasoning	inspect=0.004/1 plan=139.441/28 act=0.020/27 verify=0.000/1	
+forensics-ssh-bruteforce	1	0	12113	12113	11	0	52.5	11	stuck	False	no	reasoning	inspect=0.003/1 plan=52.037/11 act=0.017/8	
+forensics-webshell-chain	1	0	9019	9019	8	0	28.9	8	stuck	False	no	reasoning	inspect=0.007/1 plan=28.463/8 act=0.017/5	
+mut-audit-query-gate	1	0	51191	52626	30	0	116.9	30	steps	False	yes	reasoning	inspect=0.003/1 plan=116.437/30 act=0.010/28 verify=0.001/1	
+mut-fix-inventory-filter	1	0	25596	25596	18	0	71.7	18	stuck	False	no	reasoning	inspect=0.007/1 plan=71.241/18 act=0.000/11	
+mut-fix-session-lookup	1	0	43948	45458	26	0	179.8	26	stuck	False	yes	reasoning	inspect=0.003/1 plan=179.388/26 act=0.004/22 verify=0.000/1	
+mut-forensics-egress-ledger	1	0	61466	65565	27	0	134.9	27	verified	True	yes	verification	inspect=0.003/1 plan=134.428/27 act=0.009/23 verify=0.005/1	
+mut-greeting-farewell	1	1	3934	3934	4	0	19.1	4	verified	True	yes	-	inspect=0.003/1 plan=18.653/4 act=0.001/3 verify=0.017/1	
+mut-salutation-beacon	1	1	7242	7242	7	0	31.1	7	stuck	False	no	-	inspect=0.002/1 plan=30.714/7 act=0.021/6 verify=0.001/1	
