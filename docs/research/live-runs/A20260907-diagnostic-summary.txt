@@ -1,0 +1,7 @@
+Audit A20260907; no new LLM run
+Source commit: 2d9f0dbb84d6c85a4a9a7c4965efe165c735ad84
+Replay code SHA256: 0cff5f35f7b6cd4d41d6e1f1ee6f07081ee154a4c068d5d69e1d364d3e5a296d
+Replay exit: 0
+fix-redirect-scheme false positive reproduced
+forensics-ssh-bruteforce false positive reproduced
+Organizer forensic parity exit: 0

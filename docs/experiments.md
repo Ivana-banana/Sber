@@ -5,6 +5,21 @@
 
 ## Сводка
 
+Дополнение 07.09.2026 — **A20260907, диагностический аудит, без нового LLM-прогона**.
+Код `2d9f0dbb84d6c85a4a9a7c4965efe165c735ad84`; runtime не менялся.
+`python3 -m pytest -q`: 387 passed, 19.31 s. Organizer forensic
+`python3 local_task/incident-log-forensics/scripts/check_parity.py`: exit 0.
+Два E060 false-positive воспроизведены реальным `verify()` во временной среде:
+redirect лишь печатает значения, SSH проверяет наличие ключей с `unknown`.
+Новых solved/tokens/wall для модели нет (endpoint calls/tokens: 0).
+Повторная проверка audit-path после исправления только JSON-обёртки остаётся красной:
+неверны также location/evidence. E049 official остаётся историческим 2/6,
+содержательные 0/4; нельзя переносить на него E060/E061 5/18 наших fixtures.
+Команды и причины нулей — [аудит](research/organizer-first-audit-2026-09-07.md),
+очередь — [план](superpowers/plans/2026-09-07-organizer-first-improvements.md).
+Raw: `docs/research/live-runs/A20260907-diagnostic-summary.txt`, SHA-256
+`a568a0ef52ef596cb01d2e148fe5156d9200bbd80860bfad7854f5a59644a8b0`.
+
 | ID | Дата | Commit | Изменение | Model/image | Solved | Tokens | Wall time | Verdict |
 |---|---|---|---|---|---:|---:|---:|---|
 | E000 | 2026-08-24 | — | Старт; baseline ещё не запускался | — | — | — | — | ожидает этап 0 |
