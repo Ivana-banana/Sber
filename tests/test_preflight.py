@@ -198,3 +198,173 @@ def test_only_a_measured_substitute_is_offered(tmp_path: Path, monkeypatch) -> N
 
     assert "absent: jq" in rendered
     assert "instead:" not in rendered
+
+
+# --- Recon packet: listening sockets and instruction literals ------------------
+#
+# Added for R2 after the E060 artifact review. Two of the three near-misses there
+# were the same mistake: `ctf-duplicate-parameter` and `ctf-signed-cookie` each wrote
+# the exactly correct flag but never issued it from the service, and the trace shows
+# the agent trying to start a server that was already listening four times in a row.
+# A port table is one read of /proc; paying a 7B model to rediscover it is the
+# expensive way to get it wrong.
+
+
+def write_proc(root: Path, ipv4: str = "", ipv6: str = "") -> tuple[str, ...]:
+    header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt\n"
+    (root / "tcp").write_text(header + ipv4, encoding="utf-8")
+    (root / "tcp6").write_text(header + ipv6, encoding="utf-8")
+    return (str(root / "tcp"), str(root / "tcp6"))
+
+
+def listen_line(local: str, state: str = "0A") -> str:
+    return f"   0: {local} 00000000:0000 {state} 00000000:00000000 00:00000000 00000000\n"
+
+
+def test_the_brief_names_the_local_services_already_listening(tmp_path: Path, monkeypatch) -> None:
+    """`127.0.0.1:9139` is a fact about the machine, not something to deduce."""
+    workspace = make_task(tmp_path)
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    monkeypatch.setattr(
+        "agent.preflight.PROC_NET_TCP",
+        write_proc(proc, ipv4=listen_line("0100007F:23B3")),
+    )
+
+    rendered = inspect_environment(workspace, ENV).render()
+
+    assert "127.0.0.1:9139" in rendered
+
+
+def test_a_connection_that_is_not_listening_is_not_reported(tmp_path: Path, monkeypatch) -> None:
+    # State 01 is ESTABLISHED. Reporting it as a service invites the model to talk to
+    # a socket that will not answer, which costs a step and a recovery.
+    workspace = make_task(tmp_path)
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    monkeypatch.setattr(
+        "agent.preflight.PROC_NET_TCP",
+        write_proc(proc, ipv4=listen_line("0100007F:23B3", state="01")),
+    )
+
+    rendered = inspect_environment(workspace, ENV).render()
+
+    assert "9139" not in rendered
+    assert "listening:" not in rendered
+
+
+def test_ipv6_sockets_are_decoded_and_not_printed_as_hex(tmp_path: Path, monkeypatch) -> None:
+    workspace = make_task(tmp_path)
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    monkeypatch.setattr(
+        "agent.preflight.PROC_NET_TCP",
+        write_proc(proc, ipv6=listen_line("00000000000000000000000001000000:1F90")),
+    )
+
+    rendered = inspect_environment(workspace, ENV).render()
+
+    assert "::1:8080" in rendered
+
+
+def test_a_kernel_without_proc_net_is_reported_as_no_ports_not_a_crash(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = make_task(tmp_path)
+    monkeypatch.setattr("agent.preflight.PROC_NET_TCP", (str(tmp_path / "nope"),))
+
+    rendered = inspect_environment(workspace, ENV).render()
+
+    assert "listening:" not in rendered, "silence beats a line that says nothing"
+
+
+def test_the_literals_the_task_quotes_are_located_in_the_tree(tmp_path: Path) -> None:
+    """`grep -rn` for the task's own backticks, spent once instead of per step.
+
+    `mut-audit-query-gate` says "include the actual `login_name` data flow in `proof`"
+    and the checker requires exactly that. Handing the model the line number is the
+    difference between reading the flow and inventing it.
+    """
+    workspace = make_task(tmp_path)
+    (workspace / "src" / "login.py").write_text(
+        "import sqlite3\n\n\ndef authorize(login_name):\n    return login_name\n", encoding="utf-8"
+    )
+
+    rendered = inspect_environment(
+        workspace, ENV, instruction="Include the `login_name` data flow in `proof`."
+    ).render()
+
+    assert "src/login.py:4" in rendered
+
+
+def test_a_literal_that_is_nowhere_in_the_tree_costs_nothing(tmp_path: Path) -> None:
+    """A miss is silence. Naming it was a draft of this section and it was wrong twice.
+
+    `ctf-duplicate-parameter` quotes `127.0.0.1:9139`, which the `listening:` line has
+    already answered, so a "not found" line contradicts the brief one line above it;
+    and an audit task quotes the field names of the report it is being asked to write,
+    which are missing for the least interesting reason there is.
+    """
+    workspace = make_task(tmp_path)
+
+    rendered = inspect_environment(
+        workspace, ENV, instruction="Save the proof string to `/app/flag.txt`."
+    ).render()
+
+    assert "quoted:" not in rendered
+    assert "/app/flag.txt" not in rendered
+
+
+def test_a_task_with_no_backticks_adds_no_literal_section(tmp_path: Path) -> None:
+    workspace = make_task(tmp_path)
+
+    rendered = inspect_environment(workspace, ENV, instruction="Fix the bug.").render()
+
+    assert "quoted:" not in rendered
+
+
+def test_binary_files_are_not_scanned_for_literals(tmp_path: Path) -> None:
+    # A packet capture or a core dump will contain any short string by accident, and
+    # decoding one as text is both a wrong hit and a wasted read.
+    workspace = make_task(tmp_path)
+    (workspace / "capture.pcap").write_bytes(b"\x00\x01needle\x00" * 64)
+
+    rendered = inspect_environment(
+        workspace, ENV, instruction="Find the `needle` in the capture."
+    ).render()
+
+    assert "quoted:" not in rendered, "the only file holding the string is binary"
+    assert "capture.pcap:" not in rendered, "and no line number is claimed inside it"
+
+
+def test_the_recon_sections_stay_inside_the_resident_budget(tmp_path: Path, monkeypatch) -> None:
+    """Everything here is charged on every request, so bounds are the contract."""
+    workspace = tmp_path / "app"
+    (workspace / "src").mkdir(parents=True)
+    for i in range(200):
+        (workspace / "src" / f"mod{i:03d}.py").write_text("needle = 1\n" * 40, encoding="utf-8")
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    monkeypatch.setattr(
+        "agent.preflight.PROC_NET_TCP",
+        write_proc(proc, ipv4="".join(listen_line(f"0100007F:{port:04X}") for port in range(1, 60))),
+    )
+    instruction = " ".join(f"`needle{i}` and `needle`" for i in range(40))
+
+    rendered = inspect_environment(workspace, ENV, instruction=instruction).render()
+
+    assert len(rendered) <= limits.BRIEF_MAX_CHARS
+
+
+def test_the_workspace_path_is_not_looked_up_as_a_literal(tmp_path: Path) -> None:
+    # Every task names its own workdir in backticks, and a search for it finds the
+    # `WORKDIR` and `COPY` lines of the image's Dockerfile and nothing else. The first
+    # line of the brief already says where the workspace is.
+    workspace = make_task(tmp_path)
+    (workspace / "Dockerfile").write_text(f"FROM python\nWORKDIR {workspace}\n", encoding="utf-8")
+
+    rendered = inspect_environment(
+        workspace, ENV, instruction=f"You are working under `{workspace}`. Fix it."
+    ).render()
+
+    assert "quoted:" not in rendered

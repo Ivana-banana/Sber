@@ -15,9 +15,11 @@ the whole workspace is not.
 from __future__ import annotations
 
 import os
+import re
 import shutil
+import socket
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -87,6 +89,32 @@ Nothing is listed on a guess: a tool with no verified replacement is reported ab
 and nothing more, because a wrong second plan costs more than no second plan.
 """
 
+PROC_NET_TCP: tuple[str, ...] = ("/proc/net/tcp", "/proc/net/tcp6")
+"""Where the listening sockets are read from.
+
+Procfs and not a utility, because the target image has neither `ss` nor `nmap`
+(`docs/research/image-substitutions.md`). Both files, because a service bound to `::1`
+appears only in the second one and a task that runs one is not rare.
+"""
+
+_TCP_LISTEN = "0A"
+"""The `st` column of a socket the model can actually talk to. Everything else in that
+file is a connection someone already made, and naming one as a service buys a step and
+a recovery."""
+
+_BACKTICK = re.compile(r"`([^`\n]+)`")
+"""Backtick-quoted spans of the task text.
+
+A span may not cross a newline, which is also what makes a fenced code block invisible
+here: its opening fence has no content before the newline, so nothing matches inside
+it. That is the wanted behaviour -- a fence is an example of the output shape, not a
+name to look up.
+"""
+
+_SKIPPED_DIRS = frozenset({".git", "__pycache__", "node_modules", ".venv", "venv"})
+"""Directories the literal scan does not descend into. Not secrets and not policy:
+each one holds thousands of files that answer no question the task asked."""
+
 
 @dataclass(frozen=True)
 class EnvironmentBrief:
@@ -101,6 +129,13 @@ class EnvironmentBrief:
     python: str = ""
     note: str = ""
     """Why the tree is empty, when it is: `missing`, `unreadable` or nothing."""
+
+    ports: tuple[str, ...] = ()
+    """Listening TCP sockets as `address:port`, cheapest fact about a task that runs
+    a service and the one the model most reliably gets wrong."""
+
+    located: tuple[tuple[str, str], ...] = ()
+    """Backtick literals from the task text that exist in the tree, each with where."""
 
     secrets: tuple[str, ...] = field(default=(), repr=False)
 
@@ -120,6 +155,11 @@ class EnvironmentBrief:
             swaps = [f"{name}→{SUBSTITUTES[name]}" for name in self.absent if name in SUBSTITUTES]
             if swaps:
                 lines.append(f"instead: {'; '.join(swaps)}")
+        if self.ports:
+            lines.append(f"listening: {', '.join(self.ports)}")
+        if self.located:
+            lines.append("quoted:")
+            lines.extend(f"  {name} → {where}" for name, where in self.located)
 
         text = redact("\n".join(lines), self.secrets)
         if len(text) > limits.BRIEF_MAX_CHARS:
@@ -176,13 +216,134 @@ def _walk(root: Path, budget: int) -> tuple[list[str], int, str]:
     return listed, skipped, ""
 
 
-def inspect_environment(workspace: Path, env: Mapping[str, str]) -> EnvironmentBrief:
-    """Look at the workspace and the machine, without touching the model."""
+def _address(hex_address: str) -> str:
+    """Procfs address to something a `curl` line can use.
+
+    The kernel prints the address as host-endian 32-bit words in hex, so on a
+    little-endian machine every four bytes are reversed -- `0100007F` is 127.0.0.1 and
+    not 1.0.0.127. IPv6 is the same trick four times over.
+    """
+    try:
+        raw = bytes.fromhex(hex_address)
+    except ValueError:
+        return hex_address
+    if len(raw) == 4:
+        return socket.inet_ntop(socket.AF_INET, raw[::-1])
+    if len(raw) == 16:
+        words = b"".join(raw[at : at + 4][::-1] for at in range(0, 16, 4))
+        return socket.inet_ntop(socket.AF_INET6, words)
+    return hex_address
+
+
+def _listening() -> tuple[str, ...]:
+    """Every TCP socket in the LISTEN state, deduplicated and port-ordered.
+
+    Absence of procfs is silence, not a line saying so: a brief that reports "no ports"
+    on a kernel that simply does not expose them is a claim we cannot make.
+    """
+    found: dict[tuple[str, int], None] = {}
+    for name in PROC_NET_TCP:
+        try:
+            content = Path(name).read_text(encoding="ascii", errors="replace")
+        except OSError:
+            continue
+        for line in content.splitlines()[1:]:
+            fields = line.split()
+            if len(fields) < 4 or fields[3] != _TCP_LISTEN:
+                continue
+            address, _, port = fields[1].rpartition(":")
+            try:
+                found[(_address(address), int(port, 16))] = None
+            except ValueError:
+                continue
+    ordered = sorted(found, key=lambda socket_: (socket_[1], socket_[0]))
+    return tuple(f"{address}:{port}" for address, port in ordered[: limits.BRIEF_MAX_PORTS])
+
+
+def _quoted(instruction: str, workspace: Path) -> list[str]:
+    """The backtick literals worth looking for, in the order the task names them.
+
+    The workspace's own path is dropped. Every task names it -- `/app`,
+    `/workspace/review`, `/var/lib/case-42` -- and the only thing a search for it finds
+    is the `WORKDIR` and `COPY` lines of the image's own Dockerfile, which answer
+    nothing the first line of this brief did not already say.
+    """
+    here = str(workspace).rstrip("/")
+    wanted: list[str] = []
+    for match in _BACKTICK.finditer(instruction):
+        literal = match.group(1).strip()
+        if not 3 <= len(literal) <= limits.BRIEF_LITERAL_MAX_CHARS:
+            continue
+        if literal.rstrip("/") == here:
+            continue
+        if literal not in wanted:
+            wanted.append(literal)
+        if len(wanted) >= limits.BRIEF_MAX_LITERALS:
+            break
+    return wanted
+
+
+def _locate(root: Path, wanted: Sequence[str]) -> list[tuple[str, str]]:
+    """`grep -rn` for those literals, bounded, in the standard library.
+
+    Bounded rather than complete on purpose: this is orientation paid for once, and the
+    loop has a real `search` tool for the question this one cannot answer. Files are
+    read whole up to `BRIEF_SCAN_MAX_BYTES` and skipped unread when their head contains
+    a NUL, which is the rule `grep` itself uses to call a file binary.
+
+    Only the literals that were found come back. Reporting the misses looked useful for
+    one draft and was wrong twice over: `ctf-duplicate-parameter` quotes
+    `127.0.0.1:9139`, which the `listening:` line above answers and a "not found" line
+    would flatly contradict, and an audit task quotes the field names of the report it
+    is being asked to write, which are absent for the least interesting reason there is.
+    """
+    hits: dict[str, list[str]] = {literal: [] for literal in wanted}
+    if not wanted:
+        return []
+
+    seen = 0
+    for directory, subdirectories, names in os.walk(root):
+        subdirectories[:] = [name for name in subdirectories if name not in _SKIPPED_DIRS]
+        for name in sorted(names):
+            if seen >= limits.BRIEF_SCAN_MAX_FILES:
+                break
+            if all(len(where) >= limits.BRIEF_LITERAL_MAX_HITS for where in hits.values()):
+                break
+            path = Path(directory) / name
+            try:
+                with path.open("rb") as handle:
+                    blob = handle.read(limits.BRIEF_SCAN_MAX_BYTES)
+            except OSError:
+                continue
+            seen += 1
+            if b"\x00" in blob[: limits.BINARY_SNIFF_BYTES]:
+                continue
+            relative = path.relative_to(root).as_posix()
+            for number, line in enumerate(blob.decode("utf-8", "replace").splitlines(), start=1):
+                for literal in wanted:
+                    where = hits[literal]
+                    if len(where) < limits.BRIEF_LITERAL_MAX_HITS and literal in line:
+                        where.append(f"{relative}:{number}")
+
+    return [(literal, ", ".join(hits[literal])) for literal in wanted if hits[literal]]
+
+
+def inspect_environment(
+    workspace: Path, env: Mapping[str, str], instruction: str = ""
+) -> EnvironmentBrief:
+    """Look at the workspace and the machine, without touching the model.
+
+    `instruction` is untrusted data and is used here for exactly one thing: the strings
+    it puts in backticks become search terms. Nothing it says changes what this
+    function does, and what comes back is a list of paths and line numbers from the
+    workspace -- the same class of text the tree already carries.
+    """
     secrets = secrets_from_env(env)
     python = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     found = {name: bool(shutil.which(name)) for name in PROBED_TOOLS}
     available = ("python3",) + tuple(name for name in PROBED_TOOLS if found[name])
     absent = tuple(name for name in PROBED_TOOLS if not found[name])
+    ports = _listening()
 
     if not workspace.is_dir():
         return EnvironmentBrief(
@@ -192,10 +353,12 @@ def inspect_environment(workspace: Path, env: Mapping[str, str]) -> EnvironmentB
             absent=absent,
             python=python,
             note="missing",
+            ports=ports,
             secrets=secrets,
         )
 
     entries, hidden, note = _walk(workspace, limits.BRIEF_MAX_ENTRIES)
+    located = _locate(workspace, _quoted(instruction, workspace))
     return EnvironmentBrief(
         workspace=workspace,
         exists=True,
@@ -205,5 +368,7 @@ def inspect_environment(workspace: Path, env: Mapping[str, str]) -> EnvironmentB
         absent=absent,
         python=python,
         note=note,
+        ports=ports,
+        located=tuple(located),
         secrets=secrets,
     )

@@ -210,7 +210,7 @@ def main(
         return EXIT_OK
 
     inspect_started = state.start_phase("inspect")
-    brief = preflight.inspect_environment(state.workspace, env)
+    brief = preflight.inspect_environment(state.workspace, env, state.instruction)
     # `classify` rather than `select` for the numbers alone: "general, because two
     # categories tied at 0" and "general, because the task said nothing we know" are
     # different runs, and when this task comes back a zero that difference is the

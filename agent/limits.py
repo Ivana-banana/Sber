@@ -187,14 +187,58 @@ the rule `grep` uses and it is right often enough for triage."""
 
 # --- Preflight ---------------------------------------------------------------
 
-BRIEF_MAX_CHARS = 1500
+BRIEF_MAX_CHARS = 2200
 BRIEF_MAX_ENTRIES = 30
 BRIEF_MAX_DEPTH = 2
 """Size of the environment map handed to the model.
 
 Paid on every call, so it is a map and not an inventory: the top of the tree, the
 interpreter and the utilities that exist. Anything deeper is a search away, and a
-search the model asks for is cheaper than a listing carried on every call."""
+search the model asks for is cheaper than a listing carried on every call.
+
+The ceiling was 1500 until the recon packet below was added. It moved because the two
+new sections are bounded but not free, and a ceiling that clips them would have made
+the sections silently useless on exactly the crowded workspaces they help most. The
+tree is rendered first, so what a cut still costs is the tail, never the map."""
+
+BRIEF_MAX_PORTS = 8
+"""Listening TCP sockets named in the brief, from `/proc/net/tcp` and `tcp6`.
+
+The E060 artifact review found `ctf-duplicate-parameter` and `ctf-signed-cookie` each
+writing the exactly correct flag and still scoring zero, because the checker wants the
+proof *issued* by the service; the trace shows four consecutive attempts to start a
+server that was already listening. That is one read of a procfs file, spent once,
+against a wrong plan the model pays for on every step it survives.
+
+Eight because a task image runs a handful of services and a machine with dozens of
+them is not the case this line was written for. `ss` and `nmap` do not exist in the
+target image (`docs/research/image-substitutions.md`), which is why this is parsed
+from procfs rather than shelled out."""
+
+BRIEF_MAX_LITERALS = 8
+BRIEF_LITERAL_MAX_CHARS = 48
+BRIEF_LITERAL_MAX_HITS = 2
+"""The backtick-quoted strings from the task text, and where they live in the tree.
+
+`mut-audit-query-gate` says to "include the actual `login_name` data flow in `proof`"
+and its checker requires exactly that string; `audit-path-normalization` names the
+component, the report path and both category names the same way. Every one of those is
+a `grep -rn` the model would otherwise buy a step at a time, and the answer does not
+change between steps.
+
+Eight literals and two hits each, because this is orientation and not a search result:
+the point is to say which file to open, and the loop has a real `search` tool for the
+rest. A literal is skipped below three characters -- `id` matches everything -- and
+above `BRIEF_LITERAL_MAX_CHARS`, where it is prose rather than a name."""
+
+BRIEF_SCAN_MAX_FILES = 400
+BRIEF_SCAN_MAX_BYTES = 65536
+"""Bound on the literal scan: files visited, and bytes read from each.
+
+Preflight runs before the first token and must not become a reason the run starts
+late. Both numbers are ceilings on a walk that normally ends far sooner, and a file
+whose first `BINARY_SNIFF_BYTES` contain a NUL is skipped unread -- a capture or a
+core dump contains any short string by accident."""
 
 # --- LLM --------------------------------------------------------------------
 
