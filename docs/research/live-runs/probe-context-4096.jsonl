@@ -1,0 +1,11 @@
+# needle: can the model still see both ends of its own input?
+{"target_tokens": 1000, "prompt_tokens": 930, "sent_chars": 3316, "head_survived": true, "tail_survived": true, "wall_s": 69.0, "reply": "ALPHA-7731 OMEGA-4412"}
+{"target_tokens": 2000, "prompt_tokens": 1938, "sent_chars": 6956, "head_survived": true, "tail_survived": true, "wall_s": 15.78, "reply": "ALPHA-7731 OMEGA-4412"}
+{"target_tokens": 3000, "prompt_tokens": 2928, "sent_chars": 10531, "head_survived": true, "tail_survived": true, "wall_s": 3.24, "reply": "ALPHA-7731 OMEGA-4412"}
+{"target_tokens": 3800, "prompt_tokens": 3720, "sent_chars": 13391, "head_survived": true, "tail_survived": true, "wall_s": 3.14, "reply": "ALPHA-7731 OMEGA-4412"}
+{"target_tokens": 5000, "prompt_tokens": 4096, "sent_chars": 17746, "head_survived": false, "tail_survived": true, "wall_s": 7.92, "reply": "SESSION-ID: DELTA-3789   REQUEST-ID: OMEGA-4412"}
+{"target_tokens": 7000, "prompt_tokens": 4096, "sent_chars": 24961, "head_survived": false, "tail_survived": true, "wall_s": 7.93, "reply": "SESSION-ID: DELTA-7756   REQUEST-ID: OMEGA-4412"}
+# replay: is a read whose answer is already in the history asked for again?
+{"repeats": 1, "history_messages": 6, "history_chars": 561, "prompt_tokens": 184, "asked_for_the_same_read_again": false, "mentions_login_name": false, "wall_s": 7.04, "reply": "{\"tool\": \"write_file\", \"path\": \"/app/report.json\", \"content\": \"{\\\"issue\\\": \\\"SQL Injection\\\", \\\"description\\\": \\\"The login function in main.py is vulnerable to SQL injection because it directly concat"}
+{"repeats": 4, "history_messages": 12, "history_chars": 1236, "prompt_tokens": 403, "asked_for_the_same_read_again": true, "mentions_login_name": false, "wall_s": 2.57, "reply": "{\"tool\": \"read_range\", \"path\": \"/app/main.py\", \"start_line\": 1}"}
+{"repeats": 10, "history_messages": 24, "history_chars": 2586, "prompt_tokens": 841, "asked_for_the_same_read_again": true, "mentions_login_name": false, "wall_s": 2.8, "reply": "{\"tool\": \"read_range\", \"path\": \"/app/main.py\", \"start_line\": 1}"}
