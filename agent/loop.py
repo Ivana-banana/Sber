@@ -87,7 +87,8 @@ def run(
 
         if state.budget.past_early_deadline() and not state.artifacts:
             observations.append(
-                "[бюджет] времени осталось мало, а на диске нет проверяемого результата. "
+                "[бюджет] запас шагов и времени на исходе, а на диске нет проверяемого "
+                "результата. "
                 "Запиши лучший вариант через write_file сейчас, улучшишь потом."
             )
 
@@ -183,9 +184,17 @@ def run(
             state.record("budget", signal.name, signal.detail)
             observations.append(f"[step {step}] {signal.detail}")
             if blocks_in_a_row >= limits.REPEAT_FAILURE_BLOCK:
-                stop_reason = "stuck"
-                summary = signal.detail
-                break
+                if state.artifacts:
+                    stop_reason = "stuck"
+                    summary = signal.detail
+                    break
+                # The guard E031 put on the stuck exit below, missing here until E060.
+                # This is the exit that fires on a fast endpoint: seven of eighteen
+                # fixtures in E052 ended through it at steps 6-10 of 30, 35-70 s into a
+                # 600 s budget, with nothing written. With no deliverable there is
+                # nothing to protect and ending is a certain zero, so the block stays
+                # advice and the caps do the ending.
+                blocks_in_a_row = 0
             continue
 
         blocks_in_a_row = 0

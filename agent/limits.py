@@ -41,6 +41,19 @@ whatever it has. A task that turns out to be a 600-second one simply continues
 afterwards and refines what is already there.
 """
 
+EARLY_DELIVERABLE_STEP_FRACTION = 0.4
+"""The same checkpoint expressed in steps, for endpoints too fast to reach it in time.
+
+`EARLY_DELIVERABLE_DEADLINE_S` was measured when one call cost 10-40 s, so eight steps
+carried a run past it. On the GPU stand a call costs 4-8 s and the whole step cap fits
+in forty seconds: E052's seven empty-handed zeros died at steps 6-10, between 35 and
+70 s, and never saw the checkpoint at all. Whichever bound arrives first is the point
+where exploring stops and producing starts.
+
+0.4 of `MAX_STEPS` is step 12 of 30 -- past the 6-10 where those runs died, and leaving
+eighteen steps to write and refine.
+"""
+
 TIMEOUT_ENV_NAMES: tuple[str, ...] = ("AGENT_TIMEOUT_S",)
 """Environment variables we read for the task deadline.
 

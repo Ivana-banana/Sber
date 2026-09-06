@@ -701,3 +701,42 @@ def test_a_stuck_signal_ends_the_run_once_a_deliverable_exists(tmp_path: Path) -
     assert outcome.deliverable == target
     assert target.read_text(encoding="utf-8") == "earned", "the earned file is left alone"
     assert outcome.solved is False, "a detector never proves a task, only a verifier does"
+
+
+def test_a_repeat_block_with_nothing_on_disk_is_advice_rather_than_an_ending(
+    tmp_path: Path,
+) -> None:
+    """The twin of the stuck guard, missing from the other exit since E031.
+
+    E031 stopped the stuck detector from ending an empty-handed run, but the
+    repeat-failure block kept its unconditional `break`. On the GPU stand that exit is
+    the one that fires: seven of eighteen fixtures in E052 ended at steps 6-10 of 30,
+    35-70 s into a 600 s budget, with `deliverable=none`. A run in that state has
+    nothing to protect, so ending it converts a maybe into a certain zero.
+    """
+    missing = tmp_path / "nowhere" / "file.txt"
+    repeated = action("read_range", path=str(missing))
+    llm = StubLlm(replies=[repeated for _ in range(limits.MAX_STEPS + 3)])
+
+    outcome = run(make_state(tmp_path), llm, FakeVerify())
+
+    assert outcome.stop_reason != "stuck"
+    assert outcome.stop_reason in {"steps", "budget"}
+    assert any("already failed" in text for text in outcome.observations)
+
+
+def test_the_deliverable_checkpoint_fires_on_steps_when_the_endpoint_is_fast(
+    tmp_path: Path,
+) -> None:
+    """`EARLY_DELIVERABLE_DEADLINE_S` is 90 s and never arrives on a fast endpoint.
+
+    It was written when a call cost 10-40 s, so eight steps carried the run past it. At
+    4-8 s a call, thirty steps fit in forty seconds and the checkpoint never fires: the
+    seven empty-handed zeros of E052 all died before it. The checkpoint has to be
+    reachable by steps as well as by seconds.
+    """
+    llm = StubLlm(replies=[action("list_dir", path=str(tmp_path)) for _ in range(limits.MAX_STEPS + 3)])
+
+    outcome = run(make_state(tmp_path), llm, FakeVerify())
+
+    assert any(text.startswith("[бюджет]") for text in outcome.observations)

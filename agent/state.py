@@ -151,8 +151,14 @@ class Budget:
         120-second and 600-second tasks. Rather than betting on one of them, the loop
         treats this moment as the point where exploring stops and producing starts:
         past it, being killed costs the refinement, never the deliverable.
+
+        Steps count as well as seconds, and for the same reason the clock does: on an
+        endpoint fast enough to spend the whole step cap inside the time checkpoint,
+        a purely temporal one never arrives.
         """
-        return self.elapsed_s() >= self.early_deadline_s
+        if self.elapsed_s() >= self.early_deadline_s:
+            return True
+        return self.steps_used >= self.max_steps * limits.EARLY_DELIVERABLE_STEP_FRACTION
 
     def may_recover(self) -> bool:
         """Whether a directed retry after a red verifier is still allowed.
