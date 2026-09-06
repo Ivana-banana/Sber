@@ -37,6 +37,16 @@
 
 ## Завершено
 
+**Codex, 07.09.2026 — анализ и план organizer-first.** План:
+`docs/superpowers/plans/2026-09-07-organizer-first-improvements.md`; доказательства:
+`docs/research/organizer-first-audit-2026-09-07.md`, A20260907 в experiments и raw
+summary. Проверки: 387 tests; два false-positive replay воспроизведены; organizer
+forensic parity exit 0; ссылки/Markdown проверены. Runtime не менялся, нового
+public/LLM baseline нет. Следующая реализация: public baseline E060/E061 отдельно,
+затем метаданные источника в observation на official audit. Чужие WIP
+`JOURNAL.md` и `deep-research-report.md` сохранены. Коммит определяется через
+`git log -1 -- docs/superpowers/plans/2026-09-07-organizer-first-improvements.md`.
+
 | Дата | Владелец | Commit | Результат | Проверка / ограничения |
 |---|---|---|---|---|
 | 2026-09-03 | Claude | `1fed51a`, `f60197d` | E019, инфраструктура: гипотеза «телеметрия фаз не долетает до логов» **отвергнута** — E017 прогонялся на `5cd1be7`, а телеметрия появилась позже в `c05453c`, поэтому нулей в его логах и не могло не быть. Настоящий пробел был в harness: `run_suite.py` читал только `agent ready:`/`agent done:`, а пофазные числа E018 доставались руками. Добавлен `phase_breakdown` (сумма и число завершённых фаз + фаза, открытая на момент kill) и колонка `phases` в `results.tsv`/`suite.json`; `AgentState.record` теперь один раз сообщает в stderr тип исключения, из-за которого sink отключился | `pytest -q` 325 passed; парсер побайтово воспроизводит ручную арифметику обеих трасс E018 и отдаёт `-` на логах E017 без телеметрии; локальный `sh run.sh` под piped `subprocess.run` со stub-endpoint даёт 14 строк `agent phase`; ZIP 63 204 B / `67418f4a…adf4`, preflight 5 PASS. Ограничения: решаемость не измерялась и измениться не могла; колонка `phases` проверена на двух трассах одного fixture, полный 18-задачный прогон с ней ещё не выполнялся; стоимость синхронной записи фаз в wall-clock по-прежнему не измерена |
