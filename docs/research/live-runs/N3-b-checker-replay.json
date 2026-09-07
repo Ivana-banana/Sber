@@ -1,0 +1,21 @@
+{
+  "kind": "saved-candidate checker replay, no model/container run",
+  "only_checker_change": "REPORT_PATH redirects to saved candidate",
+  "tests": {
+    "test_report_contains_login_sql_injection_finding": {
+      "result": "FAIL",
+      "reason": "Expected at least one finding describing SQL injection in the login/authentication flow with concrete evidence, impact, or exploit detail"
+    },
+    "test_security_report_exists": {
+      "result": "PASS"
+    },
+    "test_security_report_is_valid_json_object": {
+      "result": "FAIL",
+      "reason": "'findings' must contain at least one finding"
+    }
+  },
+  "input_tokens": 18820,
+  "output_tokens": 317,
+  "endpoint_total_tokens": 19137,
+  "checker_sha256": "0efdd3e6af1485376e310bb565b105e735e3f57df9bc517510f5b018f86a9353"
+}

@@ -1,0 +1,18 @@
+{
+  "agent_base_commit": "52455eb",
+  "diagnostic_commit": "8d97cc124b404f2d70f999ca218a767cb2181816",
+  "model_ps": "NAME                                ID              SIZE      PROCESSOR    CONTEXT    UNTIL               \nqwen2.5-coder:7b-instruct-q4_K_M    dae161e27b0e    4.6 GB    100% CPU     4096       29 minutes from now",
+  "images": {
+    "sber-model": "sha256:662109db8037f17257cfc6e816289c0d4c9ae8a2a4ff760b653d8d410e234ba0",
+    "sber-proxy": "sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea",
+    "task": "sha256:e697a45f7fdecf0fbf91580444efdda20f177ae41d39cc2b3e477c3ddc5e0701"
+  },
+  "sha256": {
+    "build/b-deep-base.zip": "21a43317d6ed9e78473e7334b6a9ed04e21d0dee1cf80af6ed3e1a782d91bf99",
+    "build/n1-public-audit-evidence.tar.gz": "98acf490b146fb885cb28c5739625f6fcddc20dc9d585bf118cb4a59a3bcd0fb",
+    "local_task/find-sqli-login/environment/app/routers/auth.py": "896e3a6db57fd6ccb44d2ec626a2694ec9ca6a4b87e86c279d0d08c505094da2",
+    "local_task/find-sqli-login/instruction.md": "0924194e1f1282bc3d4f3fa10023c355680ee8dcc854127cb272d79032389968",
+    "local_task/find-sqli-login/tests/test_security_report.py": "0efdd3e6af1485376e310bb565b105e735e3f57df9bc517510f5b018f86a9353",
+    "local_task/find-sqli-login/tests/test.sh": "9837a941d881009c9bff2a4dbb4934d4f6082ed2fa6d46eb875483e07a0d9983"
+  }
+}

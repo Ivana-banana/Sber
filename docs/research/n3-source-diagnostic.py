@@ -56,6 +56,18 @@ def main():
         # Read only after agent execution, before official verification and cleanup.
         report = suite.run(["docker", "exec", container, "cat", "/app/security_report.json"])
         prefix.with_suffix(prefix.suffix + ".candidate").write_text(report.stdout)
+        # Official public test.sh runs pytest /tests. The shared runner installs
+        # its launcher under /opt/verifier; stage the untouched tests after the
+        # agent finishes, so this correction cannot affect its observations.
+        for command in (
+            ["docker", "exec", container, "mkdir", "-p", "/tests"],
+            ["docker", "cp", f"{spec.root / 'tests'}/.", f"{container}:/tests"],
+        ):
+            staged = suite.run(command)
+            if staged.returncode:
+                note = f"cannot stage official tests: {staged.stderr.strip()[-200:]}"
+                prefix.with_suffix(prefix.suffix + ".verifier").write_text(note + "\n")
+                return None, note
         reward, note = original_verify(self, container, spec)
         pytest = suite.run(["docker", "exec", container, "cat", "/logs/verifier/pytest_output.txt"])
         prefix.with_suffix(prefix.suffix + ".verifier").write_text(pytest.stdout + pytest.stderr)

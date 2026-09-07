@@ -2606,3 +2606,37 @@ task image не запускался, solved count не менялся.
   не зависит (пара1 B=read/T=search, пара2 T2=read/B2=search); ускорение первого
   plan у json_schema устойчиво по порядку (11–12s против native 23–62s). Вывод:
   узкое место — навигация к уязвимому исходнику, не протокол. Следующий шаг — N3.
+
+
+### N3 preparation — invalid live verifier, source diagnostic handed off
+
+- Дата: 07→08.09.2026. Agent base `52455eb`, diagnostic wrapper `8d97cc1`.
+  Архив B `21a43317d6ed9e78473e7334b6a9ed04e21d0dee1cf80af6ed3e1a782d91bf99`.
+  Модель qwen2.5-coder:7b-instruct-q4_K_M (`dae161e27b0e`), context 4096,
+  `ollama ps`: 100% CPU. Параметры: native_tools default, temperature=0, max_tokens=2048,
+  timeout_scale=1.0, task timeout=600s, repeat=1. Runtime без изменений.
+- До уточнения владельца «код здесь, прогоны другим агентом» выполнен только B:
+  141.3s, 12 steps, stop=stuck, first plan=25.684s, agent tokens=17385;
+  endpoint input=18820, output=317, total=19137, requests=12, late=0.
+- **Live solved не установлен.** Сырой reward=0 получен из launcher после ошибки
+  pytest: collected 0, exit=4, `/tests` отсутствует. Общий runner ставит tests
+  в `/opt/verifier`, official test.sh ожидает `/tests`. Исходная taxonomy
+  `reasoning` в TSV не учитывает эту ошибку измерителя; сырые данные сохранены.
+- Ответ агента отдельно тоже дефектен: candidate `{"findings": []}`. Replay
+  исходных трёх assertions (меняется только REPORT_PATH) дал 1 PASS / 2 FAIL.
+  Это объясняет содержательный ноль saved-candidate, но не исправляет live run.
+- N3-A **не запускался**, новых LLM-запусков после уточнения нет. Подготовлен
+  wrapper: добавляет только исходник в instruction, сохраняет candidate и
+  verifier даже на успехе, staging исходных tests в `/tests` после агента.
+  Исправление: regression 2 failed/1 passed → 3 passed; вместе с существующими
+  suite tests **20 passed**. Live gate исправленного wrapper передан другому агенту.
+- Команды воспроизведения, включая правильный запуск B/A и ограничения:
+  `docs/research/n3-run-handoff.md`; прогноз `docs/research/live-runs/N3-prediction.md`.
+  Локальные данные: `build/eval-N3-B/{suite.json,results.tsv,logs/*}`,
+  `build/n3-evidence/`. Сырые summary/replay/metadata и SHA256SUMS записаны в
+  `docs/research/live-runs/N3-*`. N1 bundle: все 29 перечисленных файлов/архивов
+  совпали по checksum; валидность live verifier этим не доказывается.
+- Следующий шаг агента прогонов: B-fixed → N3-A, проверить выполнение всех
+  трёх official tests и присутствие source в первом request; A=1 — reverse pair,
+  A=0 — разбор evidence. Это assisted diagnostic, не улучшение autonomous public
+  score; исходный комментарий VULNERABLE ограничивает вывод о понимании кода.

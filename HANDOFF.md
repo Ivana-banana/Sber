@@ -19,6 +19,11 @@ Codex N3, 07.09.2026, `eval/n3-source-diagnostic` (изолированный wo
 кандидат и сырые метрики; прогноз `docs/research/live-runs/N3-prediction.md`.
 Граница — новые `docs/research/n3-*`, N3 prediction, запись эксперимента и эта
 запись. Runtime, official fixtures и WIP основного рабочего дерева не менять.
+08.09: код подготовлен, 20 unit/contract checks PASS; исполнение модели передано
+другому агенту по прямому уточнению владельца. Команды и критерии приёмки:
+`docs/research/n3-run-handoff.md`. Запущен только контроль старым wrapper:
+reward=0 невалиден (official /tests отсутствует); candidate replay 1 PASS/2 FAIL.
+Исправление staging tests покрыто regression tests, новый live gate ожидается.
 
 | Владелец | Ветка | Задача | Файлы/контракт | Проверка | Статус |
 |---|---|---|---|---|---|

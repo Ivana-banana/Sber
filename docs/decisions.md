@@ -93,6 +93,16 @@
 
 ## Шаблон новой записи
 
+N3, 08.09.2026 — диагностическое решение: релевантный исходник добавляется только
+eval-wrapper к исходной инструкции; submission не меняется. Official tests
+копируются в `/tests` после завершения агента, потому что исходный public audit
+`test.sh` использует этот путь, а общий runner устанавливает их в `/opt/verifier`.
+Код checker/assertions сохраняется; staging failure — reward=None. Основание:
+`build/eval-N3-B/logs/find-sqli-login.r1.verifier` показывает 0 collected и
+отсутствие `/tests`. Unit regression: 2 FAIL → PASS; контейнерная проверка
+исправленного wrapper передана агенту прогонов. Это исправление измерителя,
+не принятая runtime-архитектура; протокол — `docs/research/n3-run-handoff.md`.
+
 ```text
 | YYYY-MM-DD | гипотеза/принято/отменено | Что выбрали | Каким фактом или экспериментом подтверждено; последствия |
 ```

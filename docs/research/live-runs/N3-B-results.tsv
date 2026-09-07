@@ -1,0 +1,2 @@
+task	repeat	reward	tokens	ep_tokens	ep_calls	ep_late	wall_s	steps	stop	claim	wrote	failure	phases	note
+find-sqli-login	1	0	17385	19137	12	0	141.3	12	stuck	False	yes	reasoning	inspect=0.015/1 plan=140.697/12 act=0.004/11 verify=0.000/1	
