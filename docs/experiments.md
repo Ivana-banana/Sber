@@ -2599,3 +2599,10 @@ task image не запускался, solved count не менялся.
   `build/eval-N1-{B,T}-public-audit/`.
 - Ограничение: один прогон не доказывает устойчивость; AB без BA. Следующий шаг —
   N3 (навигация): дать релевантный исходник и оценить official verifier.
+- Reverse T2→B2 (оба тёплые): T2 reward=0 wall=135.0s steps=14 first_plan=11.354s
+  call5=read_range; B2 reward=0 wall=142.9s steps=12 first_plan=23.449s call5=search.
+  Итог 4 прогонов: reward=0 везде; `routers/` не открыт ни разу (0 в trace), хотя
+  все 4 видели его в list_dir. Выбор read_range vs search стохастичен и от протокола
+  не зависит (пара1 B=read/T=search, пара2 T2=read/B2=search); ускорение первого
+  plan у json_schema устойчиво по порядку (11–12s против native 23–62s). Вывод:
+  узкое место — навигация к уязвимому исходнику, не протокол. Следующий шаг — N3.
