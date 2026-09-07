@@ -85,3 +85,16 @@ $//'`) и сортирует в `LC_ALL=C` — CRLF в `/app/incident_report.txt
 | 2026-08-25 | Claude | `1acfd9a` | Перенос архитектурных паттернов из AIOS/ozon/ai-v-massy/datacon_2026 | Статус документа — предложение; §8 ждёт решения команды |
 | 2026-08-24 | Codex | `66493b3` | Статический аудит upstream, выбор hybrid cascade, granular-план КТ №4 | Markdown/link checks и пересчёт матрицы зелёные; runtime не проверен — на этой машине нет Docker/uv |
 | 2026-08-24 | Codex | `c6e5150` | Стартовая документация и план | Контент-проверка; runtime ещё не запускался |
+
+## Codex — повторный разбор ночи, 07.09.2026
+
+Цель: объяснить отсутствие прироста E062–E069 по сырым public-трассам и предложить
+проверяемые следующие факторы. Проверка: пересчёт всех TSV, replay official audit
+checker и сопоставление request/trace/log; новых LLM-прогонов пока нет. Граница:
+новый отчёт и диагностические материалы `docs/research/night-public-*`, запись
+эксперимента; runtime и существующий WIP предыдущей сессии не менять.
+Завершено: `docs/research/night-public-analysis-2026-09-07.md`, A20260907c.
+Проверка: 20 suite totals, 60 public traces, девять official audit replay,
+Budget boundary replay, forensic parity; повторный JSON побайтово совпал.
+Новых LLM-прогонов и доказанного прироста solved нет. Commit искать через
+`git log -1 -- docs/research/night-public-analysis-2026-09-07.md`.

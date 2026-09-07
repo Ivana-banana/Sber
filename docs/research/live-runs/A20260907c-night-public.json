@@ -1,0 +1,1578 @@
+{
+  "scope": "offline analysis, no new model calls or end-to-end rewards",
+  "caveat": "Trace actions are requests, not execution evidence. Only first three request bodies saved.",
+  "suites": [
+    {
+      "label": "B1-base-public",
+      "set": "public",
+      "solved": [
+        "bye-file",
+        "hello-file"
+      ],
+      "tasks": 6,
+      "endpoint_tokens": 87826,
+      "wall_s": 1222.3
+    },
+    {
+      "label": "E062-h01a-public",
+      "set": "public",
+      "solved": [
+        "bye-file",
+        "hello-file"
+      ],
+      "tasks": 6,
+      "endpoint_tokens": 72180,
+      "wall_s": 1068.3
+    },
+    {
+      "label": "E063-h01b-public",
+      "set": "public",
+      "solved": [
+        "bye-file",
+        "hello-file"
+      ],
+      "tasks": 6,
+      "endpoint_tokens": 92483,
+      "wall_s": 1521.3
+    },
+    {
+      "label": "E064-h03-public",
+      "set": "public",
+      "solved": [
+        "hello-file"
+      ],
+      "tasks": 6,
+      "endpoint_tokens": 68812,
+      "wall_s": 1366.2
+    },
+    {
+      "label": "E065-h04-public",
+      "set": "public",
+      "solved": [
+        "bye-file",
+        "hello-file"
+      ],
+      "tasks": 6,
+      "endpoint_tokens": 97382,
+      "wall_s": 1247.4
+    },
+    {
+      "label": "E066-h05a-public",
+      "set": "public",
+      "solved": [
+        "bye-file",
+        "hello-file"
+      ],
+      "tasks": 6,
+      "endpoint_tokens": 101327,
+      "wall_s": 1401.2
+    },
+    {
+      "label": "E067-h06b-public",
+      "set": "public",
+      "solved": [
+        "bye-file"
+      ],
+      "tasks": 6,
+      "endpoint_tokens": 141477,
+      "wall_s": 2130.9
+    },
+    {
+      "label": "E068-h08-public",
+      "set": "public",
+      "solved": [
+        "bye-file",
+        "hello-file"
+      ],
+      "tasks": 6,
+      "endpoint_tokens": 75357,
+      "wall_s": 1142.8
+    },
+    {
+      "label": "E069-h09-public",
+      "set": "public",
+      "solved": [
+        "bye-file",
+        "hello-file"
+      ],
+      "tasks": 6,
+      "endpoint_tokens": 75109,
+      "wall_s": 1105.1
+    },
+    {
+      "label": "B2-base-public-repeat",
+      "set": "public",
+      "solved": [
+        "bye-file",
+        "hello-file"
+      ],
+      "tasks": 6,
+      "endpoint_tokens": 97583,
+      "wall_s": 1300.7
+    },
+    {
+      "label": "B3-base-fixtures",
+      "set": "fixtures",
+      "solved": [
+        "fix-cache-key-scope",
+        "mut-audit-query-gate",
+        "mut-greeting-farewell",
+        "mut-salutation-beacon"
+      ],
+      "tasks": 18,
+      "endpoint_tokens": 206286,
+      "wall_s": 4271.5
+    },
+    {
+      "label": "E069-h09-fixtures",
+      "set": "fixtures",
+      "solved": [
+        "fix-cache-key-scope",
+        "mut-audit-query-gate",
+        "mut-greeting-farewell",
+        "mut-salutation-beacon"
+      ],
+      "tasks": 18,
+      "endpoint_tokens": 208646,
+      "wall_s": 4194.3
+    },
+    {
+      "label": "E068-h08-fixtures",
+      "set": "fixtures",
+      "solved": [
+        "fix-cache-key-scope",
+        "fix-redirect-scheme",
+        "mut-audit-query-gate",
+        "mut-greeting-farewell"
+      ],
+      "tasks": 18,
+      "endpoint_tokens": 229174,
+      "wall_s": 4440.0
+    },
+    {
+      "label": "E062-h01a-fixtures",
+      "set": "fixtures",
+      "solved": [
+        "fix-cache-key-scope",
+        "mut-audit-query-gate",
+        "mut-greeting-farewell",
+        "mut-salutation-beacon"
+      ],
+      "tasks": 18,
+      "endpoint_tokens": 210668,
+      "wall_s": 3981.8
+    },
+    {
+      "label": "E067-h06b-fixtures",
+      "set": "fixtures",
+      "solved": [
+        "fix-cache-key-scope",
+        "mut-audit-query-gate",
+        "mut-greeting-farewell",
+        "mut-salutation-beacon"
+      ],
+      "tasks": 18,
+      "endpoint_tokens": 296754,
+      "wall_s": 5151.8
+    },
+    {
+      "label": "E066-h05a-fixtures",
+      "set": "fixtures",
+      "solved": [
+        "fix-cache-key-scope",
+        "fix-redirect-scheme",
+        "mut-audit-query-gate",
+        "mut-greeting-farewell",
+        "mut-salutation-beacon"
+      ],
+      "tasks": 18,
+      "endpoint_tokens": 210332,
+      "wall_s": 4143.4
+    },
+    {
+      "label": "E064-h03-fixtures",
+      "set": "fixtures",
+      "solved": [
+        "fix-cache-key-scope",
+        "mut-audit-query-gate",
+        "mut-greeting-farewell",
+        "mut-salutation-beacon"
+      ],
+      "tasks": 18,
+      "endpoint_tokens": 182709,
+      "wall_s": 3754.4
+    },
+    {
+      "label": "E065-h04-fixtures",
+      "set": "fixtures",
+      "solved": [
+        "fix-cache-key-scope",
+        "mut-audit-query-gate",
+        "mut-greeting-farewell",
+        "mut-salutation-beacon"
+      ],
+      "tasks": 18,
+      "endpoint_tokens": 216130,
+      "wall_s": 4642.0
+    },
+    {
+      "label": "E063-h01b-fixtures",
+      "set": "fixtures",
+      "solved": [
+        "fix-cache-key-scope",
+        "mut-audit-query-gate",
+        "mut-greeting-farewell",
+        "mut-salutation-beacon"
+      ],
+      "tasks": 18,
+      "endpoint_tokens": 200957,
+      "wall_s": 4115.5
+    },
+    {
+      "label": "B4-base-fixtures-repeat",
+      "set": "fixtures",
+      "solved": [
+        "fix-cache-key-scope",
+        "mut-audit-query-gate",
+        "mut-greeting-farewell",
+        "mut-salutation-beacon"
+      ],
+      "tasks": 18,
+      "endpoint_tokens": 196515,
+      "wall_s": 4177.0
+    }
+  ],
+  "public": [
+    {
+      "label": "B1-base-public",
+      "task": "bye-file",
+      "reward": 1,
+      "first_plan_s": 86.644,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [
+        "/app/bye.txt"
+      ],
+      "requested_write_paths": [
+        "/app/bye.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "B1-base-public",
+      "task": "find-sqli-login",
+      "reward": 0,
+      "first_plan_s": 90.135,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/security_report.json"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 1,
+      "official_audit_replay": {
+        "test_report_contains_login_sql_injection_finding": "FAIL: AssertionError",
+        "test_security_report_exists": "PASS",
+        "test_security_report_is_valid_json_object": "FAIL: AssertionError"
+      }
+    },
+    {
+      "label": "B1-base-public",
+      "task": "fix-sqli-login",
+      "reward": 0,
+      "first_plan_s": 85.731,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [
+        "AGENTS.md"
+      ],
+      "requested_write_paths": [
+        "/app/timeout_error.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "B1-base-public",
+      "task": "fix-sqli-search",
+      "reward": 0,
+      "first_plan_s": 36.114,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [
+        "/app/main.py",
+        "main.py"
+      ],
+      "requested_write_paths": [
+        "/app/README.md"
+      ],
+      "requested_shell_commands": [
+        "pytest tests/"
+      ],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "B1-base-public",
+      "task": "hello-file",
+      "reward": 1,
+      "first_plan_s": 63.193,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/hello.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "B1-base-public",
+      "task": "incident-log-forensics",
+      "reward": 0,
+      "first_plan_s": 90.115,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/incident_report.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E062-h01a-public",
+      "task": "bye-file",
+      "reward": 1,
+      "first_plan_s": 61.439,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/bye.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E062-h01a-public",
+      "task": "find-sqli-login",
+      "reward": 0,
+      "first_plan_s": 90.101,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/security_report.json"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 1,
+      "official_audit_replay": {
+        "test_report_contains_login_sql_injection_finding": "FAIL: AssertionError",
+        "test_security_report_exists": "PASS",
+        "test_security_report_is_valid_json_object": "FAIL: AssertionError"
+      }
+    },
+    {
+      "label": "E062-h01a-public",
+      "task": "fix-sqli-login",
+      "reward": 0,
+      "first_plan_s": 86.141,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [
+        "/app/AGENTS.md"
+      ],
+      "requested_write_paths": [
+        "/app/timeout_error.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E062-h01a-public",
+      "task": "fix-sqli-search",
+      "reward": 0,
+      "first_plan_s": 35.507,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [
+        "/app/db.py",
+        "main.py"
+      ],
+      "requested_write_paths": [
+        "/app/README.md"
+      ],
+      "requested_shell_commands": [
+        "pytest tests/"
+      ],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E062-h01a-public",
+      "task": "hello-file",
+      "reward": 1,
+      "first_plan_s": 61.621,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/hello.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E062-h01a-public",
+      "task": "incident-log-forensics",
+      "reward": 0,
+      "first_plan_s": 90.113,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/incident_report.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E063-h01b-public",
+      "task": "bye-file",
+      "reward": 1,
+      "first_plan_s": 63.754,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/bye.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E063-h01b-public",
+      "task": "find-sqli-login",
+      "reward": 0,
+      "first_plan_s": 90.1,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/security_report.json"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 1,
+      "official_audit_replay": {
+        "test_report_contains_login_sql_injection_finding": "FAIL: AssertionError",
+        "test_security_report_exists": "PASS",
+        "test_security_report_is_valid_json_object": "FAIL: AssertionError"
+      }
+    },
+    {
+      "label": "E063-h01b-public",
+      "task": "fix-sqli-login",
+      "reward": 0,
+      "first_plan_s": 85.853,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [
+        "main.py"
+      ],
+      "requested_write_paths": [
+        "/app/README.md"
+      ],
+      "requested_shell_commands": [
+        "pytest tests/"
+      ],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E063-h01b-public",
+      "task": "fix-sqli-search",
+      "reward": 0,
+      "first_plan_s": 43.459,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [
+        "/app/main.py",
+        "main.py"
+      ],
+      "requested_write_paths": [
+        "/app/README.md"
+      ],
+      "requested_shell_commands": [
+        "pytest tests/"
+      ],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E063-h01b-public",
+      "task": "hello-file",
+      "reward": 1,
+      "first_plan_s": 62.948,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/hello.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E063-h01b-public",
+      "task": "incident-log-forensics",
+      "reward": 0,
+      "first_plan_s": 90.102,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/incident_report.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E064-h03-public",
+      "task": "bye-file",
+      "reward": 0,
+      "first_plan_s": 90.131,
+      "saved_request_bodies": 1,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/bye.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E064-h03-public",
+      "task": "find-sqli-login",
+      "reward": 0,
+      "first_plan_s": 90.098,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/security_report.json"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 1,
+      "official_audit_replay": {
+        "test_report_contains_login_sql_injection_finding": "FAIL: AssertionError",
+        "test_security_report_exists": "PASS",
+        "test_security_report_is_valid_json_object": "FAIL: AssertionError"
+      }
+    },
+    {
+      "label": "E064-h03-public",
+      "task": "fix-sqli-login",
+      "reward": 0,
+      "first_plan_s": 90.128,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/timeout_error.txt"
+      ],
+      "requested_shell_commands": [
+        "pytest tests/"
+      ],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E064-h03-public",
+      "task": "fix-sqli-search",
+      "reward": 0,
+      "first_plan_s": 50.942,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [
+        "main.py"
+      ],
+      "requested_write_paths": [
+        "/app/README.md"
+      ],
+      "requested_shell_commands": [
+        "pytest tests/"
+      ],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E064-h03-public",
+      "task": "hello-file",
+      "reward": 1,
+      "first_plan_s": 88.175,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [
+        "/app/hello.txt"
+      ],
+      "requested_write_paths": [
+        "/app/hello.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E064-h03-public",
+      "task": "incident-log-forensics",
+      "reward": 0,
+      "first_plan_s": 90.132,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [
+        "/app/incident/proxy_access.log"
+      ],
+      "requested_write_paths": [
+        "/app/incident_report.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E065-h04-public",
+      "task": "bye-file",
+      "reward": 1,
+      "first_plan_s": 79.035,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [
+        "/app/bye.txt"
+      ],
+      "requested_write_paths": [
+        "/app/bye.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E065-h04-public",
+      "task": "find-sqli-login",
+      "reward": 0,
+      "first_plan_s": 90.165,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/security_report.json"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 1,
+      "official_audit_replay": {
+        "test_report_contains_login_sql_injection_finding": "FAIL: AssertionError",
+        "test_security_report_exists": "PASS",
+        "test_security_report_is_valid_json_object": "FAIL: AssertionError"
+      }
+    },
+    {
+      "label": "E065-h04-public",
+      "task": "fix-sqli-login",
+      "reward": 0,
+      "first_plan_s": 86.222,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [
+        "AGENTS.md"
+      ],
+      "requested_write_paths": [
+        "/app/timeout_error.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E065-h04-public",
+      "task": "fix-sqli-search",
+      "reward": 0,
+      "first_plan_s": 35.002,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [
+        "AGENTS.md"
+      ],
+      "requested_write_paths": [
+        "/app/timeout_error.txt"
+      ],
+      "requested_shell_commands": [
+        "ps -ef | grep uvicorn",
+        "pkill -f \"uvicorn main:app\" || true",
+        "cat /app/timeout_error.txt | grep -q 'transport failed: TimeoutError'",
+        "cat /app/timeout_error.txt | grep -q 'expected error message'",
+        "pytest tests/",
+        "cat /app/timeout_error.txt"
+      ],
+      "requested_finish": 2,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E065-h04-public",
+      "task": "hello-file",
+      "reward": 1,
+      "first_plan_s": 62.042,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/hello.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E065-h04-public",
+      "task": "incident-log-forensics",
+      "reward": 0,
+      "first_plan_s": 90.036,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/incident_report.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E066-h05a-public",
+      "task": "bye-file",
+      "reward": 1,
+      "first_plan_s": 69.693,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/bye.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E066-h05a-public",
+      "task": "find-sqli-login",
+      "reward": 0,
+      "first_plan_s": 76.899,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/security_report.json"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0,
+      "official_audit_replay": {
+        "test_report_contains_login_sql_injection_finding": "FAIL: AssertionError",
+        "test_security_report_exists": "PASS",
+        "test_security_report_is_valid_json_object": "FAIL: AssertionError"
+      }
+    },
+    {
+      "label": "E066-h05a-public",
+      "task": "fix-sqli-login",
+      "reward": 0,
+      "first_plan_s": 86.172,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [
+        "main.py"
+      ],
+      "requested_write_paths": [
+        "/app/README.md"
+      ],
+      "requested_shell_commands": [
+        "pytest tests/"
+      ],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E066-h05a-public",
+      "task": "fix-sqli-search",
+      "reward": 0,
+      "first_plan_s": 35.129,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [
+        "/app/main.py",
+        "main.py"
+      ],
+      "requested_write_paths": [
+        "/app/README.md"
+      ],
+      "requested_shell_commands": [
+        "pytest tests/"
+      ],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E066-h05a-public",
+      "task": "hello-file",
+      "reward": 1,
+      "first_plan_s": 62.277,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/hello.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E066-h05a-public",
+      "task": "incident-log-forensics",
+      "reward": 0,
+      "first_plan_s": 90.117,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/incident_report.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E067-h06b-public",
+      "task": "bye-file",
+      "reward": 1,
+      "first_plan_s": 63.427,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/bye.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E067-h06b-public",
+      "task": "find-sqli-login",
+      "reward": 0,
+      "first_plan_s": 90.116,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0,
+      "official_audit_replay": "unavailable: no saved final deliverable"
+    },
+    {
+      "label": "E067-h06b-public",
+      "task": "fix-sqli-login",
+      "reward": 0,
+      "first_plan_s": 84.879,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [
+        "/app/tests/test_api.py",
+        "AGENTS.md",
+        "tests/test_main.py"
+      ],
+      "requested_write_paths": [],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E067-h06b-public",
+      "task": "fix-sqli-search",
+      "reward": 0,
+      "first_plan_s": 85.108,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [
+        "/app/tests/test_api.py",
+        "main.py",
+        "tests/test_api.py",
+        "tests/test_main.py"
+      ],
+      "requested_write_paths": [],
+      "requested_shell_commands": [
+        "pytest tests/"
+      ],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E067-h06b-public",
+      "task": "hello-file",
+      "reward": 0,
+      "first_plan_s": 90.146,
+      "saved_request_bodies": 1,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/hello.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E067-h06b-public",
+      "task": "incident-log-forensics",
+      "reward": 0,
+      "first_plan_s": 90.147,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [
+        "/app/incident/app.jsonl",
+        "/app/incident/collector_note.txt",
+        "incident/app.jsonl",
+        "incident/collector_note.txt"
+      ],
+      "requested_write_paths": [],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E068-h08-public",
+      "task": "bye-file",
+      "reward": 1,
+      "first_plan_s": 73.341,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/bye.txt"
+      ],
+      "requested_shell_commands": [
+        "cmp /app/bye.txt <(echo 'Bye')",
+        "cat /app/bye.txt | grep -q '^Bye$'",
+        "cat /app/bye.txt | grep -q 'Bye'"
+      ],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E068-h08-public",
+      "task": "find-sqli-login",
+      "reward": 0,
+      "first_plan_s": 90.044,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/security_report.json"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 1,
+      "official_audit_replay": {
+        "test_report_contains_login_sql_injection_finding": "FAIL: AssertionError",
+        "test_security_report_exists": "PASS",
+        "test_security_report_is_valid_json_object": "FAIL: AssertionError"
+      }
+    },
+    {
+      "label": "E068-h08-public",
+      "task": "fix-sqli-login",
+      "reward": 0,
+      "first_plan_s": 84.951,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [
+        "main.py"
+      ],
+      "requested_write_paths": [
+        "/app/README.md"
+      ],
+      "requested_shell_commands": [
+        "pytest tests/"
+      ],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E068-h08-public",
+      "task": "fix-sqli-search",
+      "reward": 0,
+      "first_plan_s": 35.709,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [
+        "/app/main.py",
+        "main.py"
+      ],
+      "requested_write_paths": [
+        "/app/README.md"
+      ],
+      "requested_shell_commands": [
+        "pytest tests/"
+      ],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E068-h08-public",
+      "task": "hello-file",
+      "reward": 1,
+      "first_plan_s": 61.757,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/hello.txt"
+      ],
+      "requested_shell_commands": [
+        "cmp /app/hello.txt <(echo 'Hello')",
+        "cat /app/hello.txt | grep -q '^Hello$'"
+      ],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E068-h08-public",
+      "task": "incident-log-forensics",
+      "reward": 0,
+      "first_plan_s": 90.137,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/incident_report.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E069-h09-public",
+      "task": "bye-file",
+      "reward": 1,
+      "first_plan_s": 62.127,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/bye.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E069-h09-public",
+      "task": "find-sqli-login",
+      "reward": 0,
+      "first_plan_s": 90.114,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/security_report.json"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 1,
+      "official_audit_replay": {
+        "test_report_contains_login_sql_injection_finding": "FAIL: AssertionError",
+        "test_security_report_exists": "PASS",
+        "test_security_report_is_valid_json_object": "FAIL: AssertionError"
+      }
+    },
+    {
+      "label": "E069-h09-public",
+      "task": "fix-sqli-login",
+      "reward": 0,
+      "first_plan_s": 84.746,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [
+        "AGENTS.md"
+      ],
+      "requested_write_paths": [
+        "/app/timeout_error.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E069-h09-public",
+      "task": "fix-sqli-search",
+      "reward": 0,
+      "first_plan_s": 34.744,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [
+        "/app/main.py",
+        "main.py"
+      ],
+      "requested_write_paths": [
+        "/app/README.md"
+      ],
+      "requested_shell_commands": [
+        "pytest tests/"
+      ],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E069-h09-public",
+      "task": "hello-file",
+      "reward": 1,
+      "first_plan_s": 60.702,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/hello.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "E069-h09-public",
+      "task": "incident-log-forensics",
+      "reward": 0,
+      "first_plan_s": 90.116,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/incident_report.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "B2-base-public-repeat",
+      "task": "bye-file",
+      "reward": 1,
+      "first_plan_s": 62.872,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/bye.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "B2-base-public-repeat",
+      "task": "find-sqli-login",
+      "reward": 0,
+      "first_plan_s": 90.114,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/security_report.json"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 1,
+      "official_audit_replay": {
+        "test_report_contains_login_sql_injection_finding": "FAIL: AssertionError",
+        "test_security_report_exists": "PASS",
+        "test_security_report_is_valid_json_object": "FAIL: AssertionError"
+      }
+    },
+    {
+      "label": "B2-base-public-repeat",
+      "task": "fix-sqli-login",
+      "reward": 0,
+      "first_plan_s": 85.494,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [
+        "AGENTS.md"
+      ],
+      "requested_write_paths": [
+        "/app/check_result.sh",
+        "/app/expected_output.txt",
+        "/app/timeout_error.txt"
+      ],
+      "requested_shell_commands": [
+        "diff /app/timeout_error.txt /app/expected_output.txt"
+      ],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "B2-base-public-repeat",
+      "task": "fix-sqli-search",
+      "reward": 0,
+      "first_plan_s": 35.771,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [
+        "/app/main.py",
+        "main.py"
+      ],
+      "requested_write_paths": [
+        "/app/README.md"
+      ],
+      "requested_shell_commands": [
+        "pytest tests/"
+      ],
+      "requested_finish": 1,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "B2-base-public-repeat",
+      "task": "hello-file",
+      "reward": 1,
+      "first_plan_s": 62.003,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": false,
+      "emergency_write_hint_visible_in_saved_prefix": false,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/hello.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    },
+    {
+      "label": "B2-base-public-repeat",
+      "task": "incident-log-forensics",
+      "reward": 0,
+      "first_plan_s": 90.117,
+      "saved_request_bodies": 3,
+      "endpoint_error_visible_in_saved_prefix": true,
+      "emergency_write_hint_visible_in_saved_prefix": true,
+      "requested_read_paths": [],
+      "requested_write_paths": [
+        "/app/incident_report.txt"
+      ],
+      "requested_shell_commands": [],
+      "requested_finish": 0,
+      "invalid_trace_chunks": 0
+    }
+  ],
+  "budget_boundary": {
+    "initial_llm_timeout_s": 90.0,
+    "second_llm_timeout_s": 4.269,
+    "past_early_deadline": true,
+    "remaining_s": 509.869,
+    "spendable_s": 389.869,
+    "steps_used": 2
+  },
+  "source_sha256": {
+    "build/deep-queue-summary.tsv": "e0976b292e227c1e4ed92acf378101b2fe40fd8a61a4a05bb27541f51d890d21",
+    "local_task/find-sqli-login/tests/test_security_report.py": "0efdd3e6af1485376e310bb565b105e735e3f57df9bc517510f5b018f86a9353",
+    "build/eval-B1-base-public/results.tsv": "5ec1afc77653eccf49f6500c45ba2e5b7019a473b5d966441a4f4424816ec9a6",
+    "build/eval-B1-base-public/logs/bye-file.r1.trace": "0c4d7ab0c10bf9e1786479a63e7eae05fcb761ef4420a710b50555e9cb89fe00",
+    "build/eval-B1-base-public/logs/bye-file.r1.log": "ac165b0d6224e2ed37bf615627172877c102210832072097dfd714abad275ba1",
+    "build/eval-B1-base-public/logs/bye-file.r1.calls": "bcef583cfcba8db024c9a32cd81a40e79236db31e13e4dcf130aa4b9d12c2826",
+    "build/eval-B1-base-public/logs/find-sqli-login.r1.trace": "2dc2c1fb6f06a56e39b0a4c842f7e74a01a63fcf58b962e8665916afdb249992",
+    "build/eval-B1-base-public/logs/find-sqli-login.r1.log": "081062b087fe79cef79120b9b428f926597184701cc4ebf3b79084e2251243cb",
+    "build/eval-B1-base-public/logs/find-sqli-login.r1.calls": "b21a63f4084df1ad7c5ba3c2348289f9a049d5fb74676037da77c74213959aa4",
+    "build/eval-B1-base-public/logs/find-sqli-login.r1.post": "63e143d9c8014025cb1a108e2d3b074849b3f25898e049ebe1ae5fd9e213ea80",
+    "build/eval-B1-base-public/logs/fix-sqli-login.r1.trace": "517ce83971f09c0cd23d471fa1a54d0ab77ebbf4bf404c075acaca0b7f88eae1",
+    "build/eval-B1-base-public/logs/fix-sqli-login.r1.log": "f96a8c7d8404b89f51299ee6041c092d4bb42549c554636ee9617ae2c08ad996",
+    "build/eval-B1-base-public/logs/fix-sqli-login.r1.calls": "c63b2e0da9935b2482267a796b4c4d68127b8b847fc1263b845e4d1c9bf5e4b7",
+    "build/eval-B1-base-public/logs/fix-sqli-search.r1.trace": "ec44a2e7ba4e8c43f48dd126ac96cd71efd09c6472202555f38ec40eaf230758",
+    "build/eval-B1-base-public/logs/fix-sqli-search.r1.log": "8d1b87908228ef9488927b7ad771c9496968bf3e4ff8ad4aa936bfc92c6a2b39",
+    "build/eval-B1-base-public/logs/fix-sqli-search.r1.calls": "70648feeabb6d6d2e3a92edd394da00c18614a7cf6bf6e395ed996f5dc2c599d",
+    "build/eval-B1-base-public/logs/hello-file.r1.trace": "22bedde81f3f7b2d6df1cab29f7d4ff0419fdeb83a8a14d2cbf13994cc811203",
+    "build/eval-B1-base-public/logs/hello-file.r1.log": "8bb0871ad46f64f3bdd1537f0a88677ca3ed48f65d227db56c801a1f856f11b1",
+    "build/eval-B1-base-public/logs/hello-file.r1.calls": "2ca439b07d57588c5b68c5b37c31e386a7a13a093d2d0075f1a8d47be8379425",
+    "build/eval-B1-base-public/logs/incident-log-forensics.r1.trace": "44692d74af10ee97d463c66df88f887fd4c2ef2550141d1a32851623e97ea6ce",
+    "build/eval-B1-base-public/logs/incident-log-forensics.r1.log": "cea432201a9fcaf7d1e4af5d8dfc2b191b68aba20501c431123a33e689555fbb",
+    "build/eval-B1-base-public/logs/incident-log-forensics.r1.calls": "514b5d9914d9cf10c2096d7e6ff9faf5790771a72dbc5fec702c2d08f170f7dd",
+    "build/eval-E062-h01a-public/results.tsv": "e74af2b7acb3f31dd5fc95f5fe45d2f764466e41066a2985c0e12363fb2bc92e",
+    "build/eval-E062-h01a-public/logs/bye-file.r1.trace": "1b940739df961d290a64afbe6859e3db34ba26ddce0c8e969b941cdbf85a2ac6",
+    "build/eval-E062-h01a-public/logs/bye-file.r1.log": "0b81244c610d356e49b41f9f19b345a0b12fd96941c5e127428c2e706cf7a8e4",
+    "build/eval-E062-h01a-public/logs/bye-file.r1.calls": "3efe327b0f02c3453f4e5c8297c82dba3414f29c0bf90e6708fa3e7069afd7f9",
+    "build/eval-E062-h01a-public/logs/find-sqli-login.r1.trace": "2dc2c1fb6f06a56e39b0a4c842f7e74a01a63fcf58b962e8665916afdb249992",
+    "build/eval-E062-h01a-public/logs/find-sqli-login.r1.log": "111832e4f6d12e79a2833c6778f74a8b188fdb9bf6e5223e406d428fc1bb9a2e",
+    "build/eval-E062-h01a-public/logs/find-sqli-login.r1.calls": "17818afad83a93342644a3d49fb082575aebee768d5d666957abdcca37933d2d",
+    "build/eval-E062-h01a-public/logs/find-sqli-login.r1.post": "65bd5438f94bf484cf700fe0602dfdf81ad7cfa160a5d0fc84af2493acad588e",
+    "build/eval-E062-h01a-public/logs/fix-sqli-login.r1.trace": "5a2e16b5114852a3c1916efc42a5344572be24728fbb6311c64307f0e120d535",
+    "build/eval-E062-h01a-public/logs/fix-sqli-login.r1.log": "d41217ee47bd9800a92d6c22504775676f3157c5709875a8fd96098c184842f5",
+    "build/eval-E062-h01a-public/logs/fix-sqli-login.r1.calls": "fe87810fd31f3a580e84074051af37c9b232dba10ed1897d4a98f03574d3dc39",
+    "build/eval-E062-h01a-public/logs/fix-sqli-search.r1.trace": "b4867b597a10ad3da22b118940b16d4a129f34685aa3fbc759256b5440aae6b2",
+    "build/eval-E062-h01a-public/logs/fix-sqli-search.r1.log": "558a3be52af71e135ac4b73194c5d14d13fdf6652c2c1a5389cffd50cf3c9d15",
+    "build/eval-E062-h01a-public/logs/fix-sqli-search.r1.calls": "d38499bde92aac8c0d7a7a101d244ff68475f008d6da3d71ae316befc2d24c0b",
+    "build/eval-E062-h01a-public/logs/hello-file.r1.trace": "a6ccc6b80e4fe36a2d3bf2dc055875b814b62ac7ff23ba578f8e0737b321603c",
+    "build/eval-E062-h01a-public/logs/hello-file.r1.log": "01d6006c86d756342f25b60a268a478b0d4e4c58c89395e007c54cc7422bfa25",
+    "build/eval-E062-h01a-public/logs/hello-file.r1.calls": "1c4a7ad53fa1cc098233ad9ad4fb7d9095c2755bc6049556aafac9b2dac2270f",
+    "build/eval-E062-h01a-public/logs/incident-log-forensics.r1.trace": "d562532c2856b77362d558e75e8c40b1d80f21df1f1ea1e1951a906bf5ba0854",
+    "build/eval-E062-h01a-public/logs/incident-log-forensics.r1.log": "d3200c269c27d498f408f651d3b3fb25a20fc66154293ef0023d6ad56e2370d9",
+    "build/eval-E062-h01a-public/logs/incident-log-forensics.r1.calls": "1790a33e45ec6e3e6d1931a0383fcc651821d5cc9fdc1e80bfe73fd621137d5b",
+    "build/eval-E063-h01b-public/results.tsv": "a917a1b58f056c447c1dc0d05aa8571d4b247cd58087d6bdfe615eb77437b027",
+    "build/eval-E063-h01b-public/logs/bye-file.r1.trace": "1b940739df961d290a64afbe6859e3db34ba26ddce0c8e969b941cdbf85a2ac6",
+    "build/eval-E063-h01b-public/logs/bye-file.r1.log": "9cf2dcfcd9f45dfb14ac84356f15b2a1a5a5b33b313d85d3815b5e4df69747e5",
+    "build/eval-E063-h01b-public/logs/bye-file.r1.calls": "7d68900bbc52d76f15a437074b32785ca04d341279cf9679c96fc255f5f376cc",
+    "build/eval-E063-h01b-public/logs/find-sqli-login.r1.trace": "2dc2c1fb6f06a56e39b0a4c842f7e74a01a63fcf58b962e8665916afdb249992",
+    "build/eval-E063-h01b-public/logs/find-sqli-login.r1.log": "c36ebcf631154fce927f663c5182e17f27ee35279bb7499729012a7630a8c5e9",
+    "build/eval-E063-h01b-public/logs/find-sqli-login.r1.calls": "305bc296ae956cef14945c903de7a2ee1bd216ad560898023d3938994e1867b6",
+    "build/eval-E063-h01b-public/logs/find-sqli-login.r1.post": "b880b2639b1a3258ab6264ba7339168ca44d45758b8978007c7fb4ab5df3d917",
+    "build/eval-E063-h01b-public/logs/fix-sqli-login.r1.trace": "2aa662584a6b1e09ff4e158548bd83cf4b20c9866cab261c79eb7e040839dd4e",
+    "build/eval-E063-h01b-public/logs/fix-sqli-login.r1.log": "358b506a6393467c4e0fcbc798866aaeeb17c72f7ce9e2fc93c0b12525ea1079",
+    "build/eval-E063-h01b-public/logs/fix-sqli-login.r1.calls": "b32accc7da18f330ba6df9865c0118273f5d865f8e8fe5beaba5238cb6668b2e",
+    "build/eval-E063-h01b-public/logs/fix-sqli-search.r1.trace": "564013a8779eebff670a9dfa4ccd4561f09993398a56d2cd0faa3019d42501c0",
+    "build/eval-E063-h01b-public/logs/fix-sqli-search.r1.log": "1f01f024d3fa48833e29efb178fcf98d759396614b5fd8060d1063be2f231623",
+    "build/eval-E063-h01b-public/logs/fix-sqli-search.r1.calls": "c28419d6f635d817f9c1f97f7dd72c9dbce113f91c0af905227d067d26cd52b2",
+    "build/eval-E063-h01b-public/logs/hello-file.r1.trace": "22bedde81f3f7b2d6df1cab29f7d4ff0419fdeb83a8a14d2cbf13994cc811203",
+    "build/eval-E063-h01b-public/logs/hello-file.r1.log": "4e0cbfa426ede406191c5ee40a96c55bb643d578212e07965991b975b490f709",
+    "build/eval-E063-h01b-public/logs/hello-file.r1.calls": "8a5a4354acde9894b8335e47bdee44d69ddd8abcecd410fe92c74e4c07ddc3f9",
+    "build/eval-E063-h01b-public/logs/incident-log-forensics.r1.trace": "d562532c2856b77362d558e75e8c40b1d80f21df1f1ea1e1951a906bf5ba0854",
+    "build/eval-E063-h01b-public/logs/incident-log-forensics.r1.log": "77a86aa3069e8a6c1a9753f3f2e83a9881077178c4cf0f5ddedd805ad3a2339a",
+    "build/eval-E063-h01b-public/logs/incident-log-forensics.r1.calls": "4c5741711c0c53fecff256db684a0c04b70986fb62691b28d918eaa2a291bcd3",
+    "build/eval-E064-h03-public/results.tsv": "c2e0c263b7522dc061defd4a0460311e82e90459112b217089f0ead61434fe80",
+    "build/eval-E064-h03-public/logs/bye-file.r1.trace": "15953f1f54f7a62c8f6e098a8973b8af8662b618a61a9e46d2adecee6aecebb4",
+    "build/eval-E064-h03-public/logs/bye-file.r1.log": "dfe8294d55e2258ad7098f4cb342bae73e88588873655639a824481221350136",
+    "build/eval-E064-h03-public/logs/bye-file.r1.calls": "a1c20e9652c5c9099cc341eff45894dc3e6b26534ef99d8fe2d8d6217c9155db",
+    "build/eval-E064-h03-public/logs/find-sqli-login.r1.trace": "304b00c8fa5710f40054c2d03f132c4b539999e285b99a50c166b7cd63914161",
+    "build/eval-E064-h03-public/logs/find-sqli-login.r1.log": "35f96cb9ec4da1b8f32d6fafc960040cc38f56c2b27300442d057920781fb8a9",
+    "build/eval-E064-h03-public/logs/find-sqli-login.r1.calls": "ff62f4104998fec4c8299bf2d92b027dc65e181cdbf50fb20c13ee1bfa0b91a0",
+    "build/eval-E064-h03-public/logs/find-sqli-login.r1.post": "cba76722e9f2cdb2a02310c99a264f918064dc1914f18847a7c846b581940525",
+    "build/eval-E064-h03-public/logs/fix-sqli-login.r1.trace": "0357770ee0ecc6f4ac3c02ede59ddfa0874fdcee42e6254fe5fa8868a35d8517",
+    "build/eval-E064-h03-public/logs/fix-sqli-login.r1.log": "d1b2714d472f5c24a3121584aeedf56988420681c847c3fdeefeb047738071d6",
+    "build/eval-E064-h03-public/logs/fix-sqli-login.r1.calls": "53916ce3e505490cfc81269a7dfd54e10328afe8bc86554c69898a35dcccd953",
+    "build/eval-E064-h03-public/logs/fix-sqli-search.r1.trace": "100c5c19954c12a07fefd7174f2cb19d0299cc8d4c3b5232db09e73c01cd4d55",
+    "build/eval-E064-h03-public/logs/fix-sqli-search.r1.log": "89d3668357fa8cba2cfd0be3229c8008b7541fb83288f7e99e7a39eb8b9ea0f9",
+    "build/eval-E064-h03-public/logs/fix-sqli-search.r1.calls": "b9c8c3ecee625bb0d60cc5154f5960938a81ad402f97968c5fb346b2618e698a",
+    "build/eval-E064-h03-public/logs/hello-file.r1.trace": "282a40f2d7015e21b57f0d662f94b77835efbf2fe7cf367b32d85887f6aaf037",
+    "build/eval-E064-h03-public/logs/hello-file.r1.log": "6b9ee1ccb88ce877a3427bc4daad215b64709793e45afb2ef9bd276e0636b3e2",
+    "build/eval-E064-h03-public/logs/hello-file.r1.calls": "0fae44dccbf3879eba3621e25775ddd831020e28b7c9e454d23fe54768904dcd",
+    "build/eval-E064-h03-public/logs/incident-log-forensics.r1.trace": "68d9b115385bba405ac5702a10c6fe5b2e5b7433816bd51b06ceea526e64ce7d",
+    "build/eval-E064-h03-public/logs/incident-log-forensics.r1.log": "ea5caeba22111913069044f462dbf5fb2d19106b382f105474182ae46adc1bf0",
+    "build/eval-E064-h03-public/logs/incident-log-forensics.r1.calls": "d1c2183b08652e67ed1ca439aeeda986c2aa429d6eed515e2de68d708199566d",
+    "build/eval-E065-h04-public/results.tsv": "087d7eeedee25b357c8a8bb549cbcfe046354bd92f50753d96d046a7af3d7a8b",
+    "build/eval-E065-h04-public/logs/bye-file.r1.trace": "af44e579d4709a7ad2d165eda9f179495661e83cb3b1b5137b6982826e9e628c",
+    "build/eval-E065-h04-public/logs/bye-file.r1.log": "c84f980bd7bd5d39ed338af4a760bb386af86ab5cecd29657cfce54eabdc1975",
+    "build/eval-E065-h04-public/logs/bye-file.r1.calls": "4231da8fad8f9c947f11bf48dceb78e01ea0a798ff8686a19ee92e6081e847ae",
+    "build/eval-E065-h04-public/logs/find-sqli-login.r1.trace": "2dc2c1fb6f06a56e39b0a4c842f7e74a01a63fcf58b962e8665916afdb249992",
+    "build/eval-E065-h04-public/logs/find-sqli-login.r1.log": "c265f87a7e2093ba22d43012b74968660abf5f57ae8481a8621770be406b8fa4",
+    "build/eval-E065-h04-public/logs/find-sqli-login.r1.calls": "ad2d3f1d69026fe7872180bca93041763c05802d22681ef406c4f2ae739509b6",
+    "build/eval-E065-h04-public/logs/find-sqli-login.r1.post": "6fa3e5e5b72667e54fb1e0cd5a09a5d6c8b3ca3e3589919ec0ac6613260099af",
+    "build/eval-E065-h04-public/logs/fix-sqli-login.r1.trace": "886d2bc712d6aa6f11f880f573bc6cb41f71869d5a6ed8a8a48bd830339d4f1e",
+    "build/eval-E065-h04-public/logs/fix-sqli-login.r1.log": "e806e7dea9c4cb25033d7d522159c13876883ca9bc471d3aecfe67bbb66eae0a",
+    "build/eval-E065-h04-public/logs/fix-sqli-login.r1.calls": "a4c9f580819ae1412a8636d5dbd1280e836a27e56feb00c86900c24f965fd2a4",
+    "build/eval-E065-h04-public/logs/fix-sqli-search.r1.trace": "368e4697eb57edba392b729a399d13fcbaded06e492ee29e5aba7e972460a704",
+    "build/eval-E065-h04-public/logs/fix-sqli-search.r1.log": "8c0da0d254187c88fb0b50fe9827d25b1286e17873de77cd960e0922fa726b74",
+    "build/eval-E065-h04-public/logs/fix-sqli-search.r1.calls": "e76f9b6eb2e37302895d69af552876ae29799102fc7f530013e4fa1027958c1a",
+    "build/eval-E065-h04-public/logs/hello-file.r1.trace": "a6ccc6b80e4fe36a2d3bf2dc055875b814b62ac7ff23ba578f8e0737b321603c",
+    "build/eval-E065-h04-public/logs/hello-file.r1.log": "27c0301d3a5f1b0563e918e0f0d03efcb4cc27bbe6a5e0b44664e2b9c80e2dba",
+    "build/eval-E065-h04-public/logs/hello-file.r1.calls": "18cd097f6afd34d97e9c4a36d605565337cb0b9153e0c693e5d9ad51a7de881d",
+    "build/eval-E065-h04-public/logs/incident-log-forensics.r1.trace": "b7f87a247935e00ad7b55f4fce9ee044653ac9e7f5447d59a5e0436da6e791bf",
+    "build/eval-E065-h04-public/logs/incident-log-forensics.r1.log": "a8aedc05a1f8cdd0d2404f169c8a9a7de4afcd5c83d71100d8e14261bf0a0875",
+    "build/eval-E065-h04-public/logs/incident-log-forensics.r1.calls": "a7c8a58f97d3180959c1ed7fc2ca7a68765c6c79f6d246cbd77c395430aeb619",
+    "build/eval-E066-h05a-public/results.tsv": "1ff04c1a331a107fd3d13002062f0e4bf4af2132ebc4c0028640fe64ba5d5aab",
+    "build/eval-E066-h05a-public/logs/bye-file.r1.trace": "6a50fbe68ea3a1a6a1892b79511f6b2246970ef19a6e61b786a3b345565e017f",
+    "build/eval-E066-h05a-public/logs/bye-file.r1.log": "e6e31eeef25e3c48b433d673cb86bcf995f91d9412df35ead9d2220c5c9f76df",
+    "build/eval-E066-h05a-public/logs/bye-file.r1.calls": "43d8c5a901fc74f8860468fcfdb1cd73afdce102547b71d05b0079817cdf9cee",
+    "build/eval-E066-h05a-public/logs/find-sqli-login.r1.trace": "998c7a747e64a97b3b360d081c9f5ff6e120c9b06fe7abd5e4626f25b9898015",
+    "build/eval-E066-h05a-public/logs/find-sqli-login.r1.log": "309cf80f744666d2dba6d1de3d4662669f8f448ebad6d0ddd179afbcb062efdb",
+    "build/eval-E066-h05a-public/logs/find-sqli-login.r1.calls": "d340e9b00139bbd1f484f94d7e80ddfac5e7dcc5d603bf7e935de940e2b15f7b",
+    "build/eval-E066-h05a-public/logs/find-sqli-login.r1.post": "01e6fd3f95f6394b04d5e2d3e82d6bb90f0339e295d1e7d5a530aac9d6309ebc",
+    "build/eval-E066-h05a-public/logs/fix-sqli-login.r1.trace": "02ee39e8fbc208318ea6aed6a45bc2368efa1d87d2c11c3370e4e53efb61d53d",
+    "build/eval-E066-h05a-public/logs/fix-sqli-login.r1.log": "1081fff6eed1ddcd2f09215bad06322897a3257ce244a3436afc4a1d3f73cdd7",
+    "build/eval-E066-h05a-public/logs/fix-sqli-login.r1.calls": "e2d21c2790e8ff597e1dfc4f7bef2a9c8867b734bb9d6a136379d1fe7472387d",
+    "build/eval-E066-h05a-public/logs/fix-sqli-search.r1.trace": "e54a8d2af6726f2201173c5fcb5f4d42e19ae6114dbdb76f372376398b5b318e",
+    "build/eval-E066-h05a-public/logs/fix-sqli-search.r1.log": "f17e8f948f6c753629ce1c825addd10608f971f14b71ce9ae5d2272fafc2a78f",
+    "build/eval-E066-h05a-public/logs/fix-sqli-search.r1.calls": "3977f9d25e6208519052f48dfb7d1b89a2035be3c9616cdeb1dd24d9dbf35d17",
+    "build/eval-E066-h05a-public/logs/hello-file.r1.trace": "a6ccc6b80e4fe36a2d3bf2dc055875b814b62ac7ff23ba578f8e0737b321603c",
+    "build/eval-E066-h05a-public/logs/hello-file.r1.log": "664fb5dd66062119b2157abf73c012d5512a802dc401c889eb3bdf8a426c664e",
+    "build/eval-E066-h05a-public/logs/hello-file.r1.calls": "205cd79776f596dafcfce1ec91be7061c9ff7843c043a9d855927e70b8fc26b7",
+    "build/eval-E066-h05a-public/logs/incident-log-forensics.r1.trace": "568b35060437e621260be01d4cff1295f36ab8af54a06f15a3ab10e0428dd2c1",
+    "build/eval-E066-h05a-public/logs/incident-log-forensics.r1.log": "3e7da4787e7ee6a539598ae3f508463b05a04e819e7ae34de196a159a33ce1ff",
+    "build/eval-E066-h05a-public/logs/incident-log-forensics.r1.calls": "cb426a4c5c5fd90abd90e67979a9e618abe6fde9bbb1f4095e8e7bb22c938f4b",
+    "build/eval-E067-h06b-public/results.tsv": "6ecf15cd428ca45f2e21f53b663b82ae066055b37922f703e60acf1fdc4d3dfb",
+    "build/eval-E067-h06b-public/logs/bye-file.r1.trace": "1b940739df961d290a64afbe6859e3db34ba26ddce0c8e969b941cdbf85a2ac6",
+    "build/eval-E067-h06b-public/logs/bye-file.r1.log": "e19843ad9dbf56c018d9bc264b7900e0d5093eff80968f88a61f7af09c6f4b01",
+    "build/eval-E067-h06b-public/logs/bye-file.r1.calls": "edd7c2bd7ff3307a0ab57997dc023dc034832bfabcacec2d84d3cb2ce98db473",
+    "build/eval-E067-h06b-public/logs/find-sqli-login.r1.trace": "977153b31f31cdc33f8960adb383db35e8367b6e7ffe140c99fd1a23c3ffe97f",
+    "build/eval-E067-h06b-public/logs/find-sqli-login.r1.log": "40f3d9c1501aa4f89d5b92c2ff8af0bd05933d8017ce9a934ef87add1aa2e753",
+    "build/eval-E067-h06b-public/logs/find-sqli-login.r1.calls": "ec9a4d02bf1ade89739d538ba61edce2adb4aa0fdb1da4ffe839cce07e9a25c0",
+    "build/eval-E067-h06b-public/logs/find-sqli-login.r1.post": "dc6a801c401a48fe1bb616b4f2db2ccd89a75bbabdf07377a3a234e3462d535a",
+    "build/eval-E067-h06b-public/logs/fix-sqli-login.r1.trace": "59810a169549a35d37bcba7cb08af21208cd3432ec379b97b89161d2fed7a558",
+    "build/eval-E067-h06b-public/logs/fix-sqli-login.r1.log": "f871e22479c4f74cae597590d323cd0f7a97fbc4cfd757b5b876c6cd36a1b1b7",
+    "build/eval-E067-h06b-public/logs/fix-sqli-login.r1.calls": "1f86fb90cb534646cb267efcd7200d148d718c4b937d9bdd1a5918c85cce985b",
+    "build/eval-E067-h06b-public/logs/fix-sqli-search.r1.trace": "de1e284fdeed0e224bcf9ccd9c0c5840059011a0311e42b607b1689ddce30b86",
+    "build/eval-E067-h06b-public/logs/fix-sqli-search.r1.log": "e88b0da3c506098532fb7399f69b9c9be552ab2a461b656318303f9b14946224",
+    "build/eval-E067-h06b-public/logs/fix-sqli-search.r1.calls": "317561976d5c191a6d1831f3443e62cbdc39904c1de9851f855d77ec6a457d44",
+    "build/eval-E067-h06b-public/logs/hello-file.r1.trace": "a1e85d044f71e53a6f691601b0770c68c08ebae96d31429d044295afb84e2e08",
+    "build/eval-E067-h06b-public/logs/hello-file.r1.log": "1d824d81436c1bf2600c4c951c0d147b0de6fd3f2723686e26e1ed1e49f0b5f4",
+    "build/eval-E067-h06b-public/logs/hello-file.r1.calls": "d887c2a6c91b414abccdd974b5ab820c0c1f5f420f264711217215ab14ef6227",
+    "build/eval-E067-h06b-public/logs/incident-log-forensics.r1.trace": "06778bd3f409d321c374de71e1463eae1e3dbd206f1742938f08119a0c4f15c9",
+    "build/eval-E067-h06b-public/logs/incident-log-forensics.r1.log": "96835f1e4b5655be808419804b75c27b1b726ebf833e477108594b41f981bb11",
+    "build/eval-E067-h06b-public/logs/incident-log-forensics.r1.calls": "1fb8293c5ed9d3fb10329c8c5a7182589086309754ba0aea242880c9b545ff23",
+    "build/eval-E068-h08-public/results.tsv": "07b96283a4d505c7f222b65f0ddd2b362dafd4610a9e0a51ea9ab5a13fcc21df",
+    "build/eval-E068-h08-public/logs/bye-file.r1.trace": "3072004d3e3b50f51b0d17786abb2efb44d9181d7223b7f376a20b1e68200592",
+    "build/eval-E068-h08-public/logs/bye-file.r1.log": "b5ba7af443e3df45511954bbca87754b1241c8df13e74768a6463f4eb18e2a56",
+    "build/eval-E068-h08-public/logs/bye-file.r1.calls": "95ba10556821ade9458da7d03d290aaf83226b4c8e0e421f461f006bcf05a792",
+    "build/eval-E068-h08-public/logs/find-sqli-login.r1.trace": "2dc2c1fb6f06a56e39b0a4c842f7e74a01a63fcf58b962e8665916afdb249992",
+    "build/eval-E068-h08-public/logs/find-sqli-login.r1.log": "3b3294ae8485763fb771bcaf80a44bf169a5e07239ba705563f63f6bb50b5664",
+    "build/eval-E068-h08-public/logs/find-sqli-login.r1.calls": "1afa06bd700d19f0e36fdc55ba3ded550734739b4e18d8a42e1bb4673b17a036",
+    "build/eval-E068-h08-public/logs/find-sqli-login.r1.post": "faa7b85b0d785378422b86bb5dc9ff2f5d5be820fea833a6b3bbebbfebd0245c",
+    "build/eval-E068-h08-public/logs/fix-sqli-login.r1.trace": "d3f9ec20907a0fa909566f570f87129a2a3c046cc3f071a5068815aa3ce00311",
+    "build/eval-E068-h08-public/logs/fix-sqli-login.r1.log": "2110f9151c40f19d71d340b35f65d8f4d22a36a9289f82e2e69e80023dcd9db7",
+    "build/eval-E068-h08-public/logs/fix-sqli-login.r1.calls": "9721268842b478705faa18889c8198d49186ca4ec6ec39efd5498f2e46137cb3",
+    "build/eval-E068-h08-public/logs/fix-sqli-search.r1.trace": "66a4f772b8824f19b95ad5198ccf6ac9c9492326e216cebb944820c8c1c4d4a9",
+    "build/eval-E068-h08-public/logs/fix-sqli-search.r1.log": "2a82f11a5bbc84ccf959e04710190786676fd49598102baa376e834c97aa156d",
+    "build/eval-E068-h08-public/logs/fix-sqli-search.r1.calls": "15c62744e636a0e5f51edb5c0ead34d0e9cd73131a8c3f868f5ab747b8c5f2a0",
+    "build/eval-E068-h08-public/logs/hello-file.r1.trace": "b665a465aa5238080122d347e49c9ee52a554ccf8122800b8b6f50b3f47bc38c",
+    "build/eval-E068-h08-public/logs/hello-file.r1.log": "4e7e968ee2ec599e0295200611c0cf8f3088834eab939f6148da6d4febfbc123",
+    "build/eval-E068-h08-public/logs/hello-file.r1.calls": "0151ddeebd8405d0551d299446dbee664d03949e2c86219199bdc92176b94f79",
+    "build/eval-E068-h08-public/logs/incident-log-forensics.r1.trace": "18498df4c253d750a292abdb8cbec621b19c8d07ca2529a2106775b0947c902e",
+    "build/eval-E068-h08-public/logs/incident-log-forensics.r1.log": "33f9bea414a135688154b1bdca1772ea153e2ad9a9096fc5fbfeff48b985180a",
+    "build/eval-E068-h08-public/logs/incident-log-forensics.r1.calls": "c59da85518e6532916fa4bac001e43d856f2d87733615f5abafa620996fa7842",
+    "build/eval-E069-h09-public/results.tsv": "7bfba149fc489af94c29d37d9e5271f4790fd0fcf069367124395a723b79b910",
+    "build/eval-E069-h09-public/logs/bye-file.r1.trace": "1b940739df961d290a64afbe6859e3db34ba26ddce0c8e969b941cdbf85a2ac6",
+    "build/eval-E069-h09-public/logs/bye-file.r1.log": "30a03820d2ffc6f97da856bc92e58e9a3362c20f07c1f6bf2b4f690373d9b9bb",
+    "build/eval-E069-h09-public/logs/bye-file.r1.calls": "8492cb364725a82d3af80ecdf7e7664712269bf18a2c3e16ab15de77f4533fbc",
+    "build/eval-E069-h09-public/logs/find-sqli-login.r1.trace": "2dc2c1fb6f06a56e39b0a4c842f7e74a01a63fcf58b962e8665916afdb249992",
+    "build/eval-E069-h09-public/logs/find-sqli-login.r1.log": "b801a62e2536d72698c98d46d88389f2678604c26282fd9d30717ffb10e1f4a0",
+    "build/eval-E069-h09-public/logs/find-sqli-login.r1.calls": "762fbded7d9db44b705cd93bd07becb32f683b560abd52be52a39e9360e5b8e8",
+    "build/eval-E069-h09-public/logs/find-sqli-login.r1.post": "f0ed6bcf998d8dff5a3268af0b27bb0cac1509e19d04b5712b9da036b525ec06",
+    "build/eval-E069-h09-public/logs/fix-sqli-login.r1.trace": "f04d178046e0be13ea01ac6343ad92a5341f0b62bffcb9f63b6c35ee201f3a39",
+    "build/eval-E069-h09-public/logs/fix-sqli-login.r1.log": "164dff25134a2b90eb2b1dfa6f8ca87400aa1f3ea936a61e9afe7de013db1e92",
+    "build/eval-E069-h09-public/logs/fix-sqli-login.r1.calls": "7ac26a7a71f77abb62a349675fac3244b581eeb242271505cae59f9a31187109",
+    "build/eval-E069-h09-public/logs/fix-sqli-search.r1.trace": "c4a67cbaeb927d4d8dcbf2f1476cffd03f45d35d3b595830df49e18ae0a1c776",
+    "build/eval-E069-h09-public/logs/fix-sqli-search.r1.log": "a5192a5fae74270b3636f402592a0ffeb122e8560162fd27cd3678c664912b9e",
+    "build/eval-E069-h09-public/logs/fix-sqli-search.r1.calls": "82fc5ae836b3f2addf2e068240252f13d3d05696cc0ee895fa03dc27f1dfd674",
+    "build/eval-E069-h09-public/logs/hello-file.r1.trace": "a6ccc6b80e4fe36a2d3bf2dc055875b814b62ac7ff23ba578f8e0737b321603c",
+    "build/eval-E069-h09-public/logs/hello-file.r1.log": "3c67f87f32059ee91364864717017efb66bee0cd3f0c4b561d2cdfdd08c85719",
+    "build/eval-E069-h09-public/logs/hello-file.r1.calls": "e6bfeb2943f9a571d91b3b6dbd3b7718118df5bec015683000035898cf67f3f0",
+    "build/eval-E069-h09-public/logs/incident-log-forensics.r1.trace": "c3dbd58b246ba7674212471b2c599c874c23dc70c49f388c8a29d69f689f92e6",
+    "build/eval-E069-h09-public/logs/incident-log-forensics.r1.log": "76320eb9dab7dcfcb0f238b6295b1cf31c939c69dfa73e07f561d31083cbb0a8",
+    "build/eval-E069-h09-public/logs/incident-log-forensics.r1.calls": "d0b6e93df03c1d95f64e991dba8182584cfcaee7bd78382cea438b15888f57c7",
+    "build/eval-B2-base-public-repeat/results.tsv": "acb42cd52ab67321c938506db6f90cd5963861fda7ecdf79b539c01555bc8e35",
+    "build/eval-B2-base-public-repeat/logs/bye-file.r1.trace": "1b940739df961d290a64afbe6859e3db34ba26ddce0c8e969b941cdbf85a2ac6",
+    "build/eval-B2-base-public-repeat/logs/bye-file.r1.log": "018dc6d7534f4c2b02aff3b29593b9e73e0a99efd0a4d4838f52d896dbedad51",
+    "build/eval-B2-base-public-repeat/logs/bye-file.r1.calls": "ea590176903bcc1891faca9dc3fc8b81272726ec39518a5261a25120348d8a6a",
+    "build/eval-B2-base-public-repeat/logs/find-sqli-login.r1.trace": "2dc2c1fb6f06a56e39b0a4c842f7e74a01a63fcf58b962e8665916afdb249992",
+    "build/eval-B2-base-public-repeat/logs/find-sqli-login.r1.log": "4c7dd2b41ff327c9c42c6c5537e429ceace824ef160b395e4eccc69ab830971c",
+    "build/eval-B2-base-public-repeat/logs/find-sqli-login.r1.calls": "386557c019d73ed72d45e2ef2d6fd261f1ffe55f1659173f3134adadd7bad5ad",
+    "build/eval-B2-base-public-repeat/logs/find-sqli-login.r1.post": "41c578e75659101ae8b67ffa87b3e62a27fa48401609f11125c4e651c8a23d08",
+    "build/eval-B2-base-public-repeat/logs/fix-sqli-login.r1.trace": "f5f2f1985dadc4fe04870d210bd561999499b613b0b54f7ebbaa552eab195b81",
+    "build/eval-B2-base-public-repeat/logs/fix-sqli-login.r1.log": "a24099bbaa5d188259303b209ea28e923cdd3d97fa4441ae0057cc04ed468e8a",
+    "build/eval-B2-base-public-repeat/logs/fix-sqli-login.r1.calls": "af85cd169bb023844434aa4c3c440702022fcc8d674d28565d971553dafe2e2f",
+    "build/eval-B2-base-public-repeat/logs/fix-sqli-search.r1.trace": "475a2150763cdf2e5fbf92684d5c30a8f8a7a4ab39bbe446cc7b267c28bf9d8c",
+    "build/eval-B2-base-public-repeat/logs/fix-sqli-search.r1.log": "3d2478b82e2dde7a360769faad1180ee0dc81e8f0e12a5c2707fa626beae1292",
+    "build/eval-B2-base-public-repeat/logs/fix-sqli-search.r1.calls": "4ee02450c9db7f26913312baf1f0b24855158965e1fef491551ce7d5c4c47b10",
+    "build/eval-B2-base-public-repeat/logs/hello-file.r1.trace": "22bedde81f3f7b2d6df1cab29f7d4ff0419fdeb83a8a14d2cbf13994cc811203",
+    "build/eval-B2-base-public-repeat/logs/hello-file.r1.log": "4c82e24781b48e9ce5271f1c9be3562da45b141d8b83084f5e16e82313a369b1",
+    "build/eval-B2-base-public-repeat/logs/hello-file.r1.calls": "d9d2a1e7ed6d4b5f374b5bf0829c6856c84c99166b5cfadb72e5a61f23d09591",
+    "build/eval-B2-base-public-repeat/logs/incident-log-forensics.r1.trace": "6b1b2b1047f37bfe17881107df12479c6c57b4cb6e932ea1691718454cac0d55",
+    "build/eval-B2-base-public-repeat/logs/incident-log-forensics.r1.log": "09090c2227baaef5fd0f82d8a23a7498472442a5e5dd516923631034a0b9b9e9",
+    "build/eval-B2-base-public-repeat/logs/incident-log-forensics.r1.calls": "801c70fe9d8c5f05c6881508f1506f96f0c4878dd28d07273ec73cb3caea5ff1",
+    "build/eval-B3-base-fixtures/results.tsv": "86c55bdc539352da8249bfd744291d5b784945dd215375e2a5f9d6c0d2bf9e0f",
+    "build/eval-E069-h09-fixtures/results.tsv": "51c4e37ac1740d024bd16192b559aec0977d6d295ab59078296761645ae4ab27",
+    "build/eval-E068-h08-fixtures/results.tsv": "4be9d577145d6a1634ca70678f468bf03545fb4275765d268fa52c0c6520bd35",
+    "build/eval-E062-h01a-fixtures/results.tsv": "8dd27bc15871671628d6b2900d4664c8a0ee554770efac6379d3be72d21fe052",
+    "build/eval-E067-h06b-fixtures/results.tsv": "7aec984ed2fd499b560a9858d8764d34b7e299d018145ab42c321db79bfea1f6",
+    "build/eval-E066-h05a-fixtures/results.tsv": "c88d52bc41cb8d396c880433a4e41c3e59710f00903f3fe1d214ce6fea4960bd",
+    "build/eval-E064-h03-fixtures/results.tsv": "e249317ad7a93f3ac9149ff809e34295b8876448d07225a9938a9bb2e69e1a27",
+    "build/eval-E065-h04-fixtures/results.tsv": "34a1544b5b4cea703c7e732b01ade9f96b8964520b78a9d0c0888b26ab8dc344",
+    "build/eval-E063-h01b-fixtures/results.tsv": "673a6d5826a170163eb7c436ce57755981773322c49597a132d45f5c02b28d7f",
+    "build/eval-B4-base-fixtures-repeat/results.tsv": "55de67ed8537db17180ebb2ccb9d1a37941bca4f0c832b586d87981199cfca97",
+    "agent/state.py": "c32e2982dabeced76a708b655375e958d0dc9762b635ceb2ccce2662f3f975a1",
+    "agent/limits.py": "394bae8a9500897b27e7f3a7f0461c403b1f9b0a8c38fe5933ac85d20e2f99dd",
+    "agent/loop.py": "bb759c8e10d811e6d49ef474467d5f4f42b65ad3aa4b4688dafdb60e56cbaa73",
+    "build/b-deep-base.zip": "21a43317d6ed9e78473e7334b6a9ed04e21d0dee1cf80af6ed3e1a782d91bf99"
+  }
+}

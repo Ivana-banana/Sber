@@ -2534,3 +2534,40 @@ task image не запускался, solved count не менялся.
   одной задачи неразличим; восемнадцать фикстур — наша гипотеза о форме задач, а не
   закрытый набор; диагностические режимы D0–D3 из плана не запускались (требуют
   человека, см. `BLOCKED.md`).
+
+### A20260907c — повторный анализ ночи по public request/trace и official checker
+
+- Исходный commit: `84c5069`; существующий WIP в HANDOFF/deep-research и материалы
+  A20260907b сохранены. Runtime не менялся. Это offline replay, не новый LLM run.
+- Цель: шлюз C, объяснить нули public прежде дополнительных fixtures.
+- Команда: `python3 docs/research/night-public-replay.py > /tmp/night-public-replay.json`;
+  `cmp /tmp/night-public-replay.json docs/research/live-runs/A20260907c-night-public.json`;
+  `python3 local_task/incident-log-forensics/scripts/check_parity.py`.
+- Raw summary SHA-256: `dd0d3b2354d8e828dc57103b8786c82c99b35ee1acf24200da7c3f7584969fe2`.
+  В summary полные hashes всех использованных источников и базового архива.
+- Пересчитаны 20 suite TSV: 60 public attempts, 909 536 endpoint tokens, 13 506,2 с;
+  180 extra attempts, 2 158 171 tokens, 42 871,7 с. Это метрики прежних прогонов,
+  повторно их к расходу проекта не прибавлять. Новых LLM tokens: 0.
+- Public: 0/40 содержательных attempts. Audit не запрашивает чтение ни в одном
+  из 10 прогонов; ни один из 30 SQLi attempts не читает routers. Forensics 8/10
+  без чтений, остальные без полного набора источников. Fix пишет README/ошибку
+  транспорта вместо изменения приложения. Это более точные причины нулей,
+  чем общий label `reasoning` из TSV.
+- Budget replay: первый call 85,731 с оставляет следующему timeout 4,269 с;
+  затем early production активен при 509,869 с remaining и 389,869 с spendable.
+  Request bodies подтверждают endpoint TimeoutError → аварийная подсказка записи.
+- Official audit checker исполнен на девяти сохранённых финальных отчётах:
+  existence PASS, два содержательных теста FAIL у каждого; десятый unavailable.
+  Assertions не менялись. Forensic parity exit 0.
+- Поправки к карточке E062–E069: равенство solved контролей не доказывает равенство
+  latency/состояния стенда; внутренние timeouts происходят до stop=stuck. H05a
+  добавил к обоим ночным extra-контролям `fix-redirect-scheme`, lost=0; пятая
+  победа E060/E061 была другой (`mut-fix-session-lookup`). Совпадение числа 5/18
+  недостаточно, чтобы списать H05a на шум; это неподтверждённый кандидат на повтор,
+  без public-прироста. H03 не принимается по экономии при потере public-задачи.
+- Следующие гипотезы и gates: `docs/research/night-public-analysis-2026-09-07.md`.
+  Сначала exact-request protocol replay и public audit pilot, затем фазовый
+  budget/доставка исходников по результату. Дополнительные 18 — после public gain.
+- Ограничения: trace содержит запрошенные, не обязательно исполненные действия;
+  request bodies только первые три. Нового end-to-end baseline/решения public нет;
+  причина изменения latency и фактический GPU offload не установлены.
