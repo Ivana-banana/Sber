@@ -2571,3 +2571,31 @@ task image не запускался, solved count не менялся.
 - Ограничения: trace содержит запрошенные, не обязательно исполненные действия;
   request bodies только первые три. Нового end-to-end baseline/решения public нет;
   причина изменения latency и фактический GPU offload не установлены.
+
+### N1 — public-audit пилот: стартовая ступень native_tools vs json_schema (find-sqli-login)
+
+- Дата 2026-09-07. Код: HEAD `d1f3fba` (ветка `eval/deep-ablation-queue`).
+  Диагностический вариант, в production/main не принят; default не менялся.
+- Один фактор: `agent/limits.py:257` `DEFAULT_CALL_STYLE` native_tools→json_schema.
+  B `build/b-deep-base.zip` SHA-256 `21a43317…`; T `build/t-deep-jsonschema.zip`
+  SHA-256 `f961fb8f…`. Сборка из `git archive HEAD` побайтово равна B; diff B→T —
+  ровно одна строка. check_submission: PASS. Модель qwen2.5-coder:7b-instruct-q4_K_M,
+  CONTEXT 4096, стенд 7B Q4 на GPU 4 GiB (partial offload)+CPU. B холодный, T тёплый.
+- Метрики (одна попытка на сторону, без reverse):
+  B reward=0 stop=stuck wall=126.9s steps=9 ep_req=9 ep_tokens=13021 ep_late=0
+  first_plan=62.131s; T reward=0 stop=stuck wall=127.2s steps=12 ep_req=12
+  ep_tokens=17805 ep_late=0 first_plan=12.370s.
+- Классификация нулей: reasoning (навигация). Оба видели `routers/` в первом
+  наблюдении list_dir (исполнено), но не открыли его. B прочитал только `main.py`
+  (read_range), T не прочитал ни одного файла (ушёл в бесплодный `search`), оба
+  4× записали `{"findings": []}` → stuck.
+- Подтверждено: ускорение json_schema на первом вызове (62.1→12.4s) и больше
+  запросов за тот же wall. НЕ подтверждено: прирост чтения исходников и solved.
+  Ночная патология (first plan 90s → TimeoutError → early write) не воспроизвелась:
+  свежий B быстрее ночного, ep_late=0. Контрольная траектория B изменилась
+  относительно ночи; ночные числа не подставлять.
+- Артефакты (локально, build/ в gitignore): `build/n1-public-audit-report.md`,
+  `build/n1-public-audit-evidence.tar.gz` (SHA-256 в SHA256SUMS внутри пакета),
+  `build/eval-N1-{B,T}-public-audit/`.
+- Ограничение: один прогон не доказывает устойчивость; AB без BA. Следующий шаг —
+  N3 (навигация): дать релевантный исходник и оценить official verifier.
