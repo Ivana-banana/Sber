@@ -1,0 +1,216 @@
+{
+  "local_probes": {
+    "search_directory_finds_line": true,
+    "search_existing_file_finds_line": false,
+    "full_text_regex_matches": true,
+    "line_search_multiline_matches": false,
+    "different_equal_length_writes": {
+      "stop": "stuck",
+      "steps": 5,
+      "content": "version 5",
+      "novel": [
+        true,
+        false,
+        false,
+        false,
+        false
+      ]
+    },
+    "scratch_counts_as_result": {
+      "stop": "stuck",
+      "deliverable": "inspect.py",
+      "required_output_exists": false
+    },
+    "shell_write_tracking": {
+      "exists": true,
+      "tracked": 0,
+      "deliverable": null
+    },
+    "nested_finish_refused": true
+  },
+  "saved_traces": {
+    "E049-public-repeat": {
+      "trace_files": 6,
+      "requested_actions": {
+        "write_file": 21,
+        "finish": 2,
+        "run_shell": 13,
+        "list_dir": 10,
+        "read_range": 82
+      }
+    },
+    "E060-artifact-guard": {
+      "trace_files": 18,
+      "requested_actions": {
+        "list_dir": 12,
+        "read_range": 83,
+        "write_file": 87,
+        "search": 33,
+        "finish": 13,
+        "run_shell": 61
+      }
+    },
+    "E061-recon-packet": {
+      "trace_files": 18,
+      "requested_actions": {
+        "list_dir": 13,
+        "read_range": 86,
+        "write_file": 80,
+        "search": 32,
+        "finish": 12,
+        "run_shell": 38
+      }
+    }
+  },
+  "saved_report_replays": {
+    "E060-artifact-guard": {
+      "audit-hardcoded-token": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "audit-parser-trust-boundary": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "audit-path-normalization": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "forensics-sharded-exfil": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "forensics-ssh-bruteforce": [
+        0
+      ],
+      "forensics-webshell-chain": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "mut-audit-query-gate": [
+        0,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "mut-forensics-egress-ledger": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "E061-recon-packet": {
+      "audit-hardcoded-token": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "audit-parser-trust-boundary": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "audit-path-normalization": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "forensics-sharded-exfil": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "forensics-ssh-bruteforce": [
+        0
+      ],
+      "forensics-webshell-chain": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "mut-audit-query-gate": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "mut-forensics-egress-ledger": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "offline_finish_replays": {
+    "audit-path-normalization": {
+      "exit_code": 127,
+      "output": "/bin/sh: 1: jq: not found\n"
+    },
+    "fix-zip-slip-extract": {
+      "exit_code": 1,
+      "output": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"/app/unpack.py\", line 5, in unpack\n    with ZipFile(upload) as archive:\n         ^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/zipfile/__init__.py\", line 1353, in __init__\n    self.fp = io.open(file, filemode)\n              ^^^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: '/tmp/test.zip'\n"
+    },
+    "mut-audit-query-gate": {
+      "exit_code": 127,
+      "output": "/bin/sh: 1: jq: not found\n"
+    },
+    "mut-fix-inventory-filter": {
+      "exit_code": 1,
+      "output": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"/app/catalog/filter.py\", line 12, in match_names\n    return [row[0] for row in c.execute(query, (f'%{phrase}%',))]\n                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nsqlite3.OperationalError: no such table: stock\n"
+    },
+    "mut-fix-session-lookup": {
+      "exit_code": 2,
+      "output": "/bin/sh: 1: Syntax error: \")\" unexpected\n"
+    }
+  }
+}
