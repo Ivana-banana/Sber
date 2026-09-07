@@ -740,3 +740,33 @@ def test_the_deliverable_checkpoint_fires_on_steps_when_the_endpoint_is_fast(
     outcome = run(make_state(tmp_path), llm, FakeVerify())
 
     assert any(text.startswith("[бюджет]") for text in outcome.observations)
+
+
+def test_finish_nested_under_arguments_is_folded_like_every_other_tool(tmp_path: Path) -> None:
+    # `write_file(arguments={...})` is folded up, `finish(arguments={...})` was not:
+    # the finish branch reads `act["path"]` before `_arguments` normalises anything,
+    # so the same wrapper that every other tool survives was refused for "no path".
+    target = tmp_path / "answer.txt"
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(target), content="OK"),
+            LlmReply(
+                text=json.dumps(
+                    {
+                        "tool": "finish",
+                        "arguments": {
+                            "path": str(target),
+                            "verify": "",
+                            "summary": "done",
+                        },
+                    }
+                )
+            ),
+        ]
+    )
+
+    outcome = run(make_state(tmp_path), llm, FakeVerify())
+
+    assert outcome.stop_reason == "verified"
+    assert outcome.deliverable == target
+    assert not any("finish refused: no `path`" in text for text in outcome.observations)

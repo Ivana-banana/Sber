@@ -409,6 +409,14 @@ def list_dir(path: Path, *, limit: int = limits.LIST_MAX_ENTRIES) -> ToolResult:
     return ToolResult(name="list_dir", ok=True, output="\n".join(lines), truncated=truncated)
 
 
+def _files_under(root: Path) -> Iterable[Path]:
+    """Every text-candidate file `search` will open, in a stable order."""
+    for current, directories, files in os.walk(root):
+        directories[:] = sorted(name for name in directories if name not in SKIP_DIRECTORIES)
+        for filename in sorted(files):
+            yield Path(current) / filename
+
+
 def search(
     pattern: str,
     root: Path,
@@ -416,38 +424,51 @@ def search(
     max_matches: int = limits.SEARCH_MAX_MATCHES,
     secrets: Iterable[str] = (),
 ) -> ToolResult:
-    """Find a regular expression under `root`, returning locations, not files.
+    """Find a regular expression in a file or under a directory, returning locations.
 
     Binary files are skipped rather than decoded: a match inside an ELF section tells
     the model nothing it can act on and costs a screen of mojibake to say it.
+
+    A file is as valid a `root` as a directory. It used to walk one, and `os.walk` over
+    a file yields nothing at all, so a pattern plainly present in the file the task had
+    just named came back as "no match" -- an inapplicable tool reporting itself as
+    absent evidence, which is the one answer a small model cannot argue with. A path
+    that is neither says so, for the same reason: "not there" and "nothing in it" lead
+    to different next actions.
+
+    The expression is applied per line. A pattern spanning a newline cannot match here
+    however well it is written, which is why the tool contract in `agent/prompt.py`
+    says line-wise rather than leaving the model to infer it from one empty result.
     """
     try:
         expression = re.compile(pattern)
     except re.error as exc:
         return ToolResult(name="search", ok=False, detail=f"bad pattern: {exc}")
 
+    if root.is_file():
+        base, targets = root.parent, iter((root,))
+    elif root.is_dir():
+        base, targets = root, _files_under(root)
+    else:
+        return ToolResult(name="search", ok=False, detail=f"no such path: {root}")
+
     hits: list[str] = []
     truncated = False
-    for current, directories, files in os.walk(root):
-        directories[:] = sorted(name for name in directories if name not in SKIP_DIRECTORIES)
-        for filename in sorted(files):
-            target = Path(current) / filename
-            relative = target.relative_to(root).as_posix()
-            try:
-                if _looks_binary(target):
-                    continue
-                with target.open("r", encoding="utf-8", errors="replace") as handle:
-                    for number, line in enumerate(handle, start=1):
-                        if not expression.search(line):
-                            continue
-                        if len(hits) >= max_matches:
-                            truncated = True
-                            break
-                        hits.append(f"{relative}:{number}: {line.rstrip()[:MATCH_LINE_CHARS]}")
-            except OSError:
+    for target in targets:
+        relative = target.relative_to(base).as_posix()
+        try:
+            if _looks_binary(target):
                 continue
-            if truncated:
-                break
+            with target.open("r", encoding="utf-8", errors="replace") as handle:
+                for number, line in enumerate(handle, start=1):
+                    if not expression.search(line):
+                        continue
+                    if len(hits) >= max_matches:
+                        truncated = True
+                        break
+                    hits.append(f"{relative}:{number}: {line.rstrip()[:MATCH_LINE_CHARS]}")
+        except OSError:
+            continue
         if truncated:
             break
 

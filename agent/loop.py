@@ -127,6 +127,11 @@ def run(
         tool = str(act.get("tool", ""))
 
         if tool == prompt.FINISH:
+            # Folded here and not only in `_arguments`: the finish branch reads its
+            # own fields and returns before that function is ever reached, so
+            # `finish(arguments={...})` -- the wrapper every other tool survives --
+            # was refused for having no path while carrying one.
+            act = {"tool": tool, **_fields(act)}
             deliverable, refusal = _deliverable(act, state)
             if refusal:
                 state.record("verify", "refused", refusal)
@@ -458,13 +463,7 @@ def _arguments(act: dict[str, Any], state: AgentState) -> tuple[dict[str, object
     if tool not in prompt.TOOLS:
         return None, f"unknown tool: {tool}. Доступны: {', '.join(prompt.TOOLS)}"
 
-    fields: dict[str, Any] = {}
-    for wrapper in ("args", "arguments", "parameters"):
-        nested = act.get(wrapper)
-        if isinstance(nested, dict):
-            fields.update(nested)
-    # Top level last: it is the shape the schema actually asked for, so it wins.
-    fields.update({key: value for key, value in act.items() if key != "tool"})
+    fields = _fields(act)
 
     needed = REQUIRED.get(tool, "")
     if needed and not str(fields.get(needed, "") or "").strip():
@@ -481,6 +480,18 @@ def _arguments(act: dict[str, Any], state: AgentState) -> tuple[dict[str, object
     if tool == prompt.SEARCH:
         return {"pattern": str(fields["pattern"]), "path": path or str(state.workspace)}, ""
     return {"path": path, "content": str(fields.get("content", "") or "")}, ""
+
+
+def _fields(act: dict[str, Any]) -> dict[str, object]:
+    """Every argument the action carries, however the model wrapped it."""
+    fields: dict[str, object] = {}
+    for wrapper in ("args", "arguments", "parameters"):
+        nested = act.get(wrapper)
+        if isinstance(nested, dict):
+            fields.update(nested)
+    # Top level last: it is the shape the schema actually asked for, so it wins.
+    fields.update({key: value for key, value in act.items() if key != "tool"})
+    return fields
 
 
 def _in_workspace(raw: str, state: AgentState) -> str:

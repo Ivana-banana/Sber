@@ -370,3 +370,24 @@ def test_write_file_refuses_a_directory_without_raising(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert result.detail
+
+
+def test_search_inside_a_file_the_task_named(tmp_path: Path) -> None:
+    # `os.walk` over a file yields nothing, so a pattern that is plainly in the file
+    # came back as "no match" -- an inapplicable tool reported as absent evidence.
+    # The model has no way to tell that apart from a genuinely clean file.
+    target = tmp_path / "handler.py"
+    target.write_text("def login(name):\n    return db.execute(query)\n", encoding="utf-8")
+
+    result = search("execute", target)
+
+    assert result.ok is True
+    assert "handler.py:2" in result.output
+
+
+def test_search_says_the_path_is_missing_rather_than_finding_nothing(tmp_path: Path) -> None:
+    result = search("anything", tmp_path / "absent")
+
+    assert result.ok is False
+    assert "no such path" in result.detail
+    assert "no match" not in result.detail
