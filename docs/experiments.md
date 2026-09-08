@@ -2572,6 +2572,40 @@ task image не запускался, solved count не менялся.
   request bodies только первые три. Нового end-to-end baseline/решения public нет;
   причина изменения latency и фактический GPU offload не установлены.
 
+### A20260908 — анализ неполной очереди N2/N3, без нового LLM-прогона
+
+- Анализ: 08.09.2026, HEAD `62ecd10`. Runtime и тесты не менялись.
+- База ночи `ffe2627`, N2 `93397f4`, N3 `0d910b9`; модель
+  `qwen2.5-coder:7b-instruct-q4_K_M`, CONTEXT=4096, temperature=0 в requests.
+- Исходная команда: `sh scripts/eval/night_queue_2026-09-08.sh`.
+  Сохранён только полный B1 public и три task rows N2; N3 и повторы не измерены.
+- B1: 2/6 reward, input/output/total 96 485 / 2 507 / 98 992, task wall 1 131,7 с.
+  N2: 1/3 завершённых, 65 755 / 2 509 / 68 264, 666,3 с. Эти расходы уже
+  состоявшихся прогонов не прибавлять повторно. Новый расход LLM: 0.
+- Нули B1: audit — пустые findings без чтения кода; оба fix — README без ремонта
+  исходников; forensic — ошибки пути, нет чтения журналов, unknown/0 в отчёте.
+  Нули N2: audit — узкий поиск импорта без чтения; fix-login — чтение AGENTS.md,
+  процессные команды, 18 запросов записи README, stop=budget, без ремонта.
+  Taxonomy: reasoning с предшествующими tool/transport сбоями; нет доказанного
+  startup/packaging нуля. Полные official fix failure logs не сохранены.
+- N2: ep_late=0 на трёх задачах против 4 у базы на тех же задачах, но solved
+  не вырос; нет повторов/замыкающего контроля. N3 нельзя считать проваленным.
+- Достоверность: B1 `bye-file` reward=1 при agent_exit=124, stop=killed. Локальный
+  checker запускается после kill; считать отдельно reward и завершение в лимит.
+  Также каталог B1 перезаписал старую ночь: прежняя сумма 87 826 стала 98 992.
+  `python3 docs/research/night-public-replay.py` теперь exit 1 (tokens assertion).
+- Проверки анализа: арифметика 9 TSV rows и `.calls` согласована; официальный audit
+  checker на двух сохранённых `.post` (только временный REPORT_PATH) — existence
+  PASS, две содержательные проверки FAIL у каждого. Команда
+  `python3 local_task/incident-log-forensics/scripts/check_parity.py` — exit 0.
+- Raw snapshot: `docs/research/live-runs/A20260908-night-analysis.json`, SHA-256
+  `a5bddff309818e005e2cb3d29650b89cd36fca207c39fab78fd04c261177f421`;
+  содержит hashes TSV, log/calls/trace/post, архивов и очереди. Разбор и порядок
+  следующих опытов: `docs/research/night-public-analysis-2026-09-08.md`.
+- Вывод: сначала публичный audit, отделить доставку исходников от понимания кода;
+  затем контракт результата для fix и исполняемый расчёт для forensic. Extra —
+  после воспроизводимого public-прироста. Новых доказанных решений задач нет.
+
 ### N1 — public-audit пилот: стартовая ступень native_tools vs json_schema (find-sqli-login)
 
 - Дата 2026-09-07. Код: HEAD `d1f3fba` (ветка `eval/deep-ablation-queue`).

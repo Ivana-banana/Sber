@@ -1,0 +1,331 @@
+{
+  "scope": "offline analysis of saved runs; no new LLM calls",
+  "analysis_head": "62ecd10",
+  "suites": [
+    {
+      "label": "B1-base-public",
+      "complete": true,
+      "rows": [
+        {
+          "task": "bye-file",
+          "repeat": "1",
+          "reward": "1",
+          "tokens": "?",
+          "ep_tokens": "2886",
+          "ep_calls": "3",
+          "ep_late": "1",
+          "wall_s": "120.1",
+          "steps": "?",
+          "stop": "killed",
+          "claim": "-",
+          "wrote": "yes",
+          "failure": "-",
+          "phases": "inspect=0.007/1 plan=90.022/4 act=0.001/1 open=plan@5",
+          "note": ""
+        },
+        {
+          "task": "find-sqli-login",
+          "repeat": "1",
+          "reward": "0",
+          "tokens": "6635",
+          "ep_tokens": "11729",
+          "ep_calls": "9",
+          "ep_late": "2",
+          "wall_s": "256.7",
+          "steps": "6",
+          "stop": "stuck",
+          "claim": "False",
+          "wrote": "yes",
+          "failure": "reasoning",
+          "phases": "inspect=0.015/1 plan=256.162/6 act=0.012/5 verify=0.000/1",
+          "note": ""
+        },
+        {
+          "task": "fix-sqli-login",
+          "repeat": "1",
+          "reward": "0",
+          "tokens": "15227",
+          "ep_tokens": "17701",
+          "ep_calls": "13",
+          "ep_late": "1",
+          "wall_s": "232.7",
+          "steps": "12",
+          "stop": "stuck",
+          "claim": "False",
+          "wrote": "yes",
+          "failure": "reasoning",
+          "phases": "inspect=0.012/1 plan=228.014/12 act=4.084/11 verify=0.000/1",
+          "note": ""
+        },
+        {
+          "task": "fix-sqli-search",
+          "repeat": "1",
+          "reward": "0",
+          "tokens": "38839",
+          "ep_tokens": "40820",
+          "ep_calls": "19",
+          "ep_late": "0",
+          "wall_s": "282.4",
+          "steps": "19",
+          "stop": "stuck",
+          "claim": "False",
+          "wrote": "yes",
+          "failure": "reasoning",
+          "phases": "inspect=0.022/1 plan=270.028/19 act=8.934/14 verify=2.974/2",
+          "note": ""
+        },
+        {
+          "task": "hello-file",
+          "repeat": "1",
+          "reward": "1",
+          "tokens": "3467",
+          "ep_tokens": "3467",
+          "ep_calls": "4",
+          "ep_late": "0",
+          "wall_s": "45.6",
+          "steps": "4",
+          "stop": "stuck",
+          "claim": "False",
+          "wrote": "yes",
+          "failure": "-",
+          "phases": "inspect=0.006/1 plan=45.206/4 act=0.010/4 verify=0.001/1",
+          "note": ""
+        },
+        {
+          "task": "incident-log-forensics",
+          "repeat": "1",
+          "reward": "0",
+          "tokens": "20733",
+          "ep_tokens": "22389",
+          "ep_calls": "13",
+          "ep_late": "0",
+          "wall_s": "194.2",
+          "steps": "13",
+          "stop": "stuck",
+          "claim": "False",
+          "wrote": "yes",
+          "failure": "reasoning",
+          "phases": "inspect=0.012/1 plan=193.783/13 act=0.007/11 verify=0.000/1",
+          "note": ""
+        }
+      ],
+      "input_tokens": 96485,
+      "output_tokens": 2507,
+      "trace_requests": {
+        "bye-file": {
+          "counts": {
+            "write_file": 2,
+            "finish": 1
+          },
+          "read_paths": []
+        },
+        "find-sqli-login": {
+          "counts": {
+            "list_dir": 2,
+            "write_file": 6
+          },
+          "read_paths": []
+        },
+        "fix-sqli-login": {
+          "counts": {
+            "run_shell": 1,
+            "write_file": 11,
+            "read_range": 1
+          },
+          "read_paths": [
+            "main.py"
+          ]
+        },
+        "fix-sqli-search": {
+          "counts": {
+            "run_shell": 6,
+            "read_range": 8,
+            "write_file": 4,
+            "finish": 1
+          },
+          "read_paths": [
+            "/app/main.py",
+            "/app/tests/test_api.py",
+            "main.py"
+          ]
+        },
+        "hello-file": {
+          "counts": {
+            "write_file": 4
+          },
+          "read_paths": []
+        },
+        "incident-log-forensics": {
+          "counts": {
+            "list_dir": 1,
+            "read_range": 5,
+            "write_file": 7
+          },
+          "read_paths": [
+            "/app/collector_note.txt",
+            "/app/incident/collector_note.txt",
+            "collector_note.txt"
+          ]
+        }
+      },
+      "audit_replay": {
+        "test_report_contains_login_sql_injection_finding": "FAIL: Expected at least one finding describing SQL injection in the login/authentication flow with concrete evidence, impact, or exploit detail",
+        "test_security_report_exists": "PASS",
+        "test_security_report_is_valid_json_object": "FAIL: 'findings' must contain at least one finding"
+      },
+      "tokens": 98992,
+      "wall_s": 1131.7,
+      "solved": 2
+    },
+    {
+      "label": "N2-1-public",
+      "complete": false,
+      "rows": [
+        {
+          "task": "bye-file",
+          "repeat": "1",
+          "reward": "1",
+          "tokens": "3484",
+          "ep_tokens": "3484",
+          "ep_calls": "4",
+          "ep_late": "0",
+          "wall_s": "60.7",
+          "steps": "4",
+          "stop": "stuck",
+          "claim": "False",
+          "wrote": "yes",
+          "failure": "-",
+          "phases": "inspect=0.006/1 plan=60.311/4 act=0.004/4 verify=0.000/1",
+          "note": ""
+        },
+        {
+          "task": "find-sqli-login",
+          "repeat": "1",
+          "reward": "0",
+          "tokens": "16404",
+          "ep_tokens": "16404",
+          "ep_calls": "11",
+          "ep_late": "0",
+          "wall_s": "125.1",
+          "steps": "11",
+          "stop": "stuck",
+          "claim": "False",
+          "wrote": "yes",
+          "failure": "reasoning",
+          "phases": "inspect=0.014/1 plan=124.619/11 act=0.023/10 verify=0.001/1",
+          "note": ""
+        },
+        {
+          "task": "fix-sqli-login",
+          "repeat": "1",
+          "reward": "0",
+          "tokens": "48376",
+          "ep_tokens": "48376",
+          "ep_calls": "26",
+          "ep_late": "0",
+          "wall_s": "480.5",
+          "steps": "27",
+          "stop": "budget",
+          "claim": "False",
+          "wrote": "yes",
+          "failure": "reasoning",
+          "phases": "inspect=0.011/1 plan=479.918/27 act=0.071/23 verify=0.001/1",
+          "note": ""
+        }
+      ],
+      "input_tokens": 65755,
+      "output_tokens": 2509,
+      "trace_requests": {
+        "bye-file": {
+          "counts": {
+            "write_file": 4
+          },
+          "read_paths": []
+        },
+        "find-sqli-login": {
+          "counts": {
+            "list_dir": 4,
+            "search": 3,
+            "write_file": 4
+          },
+          "read_paths": []
+        },
+        "fix-sqli-login": {
+          "counts": {
+            "list_dir": 1,
+            "read_range": 1,
+            "run_shell": 5,
+            "write_file": 18,
+            "finish": 1
+          },
+          "read_paths": [
+            "AGENTS.md"
+          ]
+        }
+      },
+      "audit_replay": {
+        "test_report_contains_login_sql_injection_finding": "FAIL: Expected at least one finding describing SQL injection in the login/authentication flow with concrete evidence, impact, or exploit detail",
+        "test_security_report_exists": "PASS",
+        "test_security_report_is_valid_json_object": "FAIL: 'findings' must contain at least one finding"
+      },
+      "tokens": 68264,
+      "wall_s": 666.3,
+      "solved": 1
+    }
+  ],
+  "hashes": {
+    "build/eval-B1-base-public/results.tsv": "a5fa095f9a1cc56daa4a5ebbaba094a723012064799b351adaa73ca903043c22",
+    "build/eval-B1-base-public/logs/bye-file.r1.calls": "8a6691de6b25f9050dc0087881e93579fa686f2bacca75fb9cf7972644a0cd3f",
+    "build/eval-B1-base-public/logs/bye-file.r1.trace": "ff205f4e0f2a78b15f3b05d96929cfc38d5d397648d2ad154234bbf896579f29",
+    "build/eval-B1-base-public/logs/bye-file.r1.log": "717efda1ab71afc3409872666cbc190d30bec8ed2679ed18c345f16bd45e1312",
+    "build/eval-B1-base-public/logs/find-sqli-login.r1.calls": "d7b9e9594d86dde37a72f19030a0b585aa7a8f7685fb0c546a67291689da69d0",
+    "build/eval-B1-base-public/logs/find-sqli-login.r1.trace": "b336c2398b97133636e4748fc35dc0fcb1cb0c02ca26d8ea6b49adaa7e4d1ff4",
+    "build/eval-B1-base-public/logs/find-sqli-login.r1.log": "177da07fcd33b2accb0d39dd1ddea9d30f379f9384465c38aafc1c2d1abd5807",
+    "build/eval-B1-base-public/logs/find-sqli-login.r1.post": "40a1c6abc13fdc53e1e4aa94a419170eb1de05d62855cc92ea82fa175b314568",
+    "build/eval-B1-base-public/logs/fix-sqli-login.r1.calls": "f2957c1c9d079c40a6c5180ced03d8c4e2b3535f02f9dc97f777ae74790bda22",
+    "build/eval-B1-base-public/logs/fix-sqli-login.r1.trace": "4258e568113e16255cb7e15fbf1ea620a3a91c29bac5b74ca56b266fd9892806",
+    "build/eval-B1-base-public/logs/fix-sqli-login.r1.log": "1b6e5f2b42d59f874dbb6912bed708f04ee245f46d03b5b29af4e0994a2eb78d",
+    "build/eval-B1-base-public/logs/fix-sqli-login.r1.post": "382558a57914adaa7007a79634487f8a11da701a3d16130b37ecd2a537c318e2",
+    "build/eval-B1-base-public/logs/fix-sqli-search.r1.calls": "0b99557fba07528fd656a257b1205d05aaaefe4897804e06067667acdce049bb",
+    "build/eval-B1-base-public/logs/fix-sqli-search.r1.trace": "f963148f19847f44dcdc5fecacc7df6315285c34d10665dbd8558747ce165384",
+    "build/eval-B1-base-public/logs/fix-sqli-search.r1.log": "eda8d24a21884c01822e4b4fb3e96b4614cf40e060646a637ccb482593294890",
+    "build/eval-B1-base-public/logs/fix-sqli-search.r1.post": "57230d6910ef7c7aec846c4bad929e4a73e4887371f70ab055699255c3cde269",
+    "build/eval-B1-base-public/logs/hello-file.r1.calls": "56a82bc1aa3dd7d2a014ef9395954aba4435f46c441ae01267b5e5826f982f5f",
+    "build/eval-B1-base-public/logs/hello-file.r1.trace": "a6ccc6b80e4fe36a2d3bf2dc055875b814b62ac7ff23ba578f8e0737b321603c",
+    "build/eval-B1-base-public/logs/hello-file.r1.log": "956153ae9f82239ac4b6093bcd0fb8fe71ee471e342a7b61514df6e32ff573e1",
+    "build/eval-B1-base-public/logs/incident-log-forensics.r1.calls": "fdbf0e13def4f45526b9c85fbefc1d9f010779604e2a635db8c94c27a312b507",
+    "build/eval-B1-base-public/logs/incident-log-forensics.r1.trace": "c7e21bad8c160b1cb1f43b003d7d7bdb4a32fb0d7fb27dd5b3701c7afdc3484d",
+    "build/eval-B1-base-public/logs/incident-log-forensics.r1.log": "6252cc5403766bf46178caffcbd6e25a943a5853f939008a8eb437421890fda3",
+    "build/eval-B1-base-public/logs/incident-log-forensics.r1.post": "b960658379b443a6267374497503eb79b2c04855aedf9bb325fc1383cfca65a9",
+    "build/eval-N2-1-public/results.tsv": "5513b55f801b37be27a0d7c74eac4a4ebdd283f02156fc0532aaf2bee4cd0df4",
+    "build/eval-N2-1-public/logs/bye-file.r1.calls": "fb2619f6fc3219fb2464c6457b4beed723c6879d56bad6d5cb53ab07c5e661cc",
+    "build/eval-N2-1-public/logs/bye-file.r1.trace": "1b940739df961d290a64afbe6859e3db34ba26ddce0c8e969b941cdbf85a2ac6",
+    "build/eval-N2-1-public/logs/bye-file.r1.log": "1a307dd8f9e1d5b9a538c33343a9ca110cb9095ebcce5ffc8dd9ff37ea3e871c",
+    "build/eval-N2-1-public/logs/find-sqli-login.r1.calls": "12b31d708ff3c2a9f55bf70761513e35e38e7a12cb72c3e2257b17ff92bceb29",
+    "build/eval-N2-1-public/logs/find-sqli-login.r1.trace": "d53ff9434eefab93cca347d17714012656636befacc86831fd4ea8b2ac18c95f",
+    "build/eval-N2-1-public/logs/find-sqli-login.r1.log": "2651c8fcfbc990a0d812b3cbcefc912b1c61b0c3c60904c33995e151516a7c25",
+    "build/eval-N2-1-public/logs/find-sqli-login.r1.post": "46419f794c6844cfed269452cccf89ce6407587c7d8f2b915cf5dfd636d66d0d",
+    "build/eval-N2-1-public/logs/fix-sqli-login.r1.calls": "c9c37ed71401648dd4cea22b6cc2c393ee6243a2acc5be6b6ad00367a75f24f7",
+    "build/eval-N2-1-public/logs/fix-sqli-login.r1.trace": "4afa4e174f537176b6a256eff58c5f644b65621f39095c8ef08c6d0e6e3f4e90",
+    "build/eval-N2-1-public/logs/fix-sqli-login.r1.log": "2d1c1f877ce16b015c1b7357c51edca0183df9ec3ad2c86331951d00046c8810",
+    "build/eval-N2-1-public/logs/fix-sqli-login.r1.post": "7e2172a6621db39a2c3fa84cc77e42f1bf18cd7529d0e4e1ea38af4ebd197953",
+    "build/night-2026-09-08-summary.tsv": "348dd9f8304166ca61f2140e04e7ad7edc9aee3129db1267e002bca040926763",
+    "build/night-2026-09-08.log": "9264fddd4eb4d392d835e9af1dd17d816bbf70f0f01700c76363fbe48a6b17dd",
+    "build/deep-queue-summary.tsv": "e0976b292e227c1e4ed92acf378101b2fe40fd8a61a4a05bb27541f51d890d21",
+    "docs/research/live-runs/A20260907c-night-public.json": "dd0d3b2354d8e828dc57103b8786c82c99b35ee1acf24200da7c3f7584969fe2",
+    "build/n3-evidence/metadata.json": "557c074e81668d0fe9d1365455ab906084a63134655bfbce4cde7404528947f5",
+    "local_task/find-sqli-login/tests/test_security_report.py": "0efdd3e6af1485376e310bb565b105e735e3f57df9bc517510f5b018f86a9353",
+    "scripts/eval/run_suite.py": "7f8bc317210fbab3a9ea20fae8892f322af9359d4276682c517a9c7a6de835e5",
+    "scripts/eval/night_queue_2026-09-08.sh": "8b138e27eb685c0eba1303c92a6e24cc274b19d027ebc02fff1cc94a64b399f0",
+    "build/b-night-base.zip": "cf0a4d0ab68ce882088e44a8897629091d391a91e6d7a5b1198058da9c8d60fc",
+    "build/n2-phase-budget.zip": "0270a3d9560f58ff5b35ac17dba5a975d3b17a3332cfb172122afe6c1fdd2c0e",
+    "build/n3-source-index.zip": "aa35fb907d8f1137f29124bf55a5384fe6851532dda6113f1cd87afad2f3ba78"
+  },
+  "legacy_replay": {
+    "command": "python3 docs/research/night-public-replay.py",
+    "exit": 1,
+    "reason": "B1-base-public output directory reused; tokens assertion fails",
+    "old_B1_tokens": 87826,
+    "current_B1_tokens": 98992
+  }
+}

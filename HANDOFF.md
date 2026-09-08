@@ -43,6 +43,16 @@ Codex, 07.09.2026, углубление organizer-first: проверить ко
 
 ## Завершено
 
+**Codex, 08.09.2026 — анализ ночи без кода.** Цель: полнота N2/N3 и причины
+public-нулей, шлюз C. Отчёт `docs/research/night-public-analysis-2026-09-08.md`,
+снимок A20260908 в live-runs, карточка в experiments. Пересчитаны 9 task rows,
+два official audit replay FAIL и forensic parity PASS. B1 2/6 (одна победа после
+kill), N2 только 1/3 завершённых, N3 не измерен. Найдена перезапись старого B1;
+старый replay сейчас падает на tokens assertion. Следующий шаг: assisted audit
+diagnostic, затем один N3 public-пилот. Runtime/тесты/очередь/чужой WIP сохранены,
+новых LLM-прогонов нет. Работа локальная, fetch/push не выполнялись по запрету
+интернета в AGENTS.md; commit искать по новому отчёту.
+
 **Codex, 07.09.2026 — анализ и план organizer-first.** План:
 `docs/superpowers/plans/2026-09-07-organizer-first-improvements.md`; доказательства:
 `docs/research/organizer-first-audit-2026-09-07.md`, A20260907 в experiments и raw
