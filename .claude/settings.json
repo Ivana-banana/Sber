@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-tests.sh",
+            "timeout": 120,
+            "statusMessage": "pytest -q (только если agent/tests менялись)…"
+          }
+        ]
+      }
+    ]
+  }
+}

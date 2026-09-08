@@ -43,5 +43,8 @@ Thumbs.db
 # AFK critic notes, not part of the project record
 .afk-critic-*.md
 .afk/
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/hooks/**
 .worktrees/
