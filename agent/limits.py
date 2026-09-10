@@ -190,6 +190,19 @@ the rule `grep` uses and it is right often enough for triage."""
 BRIEF_MAX_CHARS = 2200
 BRIEF_MAX_ENTRIES = 30
 BRIEF_MAX_DEPTH = 2
+
+SOURCE_INDEX_MAX_FILES = 300
+SOURCE_INDEX_MAX_ROWS = 12
+SOURCE_INDEX_MAX_NAMES = 6
+"""Bounds on the local import index (`agent/sources.py`), all three resident.
+
+Files is a parse budget and the largest of the three: an application whose handlers
+sit behind three hundred modules is not one this index can usefully summarise, and
+stopping is better than a truncated graph that looks complete. Rows and names are what
+reaches the prompt -- twelve modules at six names each is the shape of the public
+applications, and a row costs about as much as one line of the tree above it.
+
+Starting values, not measurements: nothing has ablated them yet."""
 """Size of the environment map handed to the model.
 
 Paid on every call, so it is a map and not an inventory: the top of the tree, the

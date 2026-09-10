@@ -26,6 +26,7 @@ from pathlib import Path
 
 from agent import limits
 from agent.redact import redact, secrets_from_env
+from agent.sources import local_sources
 
 PROBED_TOOLS: tuple[str, ...] = (
     "git",
@@ -138,6 +139,14 @@ class EnvironmentBrief:
     located: tuple[tuple[str, str], ...] = ()
     """Backtick literals from the task text that exist in the tree, each with where."""
 
+    sources: tuple[tuple[str, str, str], ...] = ()
+    """Local modules the import graph reaches, as `(path, imported by, defines)`.
+
+    N3. The tree above names directories; this names the files the entry point hands
+    its work to. Thirty saved runs saw a handlers directory listed and none of them
+    opened it, and the reports came back empty about a defect that was in those files.
+    """
+
     secrets: tuple[str, ...] = field(default=(), repr=False)
 
     def render(self) -> str:
@@ -161,6 +170,12 @@ class EnvironmentBrief:
         if self.located:
             lines.append("quoted:")
             lines.extend(f"  {name} → {where}" for name, where in self.located)
+        if self.sources:
+            lines.append("sources (local modules, reached from the entry point):")
+            lines.extend(
+                f"  {path} ← {parent}" + (f": {names}" if names else "")
+                for path, parent, names in self.sources
+            )
 
         text = redact("\n".join(lines), self.secrets)
         if len(text) > limits.BRIEF_MAX_CHARS:
@@ -366,6 +381,7 @@ def inspect_environment(
 
     entries, hidden, note = _walk(workspace, limits.BRIEF_MAX_ENTRIES)
     located = _locate(workspace, _quoted(instruction, workspace))
+    sources = local_sources(workspace)
     return EnvironmentBrief(
         workspace=workspace,
         exists=True,
@@ -377,5 +393,6 @@ def inspect_environment(
         note=note,
         ports=ports,
         located=tuple(located),
+        sources=sources,
         secrets=secrets,
     )

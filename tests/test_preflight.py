@@ -402,3 +402,17 @@ def test_the_workspace_path_is_not_looked_up_as_a_literal(tmp_path: Path) -> Non
     ).render()
 
     assert "quoted:" not in rendered
+
+
+def test_the_brief_names_the_module_the_entry_point_reaches(tmp_path: Path) -> None:
+    # N3: the tree above lists the directory; this says which file inside it the
+    # request actually reaches, which is the hop thirty saved runs never made.
+    (tmp_path / "routers").mkdir()
+    (tmp_path / "routers" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "routers" / "auth.py").write_text("def login():\n    pass\n", encoding="utf-8")
+    (tmp_path / "main.py").write_text("from routers import auth\n", encoding="utf-8")
+
+    brief = inspect_environment(tmp_path, {}, "audit this application")
+
+    assert ("routers/auth.py", "main.py", "login") in brief.sources
+    assert "routers/auth.py ← main.py: login" in brief.render()
