@@ -194,6 +194,18 @@ BRIEF_MAX_DEPTH = 2
 SOURCE_INDEX_MAX_FILES = 300
 SOURCE_INDEX_MAX_ROWS = 12
 SOURCE_INDEX_MAX_NAMES = 6
+SOURCE_READ_MAX_BYTES = 131072
+SOURCE_EXCERPT_MAX_CHARS = 1600
+"""Bounds on the excerpts (`agent/sources.py::source_excerpts`) carried with them.
+
+Read cap: a source file larger than 128 KiB is generated, vendored or data, and
+parsing it costs more than the one function it might hold is worth.
+
+Excerpt budget: the stand serves 4096 tokens of context and truncates silently past
+it, so the resident brief cannot grow by the 4000 characters the plan first named --
+1600 is about two handlers of the size the public applications use, and it leaves the
+observation history the room it had. A starting value chosen to fit a measured
+serving context, not an optimum; raising it is its own experiment."""
 """Bounds on the local import index (`agent/sources.py`), all three resident.
 
 Files is a parse budget and the largest of the three: an application whose handlers

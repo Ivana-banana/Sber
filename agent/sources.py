@@ -187,3 +187,131 @@ def local_sources(root: Path) -> tuple[tuple[str, str, str], ...]:
             if len(rows) >= limits.SOURCE_INDEX_MAX_ROWS:
                 break
     return tuple(rows)
+
+
+EXCERPT_HEADER = "source excerpts (from the modules above; read the files for the rest):"
+EXCERPT_CUT = "  … cut here; read the file for the rest"
+
+
+def _functions(tree: ast.Module) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Module-level functions and one level of methods. Deeper nesting is a helper."""
+    found: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            found.append(node)
+        elif isinstance(node, ast.ClassDef):
+            found.extend(
+                child
+                for child in node.body
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+            )
+    return found
+
+
+def _call_lines(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[int]:
+    """Lines where this function's own body calls something through an attribute.
+
+    `conn.fetchrow(...)`, `cursor.execute(...)`, `subprocess.run(...)`: the shape of
+    work handed to something outside the function, whatever that something is. It says
+    nothing about whether the call is safe -- that judgement is the task's, not ours.
+
+    The body only. `@router.get("/healthz")` is an attribute call too, so counting the
+    decorator would give every registered endpoint this mark and rank a three-line
+    health check level with the handler that reaches a database.
+    """
+    return sorted(
+        inner.lineno
+        for statement in node.body
+        for inner in ast.walk(statement)
+        if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)
+    )
+
+
+def _source_text(path: Path, root: Path) -> str | None:
+    """The file's text, or None if it is not ours to read.
+
+    A symlink is refused rather than followed: the workspace is untrusted material, and
+    a link pointing out of it would put a file the task never shipped into the prompt.
+    """
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        if not path.resolve().is_relative_to(root.resolve()):
+            return None
+        if path.stat().st_size > limits.SOURCE_READ_MAX_BYTES:
+            return None
+        blob = path.read_bytes()
+    except OSError:
+        return None
+    if b"\x00" in blob[: limits.BINARY_SNIFF_BYTES]:
+        return None
+    return blob.decode("utf-8", errors="replace")
+
+
+def source_excerpts(root: Path, *, max_chars: int) -> str:
+    """The bodies behind the index, attributed and bounded.
+
+    P2a measured what the index alone buys: the agent read a file for the first time,
+    read the entry point four times, and never opened the handler the index had named
+    for it. A name is one more action away from the evidence, and an action the model
+    can skip; the text is the evidence.
+
+    Ranked by two facts that hold in any framework -- the function is decorated, so
+    something registered it as an entry, and it calls out through an attribute, so the
+    work leaves it -- never by what the call looks like. Selecting only the calls that
+    look dangerous would put the audit's answer in the brief and would hide the safe
+    handler on which a report of no findings has to rest.
+    """
+    if not root.is_dir() or max_chars <= 0:
+        return ""
+
+    rows = local_sources(root)
+    order = [reached for reached, _, _ in rows]
+    order += [importer for _, importer, _ in rows if importer not in order]
+
+    candidates: list[tuple[int, int, str, int, int, list[str], list[int]]] = []
+    for rank, relative in enumerate(order):
+        text = _source_text(root / relative, root)
+        if text is None:
+            continue
+        try:
+            tree = ast.parse(text)
+        except (SyntaxError, ValueError, RecursionError):
+            continue
+        lines = text.splitlines()
+        for node in _functions(tree):
+            calls = _call_lines(node)
+            start = min([node.lineno, *(item.lineno for item in node.decorator_list)])
+            end = node.end_lineno or node.lineno
+            score = (2 if node.decorator_list else 0) + (1 if calls else 0)
+            candidates.append((-score, rank, relative, start, end, lines, calls))
+
+    candidates.sort(key=lambda item: (item[0], item[1], item[3]))
+
+    parts = [EXCERPT_HEADER]
+    used = len(EXCERPT_HEADER)
+    for _, _, relative, start, end, lines, calls in candidates:
+        body = "\n".join(lines[start - 1 : end])
+        block = f"{relative}:{start}-{end}\n{body}"
+        if used + 1 + len(block) <= max_chars:
+            parts.append(block)
+            used += 1 + len(block)
+            continue
+        # Too big for what is left: show a window around the call the function makes,
+        # say where it was cut, and stop. A silently trimmed body would read as the
+        # whole function and could hide the line that answers the task.
+        room = max_chars - used - len(EXCERPT_CUT) - 2
+        anchor = calls[0] if calls else start
+        head = f"{relative}:{anchor}-{end}\n"
+        if room > len(head) + 40:
+            window: list[str] = []
+            for line in lines[anchor - 1 : end]:
+                if len(head) + sum(len(item) + 1 for item in [*window, line]) > room:
+                    break
+                window.append(line)
+            if window:
+                parts.append(head + "\n".join(window))
+        parts.append(EXCERPT_CUT)
+        break
+
+    return "\n".join(parts) if len(parts) > 1 else ""

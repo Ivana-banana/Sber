@@ -416,3 +416,38 @@ def test_the_brief_names_the_module_the_entry_point_reaches(tmp_path: Path) -> N
 
     assert ("routers/auth.py", "main.py", "login") in brief.sources
     assert "routers/auth.py ← main.py: login" in brief.render()
+
+
+def test_the_brief_carries_the_body_behind_the_module_it_names(tmp_path: Path) -> None:
+    # P2b: naming `routers/auth.py` left the model one action short of the evidence,
+    # and in the P2a pilot it did not take that action.
+    (tmp_path / "routers").mkdir()
+    (tmp_path / "routers" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "routers" / "auth.py").write_text(
+        '@router.post("/login")\ndef login(name):\n    return conn.fetchrow(f"select {name}")\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "main.py").write_text("from routers import auth\n", encoding="utf-8")
+
+    rendered = inspect_environment(tmp_path, {}, "audit this application").render()
+
+    assert "routers/auth.py:1-3" in rendered
+    assert "conn.fetchrow" in rendered
+
+
+def test_a_large_tree_does_not_swallow_the_excerpts(tmp_path: Path) -> None:
+    # The map is capped; the excerpts have their own budget. Sharing one cap would let
+    # a wide directory listing decide whether the source reaches the model at all.
+    for index in range(40):
+        (tmp_path / f"data_{index}_with_a_long_name.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "views").mkdir()
+    (tmp_path / "views" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "views" / "session.py").write_text(
+        '@app.get("/s")\ndef start(name):\n    return conn.fetchrow(f"select {name}")\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "service.py").write_text("from views import session\n", encoding="utf-8")
+
+    rendered = inspect_environment(tmp_path, {}, "audit this application").render()
+
+    assert "views/session.py:1-3" in rendered

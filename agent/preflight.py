@@ -26,7 +26,7 @@ from pathlib import Path
 
 from agent import limits
 from agent.redact import redact, secrets_from_env
-from agent.sources import local_sources
+from agent.sources import local_sources, source_excerpts
 
 PROBED_TOOLS: tuple[str, ...] = (
     "git",
@@ -147,6 +147,14 @@ class EnvironmentBrief:
     opened it, and the reports came back empty about a defect that was in those files.
     """
 
+    excerpts: str = ""
+    """Bodies of the functions those modules define, already bounded and attributed.
+
+    P2b. The index above is a name the model still has to act on, and in the P2a pilot
+    it did not act on it: it read the entry point four times and never opened the
+    handler that had been named for it.
+    """
+
     secrets: tuple[str, ...] = field(default=(), repr=False)
 
     def render(self) -> str:
@@ -180,6 +188,11 @@ class EnvironmentBrief:
         text = redact("\n".join(lines), self.secrets)
         if len(text) > limits.BRIEF_MAX_CHARS:
             text = text[: limits.BRIEF_MAX_CHARS - 20].rstrip() + "\n  … more"
+        if self.excerpts:
+            # Appended after the cap, not inside it: the excerpts carry their own
+            # budget, and sharing one would let a wide directory listing decide
+            # whether any source reaches the model at all.
+            text += "\n" + redact(self.excerpts, self.secrets)
         return text
 
 
@@ -382,6 +395,7 @@ def inspect_environment(
     entries, hidden, note = _walk(workspace, limits.BRIEF_MAX_ENTRIES)
     located = _locate(workspace, _quoted(instruction, workspace))
     sources = local_sources(workspace)
+    excerpts = source_excerpts(workspace, max_chars=limits.SOURCE_EXCERPT_MAX_CHARS)
     return EnvironmentBrief(
         workspace=workspace,
         exists=True,
@@ -394,5 +408,6 @@ def inspect_environment(
         ports=ports,
         located=tuple(located),
         sources=sources,
+        excerpts=excerpts,
         secrets=secrets,
     )
