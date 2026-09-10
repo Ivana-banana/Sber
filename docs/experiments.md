@@ -2684,3 +2684,71 @@ task image не запускался, solved count не менялся.
   доказательство, что агент найдёт его сам; сказано только про `find-sqli-login`
   и только про эту модель; полный loop, budget, MAX_STEPS и запись файла в контейнере
   здесь не участвовали; две попытки при temperature=0 не измеряют разброс сэмплирования.
+
+### D1 — дефект харнесса: тесты задачи не там, где их ищет её же verifier
+
+- Дата 2026-09-10. Обнаружено при разборе `pytest_output.txt`, который начал
+  сохраняться в P0 (`26ec9a5`). Исправление — `bd0f75c`.
+- Что было: `run_suite.install` копировал `<package>/tests` в `/opt/verifier` и
+  запускал `bash /opt/verifier/test.sh`. Скрипты `find-sqli-login`, `fix-sqli-login`
+  и `fix-sqli-search` вызывают `pytest /tests` **абсолютным путём**. Каталога `/tests`
+  в контейнере не было, pytest собирал 0 тестов (`ERROR: file or directory not found:
+  /tests`), exit 4, и `test.sh` писал `reward 0`.
+- Следствие: **три из шести публичных задач не могли дать `1` ни при каком поведении
+  агента.** Все прошлые нули на них не отличимы от нулей харнесса; любая абляция,
+  включавшая эти задачи, сравнивала константу. Прошлые `2/6` объясняются тем, что
+  ровно две задачи (`bye-file`, `hello-file`) проверяются shell-скриптом без pytest,
+  а `incident-log-forensics` берёт путь через `dirname "$0"` и потому работал.
+- Доказательство на реальном образе `sber-eval/find-sqli-login:latest`
+  `sha256:11b75d0cfcd7f5e69d9acd6182f75095470f2f237971a7cfbe4b4436323034fb`,
+  обе стороны, assertions не менялись:
+  отчёт из P1, скопированный в `/app/security_report.json`, при `/tests` даёт
+  **reward=1, 3 passed**; `{"findings": []}` в тех же условиях — **reward=0,
+  2 failed, 1 passed**. До исправления обе стороны давали 0 с «no tests ran».
+- Исправлено также место в цикле: тесты копируются **после** агентской фазы. В
+  `tests/` лежат ответы (`incident-log-forensics/tests/expected_incident_report.txt`),
+  и при копировании до запуска эталон находился внутри контейнера, который агент
+  волен обследовать; прогон, прочитавший его, был бы засчитан за решение.
+- Тесты: `tests/test_eval_suite.py::test_verifier_runs_where_the_package_scripts_expect_their_tests`
+  и `::test_the_expected_answers_are_absent_while_the_agent_runs`. Полный
+  `python3 -m pytest -q` — 410 passed.
+- Ограничения: это дефект **нашего локального харнесса**, а не архива агента; на
+  результат у организаторов он не влияет и прежние выводы о токенах/латентности не
+  отменяет. Совпадает ли раскладка Harbor с `/tests` побайтово, здесь не проверено —
+  взят путь, который требуют сами скрипты пакетов. Прогоны `fix-sqli-*` после
+  исправления ещё не выполнялись: их verifier поднимает PostgreSQL и uvicorn, и его
+  работоспособность в нашем стенде отдельно не подтверждена.
+
+### P2a — пилот готового N3 (индекс локальных модулей) на find-sqli-login
+
+- Дата 2026-09-10. B — `build/b-night-base.zip`
+  `cf0a4d0ab68ce882088e44a8897629091d391a91e6d7a5b1198058da9c8d60fc`;
+  T — `build/n3-source-index.zip`
+  `aa35fb907d8f1137f29124bf55a5384fe6851532dda6113f1cd87afad2f3ba78` (ветка
+  `eval/n3-source-index`, commit `0d910b9`). Harness — P0 из `26ec9a5`,
+  **до** исправления `/tests` (`bd0f75c`).
+- Команда: `python3 scripts/eval/run_suite.py --tasks-root local_task --only
+  find-sqli-login --archive <zip> --model qwen2.5-coder:7b-instruct-q4_K_M --base-url
+  http://sber-proxy:8000/v1 --api-key ollama --counter-container sber-proxy
+  --timeout-scale 1.0 --reuse-images --label "$RUN_DIR" --out "$RUN_DIR"`.
+- B: reward=0, stop=stuck, steps=15, ep_tokens=23 641, ep_calls=15, ep_late=0,
+  wall=116,8 с, plan=116,3 с/15. TSV SHA-256
+  `116bc34fc08b971ba78cb592a798d8f36ca2ea203290d2f91265aaeb7377970f`.
+- T (N3): reward=0, stop=stuck, steps=15, ep_tokens=28 466, ep_calls=15, ep_late=0,
+  wall=85,1 с, plan=84,6 с/15. TSV SHA-256
+  `d941c2bd8e2f3e8da0e3c12c12a190422b1a039d33cc1b83a7041d84dbefb283`.
+- Траектории (из сохранённого trace): B — 3×`list_dir`, 7×`search` по
+  `from sqlalchemy import create_engine`, затем 4×`write_file`; ни одного чтения.
+  N3 — 3×`list_dir`, **4×`read_range`, но все четыре по `/app/main.py`**,
+  3×`search` по `^import\s+psycopg2`, затем 4×`write_file`. Приложение использует
+  asyncpg, поэтому оба набора поисков заведомо пусты. Оба финала —
+  `{"findings": []}`.
+- Вывод: индекс имён модулей сдвинул поведение (появилось чтение файла), но не довёл
+  до `routers/auth.py`; при доказанной в P1 способности решить задачу с исходником
+  это выбирает ветвь **P2b — доставлять содержимое достижимых функций, а не их
+  названия**.
+- Оговорки: оба нуля получены до исправления `/tests`, но здесь это не меняет вывод —
+  артефакт в обоих прогонах пустой, и повтор офлайн-проверкой того же артефакта даёт
+  0 и в исправленном харнессе. Тем не менее эти две строки нельзя смешивать с
+  будущими: у них другой `harness_sha256`. По одному прогону на плечо, разброс не
+  измерен.
