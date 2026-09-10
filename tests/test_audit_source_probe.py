@@ -120,3 +120,40 @@ def test_reused_output_directory_is_rejected(tmp_path: Path) -> None:
         pass
     else:
         raise AssertionError("reused output was accepted")
+
+
+def test_the_action_envelope_is_unwrapped_before_the_checker_sees_it(tmp_path: Path) -> None:
+    """The checker reads the report, not the action that carried it."""
+    task, source = _task(tmp_path)
+    report = json.dumps({"findings": [{"title": "Unsafe query"}]})
+    seen: list[dict] = []
+
+    def transport(url: str, body: bytes, headers: dict[str, str], timeout: float):
+        seen.append(json.loads(body))
+        return 200, _response(json.dumps({"tool": "write_file", "path": "/app/r.json",
+                                          "content": report}))
+
+    result = probe.run_probe(
+        task=task, source=source, out=tmp_path / "out", model="stub",
+        base_url="http://stub/v1", api_key="", as_action=True, transport=transport,
+    )
+
+    assert result["metadata"]["envelope"] == "action"
+    assert (tmp_path / "out" / "candidate.json").read_text() == report
+    assert result["probe_success"] is True
+    assert "write_file" in json.dumps(seen)
+
+
+def test_an_action_that_writes_nothing_keeps_its_own_text(tmp_path: Path) -> None:
+    task, source = _task(tmp_path)
+
+    def transport(url: str, body: bytes, headers: dict[str, str], timeout: float):
+        return 200, _response(json.dumps({"tool": "list_dir", "path": "/app"}))
+
+    result = probe.run_probe(
+        task=task, source=source, out=tmp_path / "out", model="stub",
+        base_url="http://stub/v1", api_key="", as_action=True, transport=transport,
+    )
+
+    assert result["probe_success"] is False
+    assert "list_dir" in (tmp_path / "out" / "candidate.json").read_text()

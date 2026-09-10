@@ -792,6 +792,10 @@ def test_the_audit_checkpoint_asks_for_what_the_observations_support(tmp_path: P
     assert "нет проверяемого результата" in checkpoint
     assert "наблюдени" in checkpoint
     assert "пустой" in checkpoint.lower()
+    # P2d: the same model in the action envelope produced a real finding whose
+    # evidence was a paraphrase, and the organizer check wants the concrete detail.
+    assert "evidence" in checkpoint
+    assert "строку" in checkpoint
 
 
 def test_the_checkpoint_of_another_task_is_left_alone(tmp_path: Path) -> None:
