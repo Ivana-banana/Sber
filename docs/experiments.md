@@ -2640,3 +2640,47 @@ task image не запускался, solved count не менялся.
   не зависит (пара1 B=read/T=search, пара2 T2=read/B2=search); ускорение первого
   plan у json_schema устойчиво по порядку (11–12s против native 23–62s). Вывод:
   узкое место — навигация к уязвимому исходнику, не протокол. Следующий шаг — N3.
+
+### P1 — assisted audit: модель находит SQLi, когда исходник передан ей напрямую
+
+- Дата 2026-09-10. Код: `27d3b5d` (ветка `fix/public-solves`), harness P0 из `26ec9a5`.
+  Диагностика, не абляция контроллера: agent loop здесь не участвует, результат
+  помечен `assisted=true`, `eligible_for_public_score=false` и в public score не идёт.
+- Вопрос, оставленный N1 (4/4 reward=0, `routers/` не открыт ни разу): модель вообще
+  не умеет решать этот audit или только не доходит до нужного файла.
+- Команда (дважды, каждый раз новый пустой `--out`):
+  `python3 scripts/eval/probe_audit_source.py --task local_task/find-sqli-login
+  --source local_task/find-sqli-login/environment/app/routers/auth.py --out "$PROBE_DIR"
+  --model qwen2.5-coder:7b-instruct-q4_K_M --base-url http://127.0.0.1:8000/v1
+  --api-key ollama --counter-container sber-proxy`.
+- Стенд: `sber-model` (ollama, CONTEXT=4096, store `/var/lib/ollama` ro) и `sber-proxy`
+  на сети `sber-eval`; RTX 3050 4 GiB, partial offload. Модель
+  `qwen2.5-coder:7b-instruct-q4_K_M`, temperature=0, `max_output_tokens=1800`.
+- Результат: **2/2 попытки probe_success=true**. Официальный checker задачи исполнен
+  отдельным процессом, переопределён только `REPORT_PATH`, assertions не менялись:
+  все три теста PASSED в обеих попытках, включая содержательный
+  `test_report_contains_login_sql_injection_finding`.
+- Цена: попытка 1 — 623 input / 142 output, 112,1 с (холодная загрузка весов);
+  попытка 2 — 623 / 188, 19,6 с. Счётчики прокси за обе: 2 запроса,
+  1246 / 330 / 1576 tokens, 0 upstream errors, 0 late.
+- Содержательная проверка вручную, не по keyword: обе находки называют
+  `/app/routers/auth.py:14-20` и login-эндпоинт, обе указывают механизм (f-string
+  конкатенация), вторая цитирует точную уязвимую строку и предлагает `$1/$2` —
+  корректный для asyncpg параметризованный вариант. Выдуманных деталей нет.
+  Единственная неточность — рекомендация «SQLAlchemy ORM» в первой попытке, тогда как
+  приложение использует asyncpg; на валидность находки не влияет.
+- Артефакты (локально, `build/` в gitignore):
+  `build/assisted-audit-20260910-a1-QvxxJO/` SHA-256 report.json
+  `95b073fb1e4e30cc57b167e2f9e8b2ba61fe7197a7a861a80bc45fe2de3b9638`, candidate.json
+  `b42b47b9a906925d12273c165b2aedbbddeeb80d6504ef99b6be5137c78e1982`;
+  `build/assisted-audit-20260910-a2-E5IZ43/` report.json
+  `ad92f53a1384045e1e408618b1fcaa9bc35aee418d9bcbe5f41652607440fc62`, candidate.json
+  `cd96ab1544c52d5fb30e590961a8ecc4b56e36a728ff74ee7205e9019110af3b`.
+- Вывод и развилка плана: узкое место `find-sqli-login` — **доставка исходника, а не
+  reasoning**. Ветвь «два reasoning-нуля → закрыть индексатор и уйти в P5» не
+  активируется; P2 (автономное чтение нужного кода) имеет смысл и становится
+  следующим шагом.
+- Ограничения: один файл выбран человеком — это верхняя граница способности, а не
+  доказательство, что агент найдёт его сам; сказано только про `find-sqli-login`
+  и только про эту модель; полный loop, budget, MAX_STEPS и запись файла в контейнере
+  здесь не участвовали; две попытки при temperature=0 не измеряют разброс сэмплирования.
