@@ -536,3 +536,73 @@ def test_reusing_images_records_exact_image_without_build_or_network(tmp_path, m
     monkeypatch.setattr(run_suite, 'run', local_inspect)
     assert runner.build(spec) is None
     assert json.loads((tmp_path / 'manifest.json').read_text())['images']['sample'] == 'sha256:local-image'
+
+
+def test_verifier_runs_where_the_package_scripts_expect_their_tests(tmp_path, monkeypatch):
+    """Three of the six public packages call `pytest /tests` by absolute path.
+
+    Copying them anywhere else makes their verifier collect nothing and write reward
+    0, so a correct report scores exactly like an empty one and no gain on those
+    tasks can ever be observed.
+    """
+    import argparse
+    import subprocess
+    from scripts.eval import run_suite
+    from scripts.eval.run_suite import Runner, TaskSpec
+
+    runner = Runner(argparse.Namespace(out=str(tmp_path)), tmp_path)
+    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 1, 512)
+    commands = []
+
+    def record(cmd, **kwargs):
+        commands.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, '1', '')
+
+    monkeypatch.setattr(run_suite, 'run', record)
+
+    runner.install_verifier('container', spec)
+    reward, note = runner.verify('container', spec)
+
+    assert [cmd[-1] for cmd in commands if cmd[:2] == ['docker', 'cp']] == ['container:/tests']
+    assert ['docker', 'exec', 'container', 'bash', '/tests/test.sh'] in commands
+    assert (reward, note) == (1, '')
+
+
+def test_the_expected_answers_are_absent_while_the_agent_runs(tmp_path, monkeypatch):
+    """`tests/` holds expected output -- forensics ships the exact expected report.
+
+    Installed before the agent phase it sits inside the container the agent explores,
+    and a run that read it would be scored a solve for copying the answer.
+    """
+    import argparse
+    import json
+    import subprocess
+    from scripts.eval import run_suite
+    from scripts.eval.run_suite import Runner, TaskSpec
+
+    (tmp_path / 'manifest.json').write_text(json.dumps({'images': {}}), encoding='utf-8')
+    args = argparse.Namespace(out=str(tmp_path), counter_container='')
+    runner = Runner(args, tmp_path)
+    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 1, 512)
+    order = []
+
+    def record(cmd, **kwargs):
+        if cmd[:2] == ['docker', 'cp']:
+            order.append(cmd[-1])
+        if kwargs.get('text') is False:
+            return subprocess.CompletedProcess(cmd, 0, b'', b'')
+        return subprocess.CompletedProcess(cmd, 0, '0', '')
+
+    def agent(container, spec):
+        order.append('agent ran')
+        return subprocess.CompletedProcess([], 0, '', ''), 1.0, False
+
+    monkeypatch.setattr(run_suite, 'run', record)
+    monkeypatch.setattr(runner, 'build', lambda spec: None)
+    monkeypatch.setattr(runner, 'start_container', lambda spec: ('container', ''))
+    monkeypatch.setattr(runner, 'exec_agent', agent)
+    monkeypatch.setattr(runner, 'counter_call', lambda path, method: None)
+
+    runner.one(spec, 1)
+
+    assert order.index('agent ran') < order.index('container:/tests')

@@ -55,7 +55,15 @@ from agent.llm import HttpLlm, LlmSettings
 from agent.prompt import ACTION_SCHEMA
 
 AGENT_DIR = "/opt/harbor/local-agent"
-VERIFIER_DIR = "/opt/verifier"
+TESTS_DIR = "/tests"
+"""Where a package's `tests/` has to land inside the task container.
+
+Not a preference: `find-sqli-login`, `fix-sqli-login` and `fix-sqli-search` run
+`pytest /tests` by absolute path from their own `test.sh`. Anywhere else and pytest
+collects nothing, exits 4 and the script writes reward 0 -- so a correct report
+scored exactly like an empty one, and half the public set could not have produced a
+one no matter what the agent did (E: see the 2026-09-10 card).
+"""
 REWARD_PATH = "/logs/verifier/reward.txt"
 
 # How long the harness itself waits for a docker step that is not the agent. Generous,
@@ -393,16 +401,29 @@ class Runner:
         return started.stdout.strip(), ""
 
     def install(self, container: str, spec: TaskSpec) -> str:
-        for source, target in (
-            (self.unpacked, AGENT_DIR),
-            (spec.root / "tests", VERIFIER_DIR),
-        ):
-            mk = run(["docker", "exec", container, "mkdir", "-p", target])
-            if mk.returncode != 0:
-                return f"mkdir {target}: {mk.stderr.strip()[-200:]}"
-            copied = run(["docker", "cp", f"{source}/.", f"{container}:{target}"])
-            if copied.returncode != 0:
-                return f"cp {target}: {copied.stderr.strip()[-200:]}"
+        """Put the agent archive in place. The package's tests deliberately stay out.
+
+        `tests/` carries the answers -- `incident-log-forensics` ships the exact
+        expected report next to its script -- so installing it before the agent phase
+        leaves the answer key inside the container the agent is free to explore, and a
+        run that read it would be scored a solve for copying it.
+        """
+        mk = run(["docker", "exec", container, "mkdir", "-p", AGENT_DIR])
+        if mk.returncode != 0:
+            return f"mkdir {AGENT_DIR}: {mk.stderr.strip()[-200:]}"
+        copied = run(["docker", "cp", f"{self.unpacked}/.", f"{container}:{AGENT_DIR}"])
+        if copied.returncode != 0:
+            return f"cp {AGENT_DIR}: {copied.stderr.strip()[-200:]}"
+        return ""
+
+    def install_verifier(self, container: str, spec: TaskSpec) -> str:
+        """Deliver the package's tests, after the agent phase and only then."""
+        mk = run(["docker", "exec", container, "mkdir", "-p", TESTS_DIR])
+        if mk.returncode != 0:
+            return f"mkdir {TESTS_DIR}: {mk.stderr.strip()[-200:]}"
+        copied = run(["docker", "cp", f"{spec.root / "tests"}/.", f"{container}:{TESTS_DIR}"])
+        if copied.returncode != 0:
+            return f"cp {TESTS_DIR}: {copied.stderr.strip()[-200:]}"
         return ""
 
     def exec_agent(self, container: str, spec: TaskSpec) -> tuple[subprocess.CompletedProcess[str] | None, float, bool]:
@@ -441,7 +462,7 @@ class Runner:
     def verify(self, container: str, spec: TaskSpec) -> tuple[int | None, str]:
         run(["docker", "exec", container, "mkdir", "-p", "/logs/verifier"])
         checked = run(
-            ["docker", "exec", container, "bash", f"{VERIFIER_DIR}/test.sh"],
+            ["docker", "exec", container, "bash", f"{TESTS_DIR}/test.sh"],
             timeout=180.0,
         )
         reward = run(["docker", "exec", container, "cat", REWARD_PATH])
@@ -574,8 +595,13 @@ class Runner:
                     json.dumps(calls, indent=1, ensure_ascii=False), encoding="utf-8"
                 )
 
+            installed = self.install_verifier(container, spec)
             try:
+                if installed:
+                    raise RuntimeError(installed)
                 reward, note = self.verify(container, spec)
+            except RuntimeError as error:
+                reward, note = None, f"verifier install failed: {error}"
             except subprocess.TimeoutExpired:
                 reward, note = None, "verifier timeout"
             finally:
