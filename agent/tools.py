@@ -299,6 +299,105 @@ def write_file(
     )
 
 
+def replace_text(
+    path: Path,
+    old: str,
+    new: str,
+    *,
+    workspace: Path,
+    permitted: tuple[Path, ...] = (),
+    secrets: Iterable[str] = (),
+) -> ToolResult:
+    """Replace the single occurrence of `old` with `new`, leaving the file otherwise byte-identical.
+
+    The tool that was missing. `write_file` replaces a whole file, and `read_range`
+    hands back a window; a model that reads a window and writes its fix back through
+    `write_file` deletes everything it did not read. In E-BASE that is exactly what
+    happened to a source module whose vulnerable function sits at the bottom: the fix
+    itself was correct, and the module lost its imports and stopped importing.
+
+    An anchor and not a line range, because `read_range` prints no line numbers, so
+    the model has no numbers to give. It does have the text -- it quoted the block it
+    wanted to change verbatim, fourteen times, in the run that motivated this.
+
+    Ambiguity is refused rather than resolved. Replacing the first of several matches
+    is a coin flip the model cannot see the result of, and the count of matches is
+    something it can act on by lengthening the anchor.
+    """
+    try:
+        root = workspace.resolve()
+        target = Path(path)
+        if not target.is_absolute():
+            target = root / target
+        target = target.resolve()
+    except OSError as exc:
+        return ToolResult(name="replace_text", ok=False, detail=f"bad path: {exc}")
+
+    if not permits(target, root, permitted):
+        return ToolResult(
+            name="replace_text",
+            ok=False,
+            detail=f"refused: {target} is outside the workspace {root} and unnamed by the task",
+        )
+
+    if not old:
+        return ToolResult(name="replace_text", ok=False, detail="refused: `old` is empty")
+    if old == new:
+        return ToolResult(name="replace_text", ok=False, detail="refused: `old` and `new` are the same")
+
+    started = time.monotonic()
+    try:
+        before = target.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return ToolResult(
+            name="replace_text",
+            ok=False,
+            detail=redact(f"{exc.__class__.__name__}: {exc}", secrets),
+            duration_s=time.monotonic() - started,
+        )
+
+    found = before.count(old)
+    if found == 0:
+        return ToolResult(
+            name="replace_text",
+            ok=False,
+            detail=(
+                f"`old` does not appear in {target}. Read the file and copy the text "
+                f"to replace exactly, including indentation."
+            ),
+            duration_s=time.monotonic() - started,
+        )
+    if found > 1:
+        return ToolResult(
+            name="replace_text",
+            ok=False,
+            detail=(
+                f"`old` appears {found} times in {target}; the edit would be ambiguous. "
+                f"Extend it with surrounding lines until it is unique."
+            ),
+            duration_s=time.monotonic() - started,
+        )
+
+    try:
+        with target.open("w", encoding="utf-8", newline="") as handle:
+            handle.write(before.replace(old, new, 1))
+    except OSError as exc:
+        return ToolResult(
+            name="replace_text",
+            ok=False,
+            detail=redact(f"{exc.__class__.__name__}: {exc}", secrets),
+            duration_s=time.monotonic() - started,
+        )
+
+    line = before[: before.index(old)].count("\n") + 1
+    return ToolResult(
+        name="replace_text",
+        ok=True,
+        output=f"replaced 1 occurrence at line {line} of {target}",
+        duration_s=time.monotonic() - started,
+    )
+
+
 def _looks_binary(path: Path) -> bool:
     with path.open("rb") as handle:
         return b"\x00" in handle.read(limits.BINARY_SNIFF_BYTES)

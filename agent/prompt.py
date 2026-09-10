@@ -41,9 +41,10 @@ READ_RANGE = "read_range"
 LIST_DIR = "list_dir"
 SEARCH = "search"
 WRITE_FILE = "write_file"
+REPLACE_TEXT = "replace_text"
 FINISH = "finish"
 
-TOOLS: tuple[str, ...] = (RUN_SHELL, READ_RANGE, LIST_DIR, SEARCH, WRITE_FILE, FINISH)
+TOOLS: tuple[str, ...] = (RUN_SHELL, READ_RANGE, LIST_DIR, SEARCH, WRITE_FILE, REPLACE_TEXT, FINISH)
 
 ACTION_SCHEMA: dict[str, object] = {
     "type": "object",
@@ -54,6 +55,8 @@ ACTION_SCHEMA: dict[str, object] = {
         "start_line": {"type": "integer", "description": f"{READ_RANGE}: first line, 1-based"},
         "pattern": {"type": "string", "description": f"{SEARCH}: regular expression"},
         "content": {"type": "string", "description": f"{WRITE_FILE}: exact bytes to write"},
+        "old": {"type": "string", "description": f"{REPLACE_TEXT}: exact text to replace, unique in the file"},
+        "new": {"type": "string", "description": f"{REPLACE_TEXT}: text to put in its place"},
         "verify": {"type": "string", "description": f"{FINISH}: command proving the result"},
         "summary": {"type": "string", "description": f"{FINISH}: what was done, one line"},
     },
@@ -79,6 +82,7 @@ read_range(path, start_line) - a window of a text file.
 list_dir(path) - the contents of a directory.
 search(pattern, path) - a regular expression over the tree.
 write_file(path, content) - write exactly these bytes, replacing the file.
+replace_text(path, old, new) - change one part of a file, keeping the rest.
 finish(path, verify, summary) - declare the result ready.
 
 WORK
@@ -94,8 +98,17 @@ finish with a path that does not exist does not count.
 ANSWER
 finish returns: path of the result; verify - the checking command; summary - the outcome.
 """
-"""Static part of the prompt: 246 Qwen2.5 tokens, measured 04.09.2026, against the
+"""Static part of the prompt: 271 Qwen2.5 tokens, measured 10.09.2026, against the
 budget of 700 accepted in `docs/research/verdict-system-prompt-evidence.md`.
+
+Re-measured when `replace_text` was added, and by a method worth naming because it
+does not reproduce the earlier figure exactly: the skeleton is sent as the system
+message through the stand's proxy and the empty-system baseline subtracted, so the
+number carries none of the chat template. The same method puts the skeleton *before*
+`replace_text` at 251 rather than the 246 recorded on 04.09.2026, so +20 is the price
+of the new tool line and +5 is the two measurements disagreeing. Both numbers here
+come from the later method; the earlier one is left in the record above rather than
+retconned.
 
 English since 04.09.2026, and the reason is arithmetic rather than taste. The same
 text in Russian cost 341 tokens of the same tokenizer: Qwen2.5 splits Cyrillic into
@@ -109,7 +122,7 @@ in front of an English task made the model read two languages at once.
 
 Larger than the 273 of M15's illustrative skeleton, and the difference is the tool
 contract: their skeleton says "use the provided tools" without naming any, which is
-only honest when the tools arrive through a native schema. Ours names six in one line
+only honest when the tools arrive through a native schema. Ours names seven in one line
 each, because the text rungs of `agent.llm`'s ladder carry no schema at all.
 
 No tokenizer is usable in the target image, so this is a recorded measurement and not

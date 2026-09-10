@@ -445,6 +445,7 @@ REQUIRED: dict[str, str] = {
     prompt.READ_RANGE: "path",
     prompt.SEARCH: "pattern",
     prompt.WRITE_FILE: "path",
+    prompt.REPLACE_TEXT: "path",
 }
 """The one argument each tool cannot be run without.
 
@@ -495,6 +496,12 @@ def _arguments(act: dict[str, Any], state: AgentState) -> tuple[dict[str, object
         return {"path": path or str(state.workspace)}, ""
     if tool == prompt.SEARCH:
         return {"pattern": str(fields["pattern"]), "path": path or str(state.workspace)}, ""
+    if tool == prompt.REPLACE_TEXT:
+        return {
+            "path": path,
+            "old": str(fields.get("old", "") or ""),
+            "new": str(fields.get("new", "") or ""),
+        }, ""
     return {"path": path, "content": str(fields.get("content", "") or "")}, ""
 
 
@@ -547,13 +554,23 @@ def _execute(tool: str, args: dict[str, object], state: AgentState) -> tools.Too
         return tools.search(str(args["pattern"]), Path(str(args["path"])), secrets=secrets)
 
     target = Path(str(args["path"]))
-    result = tools.write_file(
-        target,
-        str(args["content"]),
-        workspace=state.workspace,
-        permitted=state.named_paths,
-        secrets=secrets,
-    )
+    if tool == prompt.REPLACE_TEXT:
+        result = tools.replace_text(
+            target,
+            str(args["old"]),
+            str(args["new"]),
+            workspace=state.workspace,
+            permitted=state.named_paths,
+            secrets=secrets,
+        )
+    else:
+        result = tools.write_file(
+            target,
+            str(args["content"]),
+            workspace=state.workspace,
+            permitted=state.named_paths,
+            secrets=secrets,
+        )
     if result.ok and target not in state.artifacts:
         # Tracked as the model named it, not as the filesystem resolves it: the
         # deliverable contract in these tasks is an absolute path, and a resolved

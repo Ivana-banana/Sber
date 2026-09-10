@@ -22,6 +22,7 @@ from agent.tools import (
     file_info,
     list_dir,
     read_range,
+    replace_text,
     run_argv,
     run_shell,
     search,
@@ -391,3 +392,79 @@ def test_search_says_the_path_is_missing_rather_than_finding_nothing(tmp_path: P
     assert result.ok is False
     assert "no such path" in result.detail
     assert "no match" not in result.detail
+
+
+MODULE = """\
+from fastapi import APIRouter, HTTPException
+
+from db import get_pool
+from models import LoginRequest, LoginResponse
+
+router = APIRouter()
+
+
+@router.post("/login", response_model=LoginResponse)
+async def login(req: LoginRequest):
+    query = f"SELECT id FROM users WHERE username = '{req.username}'"
+    row = await conn.fetchrow(query)
+    return LoginResponse(token=f"token-{row['id']}")
+"""
+"""A module shaped like the one E-BASE destroyed: the interesting line is at the
+bottom, and everything that makes it importable is above the read window."""
+
+
+def test_replace_text_changes_the_anchor_and_nothing_else(tmp_path: Path) -> None:
+    target = tmp_path / "auth.py"
+    target.write_text(MODULE, encoding="utf-8")
+    old = "    query = f\"SELECT id FROM users WHERE username = '{req.username}'\"\n    row = await conn.fetchrow(query)"
+    new = '    query = "SELECT id FROM users WHERE username = $1"\n    row = await conn.fetchrow(query, req.username)'
+
+    result = replace_text(target, old, new, workspace=tmp_path)
+
+    assert result.ok, result.detail
+    after = target.read_text(encoding="utf-8")
+    assert new in after
+    assert old not in after
+    # The whole point: the imports and the router the model never read survive.
+    assert after.startswith("from fastapi import APIRouter, HTTPException")
+    assert "router = APIRouter()" in after
+    assert after.endswith("return LoginResponse(token=f\"token-{row['id']}\")\n")
+
+
+def test_replace_text_refuses_an_anchor_that_is_not_there(tmp_path: Path) -> None:
+    target = tmp_path / "auth.py"
+    target.write_text(MODULE, encoding="utf-8")
+
+    result = replace_text(target, "no such line", "x", workspace=tmp_path)
+
+    assert not result.ok
+    assert target.read_text(encoding="utf-8") == MODULE
+
+
+def test_replace_text_refuses_an_anchor_that_matches_more_than_once(tmp_path: Path) -> None:
+    target = tmp_path / "twice.py"
+    target.write_text("value = 1\nvalue = 1\n", encoding="utf-8")
+
+    result = replace_text(target, "value = 1", "value = 2", workspace=tmp_path)
+
+    assert not result.ok
+    assert "2" in result.detail, result.detail
+    assert target.read_text(encoding="utf-8") == "value = 1\nvalue = 1\n"
+
+
+def test_replace_text_refuses_a_missing_file(tmp_path: Path) -> None:
+    result = replace_text(tmp_path / "absent.py", "a", "b", workspace=tmp_path)
+
+    assert not result.ok
+
+
+def test_replace_text_refuses_to_leave_the_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+
+    result = replace_text(workspace / ".." / "outside.txt", "secret", "x", workspace=workspace)
+
+    assert not result.ok
+    assert outside.read_text(encoding="utf-8") == "secret"

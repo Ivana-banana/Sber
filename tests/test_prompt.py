@@ -108,11 +108,11 @@ def test_the_skeleton_carries_no_worked_example() -> None:
 
 
 def test_the_skeleton_stays_the_size_it_was_measured_at() -> None:
-    # Guards the recorded 246 Qwen2.5 tokens indirectly: no tokenizer is available in
+    # Guards the recorded 271 Qwen2.5 tokens indirectly: no tokenizer is available in
     # the target image, so what regresses locally is the text it was measured on. The
     # character bound went up with the English translation and the token count went
     # down -- English is longer in characters and shorter in tokens here.
-    assert len(prompt.SYSTEM_SKELETON) <= 1150
+    assert len(prompt.SYSTEM_SKELETON) <= 1220
     assert prompt.SYSTEM_SKELETON.count("\n") <= 30
 
 

@@ -814,3 +814,41 @@ def test_the_checkpoint_of_another_task_is_left_alone(tmp_path: Path) -> None:
 
     checkpoint = next(text for text in outcome.observations if "[бюджет]" in text)
     assert "пустой" not in checkpoint.lower()
+
+
+def test_a_scoped_edit_keeps_the_part_of_the_file_the_model_never_read(tmp_path: Path) -> None:
+    # E-BASE: the fix itself was right and the module still stopped importing, because
+    # the only way to change a file was to replace all of it with the window that had
+    # been read. The edit has to reach the deliverable without touching the rest.
+    target = tmp_path / "auth.py"
+    target.write_text("import os\n\nrouter = make()\nquery = f\"WHERE u = '{name}'\"\n", encoding="utf-8")
+    llm = StubLlm(
+        replies=[
+            action(
+                "replace_text",
+                path=str(target),
+                old="query = f\"WHERE u = '{name}'\"",
+                new='query = "WHERE u = $1"',
+            ),
+            action("finish", path=str(target), verify="python3 -c ''", summary="готово"),
+        ]
+    )
+    verify = FakeVerify((True, "command", ""))
+
+    outcome = run(make_state(tmp_path), llm, verify)
+
+    after = target.read_text(encoding="utf-8")
+    assert after == 'import os\n\nrouter = make()\nquery = "WHERE u = $1"\n'
+    assert outcome.deliverable == target
+    assert outcome.solved is True
+
+
+def test_an_edit_whose_anchor_is_not_in_the_file_changes_nothing(tmp_path: Path) -> None:
+    target = tmp_path / "auth.py"
+    target.write_text("import os\n", encoding="utf-8")
+    llm = StubLlm(replies=[action("replace_text", path=str(target), old="absent", new="x")])
+
+    outcome = run(make_state(tmp_path), llm, verify=FakeVerify())
+
+    assert target.read_text(encoding="utf-8") == "import os\n"
+    assert outcome.solved is False
