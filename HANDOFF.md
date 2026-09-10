@@ -13,6 +13,19 @@
 
 ## Активные задачи
 
+Claude, 10.09.2026 (вечер) — продолжение public-solves в том же worktree, ветка
+`fix/public-solves` (запушена). Подобран незакоммиченный WIP Codex'а от 00:20–00:45
+(P0 + четыре дефекта ревью + черновик P1): один красный тест починен, работа разнесена
+по коммитам `26ec9a5`, `6bcce48`, `27d3b5d`. Выполнены P1 (2/2, модель решает audit с
+переданным исходником), P2a (N3: чтения появились, до `routers/auth.py` не дошёл),
+найден и исправлен дефект харнесса `/tests` (`bd0f75c` — три из шести публичных задач
+не могли дать 1), реализован P2b (`82e4910`). Идёт пара control→treatment на
+`find-sqli-login`. Проверка: `python3 -m pytest -q` — 428 passed; карточки P1, D1, P2a
+в `docs/experiments.md`; предсказание P2b — `docs/research/live-runs/P2b-prediction.md`.
+Намеренно не менялись: модель, CONTEXT, budgets, MAX_STEPS, общий prompt, `run.sh`,
+сборщик submission, чужой `deep-research-report.md` (он остаётся незакоммиченным в
+основном checkout — там лежит другой по содержанию документ, нужен владелец).
+
 Codex, 10.09.2026 — public-solves, ветка `fix/public-solves`, изолированный
 `.worktrees/public-solves`. Цель: P0 достоверные метрики и сохранение evidence,
 четыре дефекта ревью, затем P1 audit diagnostic и зависимые public-пилоты.
