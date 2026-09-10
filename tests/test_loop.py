@@ -770,3 +770,37 @@ def test_finish_nested_under_arguments_is_folded_like_every_other_tool(tmp_path:
     assert outcome.stop_reason == "verified"
     assert outcome.deliverable == target
     assert not any("finish refused: no `path`" in text for text in outcome.observations)
+
+
+def test_the_audit_checkpoint_asks_for_what_the_observations_support(tmp_path: Path) -> None:
+    """P2c. The excerpt and a read both put the vulnerable handler in front of the
+    model, and at the 90-second checkpoint it wrote `{"findings": []}` four times and
+    stopped. "Write your best now" is answered by an empty list, so for an audit the
+    checkpoint has to say what "best" means -- without demanding a finding, because a
+    safe application is a legitimate empty report."""
+    now = [0.0]
+    state = make_state(tmp_path, clock=lambda: now[0])
+    llm = StubLlm(replies=[action("list_dir", path=str(tmp_path)) for _ in range(3)])
+    now[0] = limits.EARLY_DELIVERABLE_DEADLINE_S + 1
+
+    outcome = loop.run(
+        state, llm, FakeVerify(),
+        brief=make_brief(tmp_path), playbook=playbooks.CODE_AUDIT,
+    )
+
+    checkpoint = next(text for text in outcome.observations if "[бюджет]" in text)
+    assert "нет проверяемого результата" in checkpoint
+    assert "наблюдени" in checkpoint
+    assert "пустой" in checkpoint.lower()
+
+
+def test_the_checkpoint_of_another_task_is_left_alone(tmp_path: Path) -> None:
+    now = [0.0]
+    state = make_state(tmp_path, clock=lambda: now[0])
+    llm = StubLlm(replies=[action("list_dir", path=str(tmp_path)) for _ in range(3)])
+    now[0] = limits.EARLY_DELIVERABLE_DEADLINE_S + 1
+
+    outcome = run(state, llm, FakeVerify())
+
+    checkpoint = next(text for text in outcome.observations if "[бюджет]" in text)
+    assert "пустой" not in checkpoint.lower()

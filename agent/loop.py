@@ -86,11 +86,26 @@ def run(
         step = state.budget.start_step()
 
         if state.budget.past_early_deadline() and not state.artifacts:
-            observations.append(
+            # H06b measured what happens when this hint is replaced by a probe for the
+            # missing fact: the deliverable collapsed to 1 of 6 public tasks. It stays.
+            # What P2b measured is narrower: with the vulnerable handler both in the
+            # brief and in an observation one step earlier, "write your best now" was
+            # answered with `{"findings": []}` four times. So for an audit the hint says
+            # what best means. It does not ask for a finding -- a safe application is a
+            # legitimate empty report, and requiring content would be the answer
+            # smuggled in through the loop.
+            checkpoint = (
                 "[бюджет] запас шагов и времени на исходе, а на диске нет проверяемого "
                 "результата. "
                 "Запиши лучший вариант через write_file сейчас, улучшишь потом."
             )
+            if playbook.name == "code-audit":
+                checkpoint += (
+                    " Лучший вариант — то, что подтверждают твои наблюдения: перенеси в "
+                    "отчёт прочитанные строки и файлы. Пустой список findings — это "
+                    "утверждение, что прочитанный код безопасен."
+                )
+            observations.append(checkpoint)
 
         plan_started = state.start_phase("plan")
         # Anchored, not sliding: the base moves only when the kept history stops
