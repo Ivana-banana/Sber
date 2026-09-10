@@ -98,6 +98,13 @@ def test_a_python_deliverable_that_does_not_compile_is_never_green(tmp_path: Pat
     assert outcome.verdict is not None and outcome.verdict.stage == "compile"
 
 
+def test_a_valid_python_deliverable_with_a_source_encoding_compiles(tmp_path: Path) -> None:
+    target = tmp_path / "module.py"
+    target.write_bytes(b"# coding: latin-1\nlabel = '\xe9'\n")
+
+    assert macro._uncompilable(target) == ""
+
+
 def test_touching_a_test_file_fails_the_run_even_when_the_deliverable_is_right(
     tmp_path: Path,
 ) -> None:
@@ -210,16 +217,30 @@ def test_a_program_that_hangs_is_killed_and_reported(tmp_path: Path) -> None:
     assert any("program" in text for text in outcome.observations)
 
 
-def test_the_packet_carries_the_task_last_and_stays_bounded(tmp_path: Path) -> None:
+def test_the_packet_bounds_orientation_and_preserves_the_entire_task(tmp_path: Path) -> None:
     """The task text is untrusted data and must survive; the excerpts may not."""
     big = tmp_path / "notes.txt"
     big.write_text("x" * 500, encoding="utf-8")
-    state = make_state(tmp_path, "y" * 200 + " END OF TASK", (big,))
+    instruction = "  FIRST LINE\n" + "y" * (limits.MACRO_PACKET_CHARS + 200) + "\nEND  \n"
+    state = make_state(tmp_path, instruction, (big,))
 
     packet = macro._packet(state, inspect_environment(tmp_path, {}), GENERAL)
 
-    assert len(packet) <= limits.MACRO_PACKET_CHARS
-    assert packet.rstrip().endswith("END OF TASK")
+    task = packet.partition("TASK\n")[2]
+    assert task == instruction
+    assert len(packet) <= limits.MACRO_PACKET_CHARS + len(instruction)
+
+
+def test_the_packet_drops_large_excerpts_before_orientation(tmp_path: Path) -> None:
+    big = tmp_path / "notes.txt"
+    big.write_text("excerpt marker " * 200, encoding="utf-8")
+    instruction = "keep this complete task"
+    state = make_state(tmp_path, instruction, (big,))
+
+    packet = macro._packet(state, inspect_environment(tmp_path, {}), GENERAL)
+
+    assert len(packet) <= limits.MACRO_PACKET_CHARS + len(instruction)
+    assert packet.endswith("TASK\n" + instruction)
 
 
 def test_a_fenced_json_reply_still_parses(tmp_path: Path) -> None:

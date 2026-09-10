@@ -464,7 +464,9 @@ def _uncompilable(target: Path) -> str:
     fails that import whatever else it says.
     """
     try:
-        py_compile.compile(str(target), cfile=os.devnull, doraise=True)
+        with tempfile.TemporaryDirectory(prefix="agent-compile-") as tmp:
+            bytecode = Path(tmp) / "deliverable.pyc"
+            py_compile.compile(str(target), cfile=str(bytecode), doraise=True)
     except py_compile.PyCompileError as error:
         return f"{target} does not compile: {str(error).splitlines()[0][:200]}"
     except OSError as error:
@@ -483,7 +485,7 @@ def _packet(state: AgentState, brief: EnvironmentBrief, playbook: Playbook) -> s
     which is the entire reason for sending a program instead of an action.
     """
     writable = [str(path) for path in state.named_paths] or [str(state.workspace)]
-    lines = [
+    orientation = [
         f"procedure: {playbook.name}",
         brief.render(),
         f"writable paths: {', '.join(writable)}",
@@ -491,16 +493,16 @@ def _packet(state: AgentState, brief: EnvironmentBrief, playbook: Playbook) -> s
     ]
     previews = _previews(state)
     if previews:
-        lines.append("excerpts (may be truncated; read the files in your program):")
-        lines.extend(previews)
-    lines.append("TASK\n" + state.instruction.strip())
+        orientation.append("excerpts (may be truncated; read the files in your program):")
+        orientation.extend(previews)
 
-    text = redact("\n".join(lines), state.secrets)
-    if len(text) > limits.MACRO_PACKET_CHARS:
-        # The task text is last and is the one part that must never be cut, so an
-        # oversized packet drops excerpts rather than truncating the tail.
-        text = redact("\n".join(lines[:4] + lines[-1:]), state.secrets)[: limits.MACRO_PACKET_CHARS]
-    return text
+    separator = "\nTASK\n"
+    context = redact("\n".join(orientation), state.secrets)
+    if len(context) + len(separator) > limits.MACRO_PACKET_CHARS:
+        context = redact("\n".join(orientation[:4]), state.secrets)
+    context = context[: limits.MACRO_PACKET_CHARS - len(separator)].rstrip()
+    task = redact(state.instruction, state.secrets)
+    return context + separator + task
 
 
 def _previews(state: AgentState) -> list[str]:

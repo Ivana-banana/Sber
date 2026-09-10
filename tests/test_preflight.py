@@ -9,6 +9,8 @@ that does not look the way we expected.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 from agent import limits
@@ -335,6 +337,38 @@ def test_binary_files_are_not_scanned_for_literals(tmp_path: Path) -> None:
 
     assert "quoted:" not in rendered, "the only file holding the string is binary"
     assert "capture.pcap:" not in rendered, "and no line number is claimed inside it"
+
+
+def test_literal_scan_skips_a_fifo_without_blocking(tmp_path: Path) -> None:
+    workspace = make_task(tmp_path)
+    os.mkfifo(workspace / "waiting.pipe")
+    code = (
+        "from pathlib import Path; "
+        "from agent.preflight import _locate; "
+        f"assert _locate(Path({str(workspace)!r}), ['needle']) == []"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).parents[1],
+        timeout=2,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_literal_scan_does_not_follow_file_symlinks_outside_workspace(tmp_path: Path) -> None:
+    workspace = make_task(tmp_path)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("needle\n", encoding="utf-8")
+    (workspace / "outside-link.txt").symlink_to(outside)
+
+    rendered = inspect_environment(workspace, ENV, instruction="Find `needle`.").render()
+
+    assert "outside-link.txt:" not in rendered
 
 
 def test_the_recon_sections_stay_inside_the_resident_budget(tmp_path: Path, monkeypatch) -> None:

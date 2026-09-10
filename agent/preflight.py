@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import socket
+import stat
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -302,6 +303,7 @@ def _locate(root: Path, wanted: Sequence[str]) -> list[tuple[str, str]]:
         return []
 
     seen = 0
+    bytes_left = limits.BRIEF_SCAN_MAX_FILES * limits.BRIEF_SCAN_MAX_BYTES
     for directory, subdirectories, names in os.walk(root):
         subdirectories[:] = [name for name in subdirectories if name not in _SKIPPED_DIRS]
         for name in sorted(names):
@@ -311,11 +313,16 @@ def _locate(root: Path, wanted: Sequence[str]) -> list[tuple[str, str]]:
                 break
             path = Path(directory) / name
             try:
+                if not stat.S_ISREG(path.lstat().st_mode):
+                    continue
+                if bytes_left <= 0:
+                    break
                 with path.open("rb") as handle:
-                    blob = handle.read(limits.BRIEF_SCAN_MAX_BYTES)
+                    blob = handle.read(min(limits.BRIEF_SCAN_MAX_BYTES, bytes_left))
             except OSError:
                 continue
             seen += 1
+            bytes_left -= len(blob)
             if b"\x00" in blob[: limits.BINARY_SNIFF_BYTES]:
                 continue
             relative = path.relative_to(root).as_posix()
