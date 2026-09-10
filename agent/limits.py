@@ -131,6 +131,18 @@ a model that repeats one broken command has usually misread an error, and the ch
 correction is telling it so while the budget is still there.
 """
 
+REPEAT_RESULT_BLOCK = 2
+"""Identical successful calls returning the same result, after which the next copy of
+that call is refused before it runs.
+
+Measured, unlike the thresholds around it. In E-P2d one audit run spent 11 of its 15
+steps on exact duplicates -- four identical directory listings, four identical file
+reads, four identical writes -- because a repeat returned the model a byte-identical
+observation, and a deterministic model reading an identical history produces an
+identical action. A repeat whose output differs stays allowed: re-reading a file that
+changed is work, and refusing it would be the detector inventing a rule.
+"""
+
 EXACT_REPEAT_STOP = 4
 ALTERNATING_STOP = 6
 """Defaults read from the OpenHands agent SDK stuck detector at revision `041078f`:

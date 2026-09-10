@@ -78,6 +78,22 @@ def test_a_succeeding_call_is_never_blocked_however_often_it_repeats(tmp_path: P
     assert detectors.blocked(state, "list_dir", detectors.args_digest(args)) is None
 
 
+def test_a_repeat_whose_result_is_already_known_is_refused(tmp_path: Path) -> None:
+    """P2d: 11 of 15 steps were exact duplicates whose output was already in history."""
+    state = make_state(tmp_path)
+    args = {"path": "/app"}
+
+    for _ in range(limits.REPEAT_RESULT_BLOCK):
+        observe(state, "list_dir", args, "same listing")
+
+    signal = detectors.blocked(state, "list_dir", detectors.args_digest(args))
+
+    assert signal is not None
+    assert signal.kind == "block"
+    assert signal.name == "repeat-result"
+    assert "list_dir" in signal.detail
+
+
 def test_the_same_action_with_the_same_result_stops_the_loop(tmp_path: Path) -> None:
     state = make_state(tmp_path)
 

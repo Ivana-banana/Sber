@@ -675,7 +675,13 @@ def test_a_stuck_signal_with_nothing_on_disk_is_advice_rather_than_an_ending(
     outcome = run(make_state(tmp_path), llm, FakeVerify())
 
     assert outcome.stop_reason != "stuck"
-    assert any("по кругу" in text for text in outcome.observations)
+    # Which of the two warnings arrives depends on which detector sees the cycle first:
+    # since E-P2d a fruitless repeat is refused before it runs, which is earlier than
+    # the no-progress window fills. Either way the model is told, and the run continues.
+    assert any(
+        "по кругу" in text or "returned the same output" in text
+        for text in outcome.observations
+    )
 
 
 def test_a_stuck_signal_ends_the_run_once_a_deliverable_exists(tmp_path: Path) -> None:

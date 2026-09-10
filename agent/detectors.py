@@ -70,11 +70,16 @@ def args_digest(args: Mapping[str, object]) -> str:
 
 
 def blocked(state: AgentState, tool: str, args: str) -> Signal | None:
-    """Whether this exact call has already failed often enough to refuse it.
+    """Whether this exact call has already earned a refusal before it runs.
 
-    Only failures count. A successful call that repeats is usually the model re-reading
-    a file it needs, which is cheap and legitimate; refusing it would be the detector
-    inventing a rule nobody asked for.
+    Two shapes qualify, and they are refused for opposite reasons. A call that keeps
+    **failing** is usually a misread error message. A call that keeps **succeeding with
+    the same output** is an attractor: the observation it adds is byte-identical to one
+    already in history, so a deterministic model reads the same context and emits the
+    same action again. E-P2d spent 11 of 15 steps that way.
+
+    A repeat whose output differs is still allowed. Re-reading a file that changed is
+    work, and refusing it would be the detector inventing a rule nobody asked for.
     """
     identical = [
         record
@@ -82,7 +87,7 @@ def blocked(state: AgentState, tool: str, args: str) -> Signal | None:
         if not record.ok and record.tool == tool and record.args_digest == args
     ]
     if len(identical) < limits.REPEAT_FAILURE_BLOCK:
-        return None
+        return _repeated_result(state, tool, args)
 
     last = identical[-1].error_code or "no exit code"
     return Signal(
@@ -92,6 +97,29 @@ def blocked(state: AgentState, tool: str, args: str) -> Signal | None:
             f"{tool} with these exact arguments already failed "
             f"{len(identical)} times ({last}). Change the arguments or the approach; "
             f"repeating it will not produce a different result."
+        ),
+    )
+
+
+def _repeated_result(state: AgentState, tool: str, args: str) -> Signal | None:
+    """Whether this exact call has already returned one and the same output."""
+    identical = [
+        record
+        for record in state.actions
+        if record.ok and record.tool == tool and record.args_digest == args
+    ]
+    if len(identical) < limits.REPEAT_RESULT_BLOCK:
+        return None
+    if len({record.result_fingerprint for record in identical}) != 1:
+        return None
+
+    return Signal(
+        kind="block",
+        name="repeat-result",
+        detail=(
+            f"{tool} with these exact arguments already ran {len(identical)} times and "
+            f"returned the same output every time; that output is above in this "
+            f"history. Reading it again adds nothing. Take a different action."
         ),
     )
 
