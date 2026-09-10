@@ -36,9 +36,10 @@ what a faster endpoint would change too.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
+import hashlib
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -47,6 +48,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from agent.llm import HttpLlm, LlmSettings
+from agent.prompt import ACTION_SCHEMA
 
 AGENT_DIR = "/opt/harbor/local-agent"
 VERIFIER_DIR = "/opt/verifier"
@@ -66,9 +72,27 @@ DONE_LINE = re.compile(
     r"recovery=(?P<recovery>\d+) tokens=(?P<tokens>\d+)"
 )
 READY_LINE = re.compile(r"agent ready: workspace=(?P<workspace>\S+) \((?P<why>[^)]*)\)")
-WRITE_CALL = re.compile(r'"tool"\s*:\s*"write_file"')
-"""A write in the trace. Read from the exchanges rather than the agent's last line,
-because a killed run never prints a last line and most runs here are killed."""
+def requested_write(message: dict[str, object]) -> bool:
+    """Count decodable write requests, never execution or filesystem changes."""
+    message = dict(message)
+    historical = message.get("tool_calls")
+    if isinstance(historical, str):
+        # Traces written before the proxy stored this field structurally hold
+        # `str(message["tool_calls"])`, and an absent list came out as "". Such a
+        # field is evidence of nothing either way, so an unreadable one is dropped
+        # rather than vetoing `content`, which may still carry the action. The length
+        # bound keeps `literal_eval` off a truncated megabyte of prose.
+        message["tool_calls"] = None
+        if 0 < len(historical) <= 2000:
+            try:
+                message["tool_calls"] = ast.literal_eval(historical)
+            except (ValueError, SyntaxError):
+                message["tool_calls"] = None
+    client = HttpLlm(LlmSettings(model="recorded", base_url="", api_key=""))
+    text, _ = client._read_reply({"choices": [{"message": message}]}, ACTION_SCHEMA)
+    return text is not None and json.loads(text).get("tool") == "write_file"
+
+
 PHASE_LINE = re.compile(
     r"agent phase: step=(?P<step>\d+) phase=(?P<phase>\w+) "
     r"status=(?P<status>start|end) duration_s=(?P<duration>[0-9.]+)"
@@ -195,6 +219,12 @@ class TaskResult:
 
     note: str = ""
     log: str = ""
+    timed_out: bool = False
+
+    @property
+    def eligible_success(self) -> bool:
+        return (self.reward == 1 and self.agent_exit == 0
+                and not self.timed_out and self.stop_reason != "killed")
 
 
 @dataclass
@@ -205,11 +235,22 @@ class SuiteResult:
     timeout_scale: float
     started: str
     rows: list[TaskResult] = field(default_factory=list)
+    expected_tasks: list[str] = field(default_factory=list)
+    repeats: int = 1
+
+    @property
+    def complete(self) -> bool:
+        expected = {(name, repeat) for name in self.expected_tasks
+                    for repeat in range(1, self.repeats + 1)}
+        actual = [(row.task, row.repeat) for row in self.rows]
+        return bool(expected) and len(actual) == len(expected) and set(actual) == expected
 
 
-def run(cmd: list[str], *, timeout: float = DOCKER_STEP_TIMEOUT_S) -> subprocess.CompletedProcess[str]:
+def run(
+    cmd: list[str], *, timeout: float = DOCKER_STEP_TIMEOUT_S, text: bool = True
+) -> subprocess.CompletedProcess:
     return subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout, check=False
+        cmd, capture_output=True, text=text, timeout=timeout, check=False
     )
 
 
@@ -261,12 +302,12 @@ def classify_failure(result: TaskResult, *, killed: bool) -> str:
     Order matters: a run that was killed is a `timeout` even if it also never reached
     a verifier, because the timeout is the thing that has to be fixed first.
     """
-    if result.reward == 1:
+    if killed:
+        return "timeout"
+    if result.eligible_success:
         return "-"
     if result.agent_exit is None:
         return "startup"
-    if killed:
-        return "timeout"
     if result.stop_reason in {"llm-unusable", "no-endpoint"}:
         return "endpoint"
     if result.stop_reason in {"steps", "budget", "stuck", "blocked"}:
@@ -314,20 +355,20 @@ class Runner:
         return f"sber-eval/{spec.name}:latest"
 
     def build(self, spec: TaskSpec) -> str | None:
-        # Built on the host's network stack, because this machine's firewall drops
-        # traffic from docker bridges and the bridge's DNS never resolves -- the same
-        # reason `start_model.sh` runs the model as a container. Three public packages
-        # `apt-get install postgresql` at build time and simply failed here. This
-        # touches the build only: the task itself still runs on the isolated
-        # `--network` the harness was given, so nothing about the agent's offline
-        # contract is relaxed.
-        built = run(
-            ["docker", "build", "--network=host", "-q", "-t", self.image_tag(spec),
-             str(spec.root / "environment")],
-            timeout=spec.build_timeout_s,
-        )
-        if built.returncode != 0:
-            return built.stderr.strip()[-400:]
+        if not self.args.reuse_images:
+            built = run(
+                ["docker", "build", "--network=host", "-q", "-t", self.image_tag(spec),
+                 str(spec.root / "environment")], timeout=spec.build_timeout_s,
+            )
+            if built.returncode != 0:
+                return built.stderr.strip()[-400:]
+        inspected = run(["docker", "image", "inspect", "--format", "{{.Id}}", self.image_tag(spec)])
+        if inspected.returncode != 0:
+            return "local image unavailable: " + inspected.stderr.strip()[-300:]
+        manifest_path = Path(self.args.out) / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["images"][spec.name] = inspected.stdout.strip()
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         return None
 
     def start_container(self, spec: TaskSpec) -> tuple[str | None, str]:
@@ -411,6 +452,29 @@ class Runner:
         except ValueError:
             return None, f"unreadable reward {reward.stdout.strip()!r}"
 
+    def save_verifier_logs(self, container: str, spec: TaskSpec, repeat: int) -> None:
+        for name in ("verifier.log", "pytest_output.txt", "app.log"):
+            script = (
+                "from pathlib import Path; import sys\n"
+                f"p = Path('/logs/verifier/{name}')\n"
+                "try:\n"
+                "    with p.open('rb') as f:\n"
+                "        f.seek(0, 2); size = f.tell(); f.seek(max(0, size - 65536))\n"
+                "        sys.stdout.buffer.write(f.read(65536))\n"
+                "except OSError as error:\n"
+                "    print('unavailable: ' + type(error).__name__)\n"
+            )
+            try:
+                saved = run(
+                    ["docker", "exec", container, "python3", "-c", script],
+                    timeout=30,
+                    text=False,
+                )
+                content = saved.stdout if saved.returncode == 0 else b"unavailable: extraction failed"
+            except subprocess.TimeoutExpired:
+                content = b"unavailable: extraction timeout"
+            (self.logs / f"{spec.name}.r{repeat}.{name}").write_bytes(content[-65536:])
+
     def post_mortem(self, container: str, spec: TaskSpec, deliverable: str, repeat: int) -> None:
         """Keep what a failed run left behind, before the container goes away."""
         listing = run(
@@ -465,6 +529,7 @@ class Runner:
             log_file.write_text(output, encoding="utf-8")
             base.log = str(log_file.relative_to(Path(self.args.out)))
             base.agent_exit = None if proc is None else proc.returncode
+            base.timed_out = killed
             base.phases = phase_breakdown(output).render()
 
             done = DONE_LINE.search(output)
@@ -486,7 +551,7 @@ class Runner:
                 base.wrote = (
                     "yes"
                     if any(
-                        WRITE_CALL.search(str(item.get("content") or ""))
+                        requested_write(item)
                         for item in trace["exchanges"]
                     )
                     else "no"
@@ -509,7 +574,12 @@ class Runner:
                     json.dumps(calls, indent=1, ensure_ascii=False), encoding="utf-8"
                 )
 
-            reward, note = self.verify(container, spec)
+            try:
+                reward, note = self.verify(container, spec)
+            except subprocess.TimeoutExpired:
+                reward, note = None, "verifier timeout"
+            finally:
+                self.save_verifier_logs(container, spec, repeat)
             base.reward = reward
             if reward != 1:
                 # The container is about to be destroyed, and a zero cannot be
@@ -526,12 +596,17 @@ class Runner:
 
 
 def write_report(out: Path, suite: SuiteResult) -> None:
+    data = asdict(suite)
+    data["complete"] = suite.complete
+    for saved, row in zip(data["rows"], suite.rows):
+        saved["timed_out"] = row.timed_out or row.agent_exit in (124, 137) or row.stop_reason == "killed"
+        saved["eligible_success"] = row.eligible_success
     (out / "suite.json").write_text(
-        json.dumps(asdict(suite), indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     lines = [
         "task\trepeat\treward\ttokens\tep_tokens\tep_calls\tep_late\twall_s\tsteps\tstop\t"
-        "claim\twrote\tfailure\tphases\tnote"
+        "claim\twrote\tfailure\tphases\tnote\tagent_exit\ttimed_out\teligible_success"
     ]
     for row in suite.rows:
         lines.append(
@@ -547,11 +622,23 @@ def write_report(out: Path, suite: SuiteResult) -> None:
                     row.wall_s,
                     "?" if row.steps is None else row.steps,
                     row.stop_reason, row.solved_claim, row.wrote, row.failure_mode,
-                    row.phases, row.note,
+                    row.phases, row.note, row.agent_exit,
+                    row.timed_out or row.agent_exit in (124, 137) or row.stop_reason == "killed",
+                    row.eligible_success,
                 )
             )
         )
     (out / "results.tsv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def reserve_output(out: Path) -> None:
+    """Claim an empty directory exclusively before any extraction or run."""
+    out.mkdir(parents=True, exist_ok=True)
+    if any(out.iterdir()):
+        raise FileExistsError(f"output directory is not empty: {out}")
+    # Exclusive creation also arbitrates two processes that both observed it empty.
+    with (out / ".run-claimed").open("x"):
+        pass
 
 
 def main() -> int:
@@ -567,6 +654,8 @@ def main() -> int:
         "--counter-container", default="",
         help="name of a running counting_proxy container; empty disables the counter",
     )
+    parser.add_argument("--reuse-images", action="store_true",
+                        help="use existing local task images without building or pulling")
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--timeout-scale", type=float, default=1.0)
     parser.add_argument(
@@ -583,8 +672,14 @@ def main() -> int:
     parser.add_argument("--archive", default=str(ROOT / "build" / "submission.zip"))
     args = parser.parse_args()
 
+    if args.repeats < 1 or args.timeout_scale <= 0:
+        parser.error("repeats and timeout-scale must be positive")
     out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
+    try:
+        reserve_output(out)
+    except FileExistsError as error:
+        print(str(error), file=sys.stderr)
+        return 2
 
     archive = Path(args.archive)
     if not archive.is_file():
@@ -594,8 +689,6 @@ def main() -> int:
     # Unpack with the same tool the organisers' documented path uses, so the exec bit
     # question stays visible here instead of being papered over by a python extract.
     unpacked = out / "unpacked"
-    if unpacked.exists():
-        shutil.rmtree(unpacked)
     unpacked.mkdir(parents=True)
     unzipped = run(["unzip", "-q", str(archive), "-d", str(unpacked)])
     if unzipped.returncode != 0:
@@ -612,9 +705,19 @@ def main() -> int:
     suite = SuiteResult(
         label=args.label, model=args.model, base_url=args.base_url,
         timeout_scale=args.timeout_scale,
-        started=time.strftime("%Y-%m-%d %H:%M:%S"),
+        started=time.strftime("%Y-%m-%d %H:%M:%S"), expected_tasks=names, repeats=args.repeats,
     )
     runner = Runner(args, unpacked)
+    manifest = {
+        "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "expected_tasks": names, "repeats": args.repeats, "model": args.model,
+        "timeout_scale": args.timeout_scale, "controller": args.controller or "archive default",
+        "tell_agent_budget": args.tell_agent_budget, "reuse_images": args.reuse_images,
+        "sampling": "archive settings; request samples retained in logs", "images": {},
+    }
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    write_report(out, suite)
 
     for name in names:
         spec = read_spec(Path(args.tasks_root) / name)
@@ -629,6 +732,7 @@ def main() -> int:
             )
             write_report(out, suite)
 
+    eligible = sum(row.eligible_success for row in suite.rows)
     solved = sum(1 for row in suite.rows if row.reward == 1)
     tokens = sum(
         row.endpoint_tokens if row.endpoint_tokens is not None else (row.tokens or 0)
@@ -637,7 +741,7 @@ def main() -> int:
     wall = sum(row.wall_s for row in suite.rows)
     print(
         f"\n{args.label}: solved {solved}/{len(suite.rows)}  "
-        f"tokens {tokens}  wall {wall:.0f}s"
+        f"eligible {eligible}/{len(suite.rows)}  complete={suite.complete}  tokens {tokens}  wall {wall:.0f}s"
     )
     print(f"report: {out / 'results.tsv'}")
     return 0

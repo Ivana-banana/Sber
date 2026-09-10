@@ -175,11 +175,19 @@ class Counters:
             message = choices[0].get("message", {}) if choices else {}
         except (ValueError, AttributeError, IndexError, KeyError):
             return
+        tool_calls = message.get("tool_calls") or []
+        try:
+            encoded_calls = json.dumps(tool_calls, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError):
+            tool_calls = []
+        else:
+            if len(encoded_calls) > EXCHANGE_CHARS:
+                tool_calls = {"truncated": True}
         self.exchanges.append(
             {
                 "call": self.requests,
                 "content": str(message.get("content") or "")[:EXCHANGE_CHARS],
-                "tool_calls": str(message.get("tool_calls") or "")[:EXCHANGE_CHARS],
+                "tool_calls": tool_calls,
             }
         )
 

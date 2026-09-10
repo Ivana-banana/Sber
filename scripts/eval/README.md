@@ -74,3 +74,9 @@ python3 scripts/eval/run_injection_suite.py \
 The runner defaults to the locally available `python:3.12-slim`, isolated on
 `sber-eval`. It must record that image's digest: this run measures behaviour against a
 real endpoint, but is not an `secureintelligent/acp` environment-compatibility claim.
+
+### Immutable runs and eligibility (P0)
+
+Use a new empty `--out` for every attempt. A claimed or nonempty directory is rejected; partial runs keep `manifest.json`, `suite.json` with `complete=false`, and completed rows. Resume by starting a new directory. `reward` remains the raw checker result; `eligible_success` additionally requires exit 0 and no timeout. TSV appends `agent_exit`, `timed_out`, and `eligible_success`. `wrote` counts decodable write requests across supported response formats; it does not establish execution, source repair, or shell writes.
+
+`--reuse-images` uses existing local task images without building/pulling and records their exact IDs. Use it for offline local comparisons after checking the images correspond to the task packages. Manifest records archive/harness SHA-256, expected tasks/repeats and evaluation options; request samples preserve actual sampling settings. Verifier, pytest and app logs are harvested on success and failure, up to the last 64 KiB each; missing logs are marked unavailable.

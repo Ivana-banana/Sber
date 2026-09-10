@@ -306,3 +306,233 @@ def test_a_directory_without_a_task_toml_is_not_a_task(tmp_path):
     (tmp_path / "insecure-api-app" / "sync.sh").write_text("#!/bin/sh\n", encoding="utf-8")
 
     assert task_names(tmp_path) == ["hello-file"]
+
+
+def result(**changes):
+    values = dict(task='sample', repeat=1, reward=1, agent_exit=0, wall_s=1,
+                  tokens=10, steps=1, stop_reason='verified', solved_claim='True',
+                  workspace='/app', failure_mode='-')
+    values.update(changes)
+    return TaskResult(**values)
+
+
+def test_reports_separate_checker_reward_from_timeout_eligibility(tmp_path):
+    import json
+    suite = SuiteResult(label='eligibility', model='stub', base_url='local',
+                        timeout_scale=1, started='now', expected_tasks=['sample'], repeats=5,
+                        rows=[result(repeat=1, agent_exit=124, stop_reason='killed'),
+                              result(repeat=2), result(repeat=3, reward=0),
+                              result(repeat=4, reward=None), result(repeat=5, agent_exit=2)])
+    write_report(tmp_path, suite)
+    saved = json.loads((tmp_path / 'suite.json').read_text())
+    assert saved['complete'] is True
+    assert [r['eligible_success'] for r in saved['rows']] == [False, True, False, False, False]
+    assert saved['rows'][0]['reward'] == 1
+    assert saved['rows'][0]['timed_out'] is True
+    header = (tmp_path / 'results.tsv').read_text().splitlines()[0].split('\t')
+    assert header[-3:] == ['agent_exit', 'timed_out', 'eligible_success']
+    suite.rows.pop()
+    write_report(tmp_path, suite)
+    assert json.loads((tmp_path / 'suite.json').read_text())['complete'] is False
+
+
+def test_existing_output_is_rejected_before_unpacking(tmp_path, monkeypatch):
+    import sys
+    from scripts.eval.run_suite import main
+    preserved = tmp_path / 'unpacked' / 'precious'
+    preserved.parent.mkdir()
+    preserved.write_bytes(b'old evidence')
+    monkeypatch.setattr(sys, 'argv', ['run_suite', '--model', 'stub', '--base-url', 'local',
+                                     '--out', str(tmp_path), '--archive', 'missing.zip'])
+    assert main() == 2
+    assert preserved.read_bytes() == b'old evidence'
+    # The rejection must be specifically about existing output, not a later archive error.
+    from scripts.eval.run_suite import reserve_output
+    import pytest
+    with pytest.raises(FileExistsError):
+        reserve_output(tmp_path)
+
+
+def test_write_requests_follow_the_runtime_response_decoder():
+    from scripts.eval.run_suite import requested_write
+    import json
+    action = {'tool': 'write_file', 'path': '/app/report', 'content': 'done'}
+    for message in [
+        {'content': json.dumps(action)},
+        {'content': '```json\n' + json.dumps(action) + '\n```'},
+        {'content': json.dumps({'name': 'write_file', 'arguments': {'path': '/app/report', 'content': 'done'}})},
+        {'tool_calls': [{'function': {'name': 'emit_action', 'arguments': json.dumps(action)}}]},
+        {'tool_calls': {'function': {'name': 'emit_action', 'parameters': action}}},
+        {'tool_calls': [{'name': 'emit_action', 'arguments': action}]},
+    ]:
+        assert requested_write(message), message
+    assert not requested_write({'content': json.dumps({'tool': 'read_file', 'path': 'x'})})
+    assert not requested_write({'content': 'We should call write_file later.'})
+    assert not requested_write({'content': '{"name":"write_file","arguments":null}'})
+
+
+def test_proxy_exchange_preserves_native_write_for_requested_write_with_truncation():
+    import json
+    from scripts.eval.counting_proxy import Counters, EXCHANGE_CHARS
+    from scripts.eval.run_suite import requested_write
+
+    action = {'tool': 'write_file', 'path': '/app/report', 'content': 'done'}
+    payload = json.dumps({'choices': [{'message': {
+        'content': 'x' * (EXCHANGE_CHARS + 100),
+        'tool_calls': [{'function': {'name': 'emit_action', 'arguments': json.dumps(action)}}],
+    }}]}).encode()
+    counters = Counters()
+    counters.requests = 1
+
+    counters.remember(payload)
+
+    stored = counters.exchanges[0]
+    assert len(stored['content']) == EXCHANGE_CHARS
+    assert isinstance(stored['tool_calls'], list)
+    assert requested_write(stored)
+
+
+def test_historical_stringified_tool_calls_are_parsed_safely_and_bounded():
+    import json
+    from scripts.eval.counting_proxy import EXCHANGE_CHARS
+    from scripts.eval.run_suite import requested_write
+
+    content_action = {'tool': 'write_file', 'path': '/app/report', 'content': 'done'}
+    assert requested_write({'content': json.dumps(content_action), 'tool_calls': ''})
+    historical = "[{'function': {'name': 'emit_action', 'arguments': " \
+        "'{\"tool\": \"write_file\", \"path\": \"/app/report\", \"content\": \"done\"}'}}]"
+    assert requested_write({'tool_calls': historical})
+    assert not requested_write({'tool_calls': historical + ' ' * EXCHANGE_CHARS})
+
+
+def test_verifier_evidence_is_bounded_and_missing_logs_are_explicit(tmp_path, monkeypatch):
+    import argparse
+    import subprocess
+    from scripts.eval import run_suite
+    from scripts.eval.run_suite import Runner, TaskSpec
+    args = argparse.Namespace(out=str(tmp_path))
+    runner = Runner(args, tmp_path)
+    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 1, 512)
+    def fake_run(cmd, **kwargs):
+        assert cmd[:3] == ['docker', 'exec', 'container']
+        # Run the exact extraction command locally against a real temporary log tree.
+        script = cmd[-1].replace('/logs/verifier', str(tmp_path / 'source'))
+        return subprocess.run(
+            cmd[3:-1] + [script], capture_output=True,
+            text=kwargs.get('text', True), check=False,
+        )
+    source = tmp_path / 'source'
+    source.mkdir()
+    (source / 'verifier.log').write_text('a' * 70000 + 'FINAL ASSERTION')
+    monkeypatch.setattr(run_suite, 'run', fake_run)
+    runner.save_verifier_logs('container', spec, 1)
+    log = tmp_path / 'logs' / 'sample.r1.verifier.log'
+    assert log.stat().st_size <= 65536
+    assert log.read_text().endswith('FINAL ASSERTION')
+    assert 'unavailable' in (tmp_path / 'logs' / 'sample.r1.app.log').read_text()
+
+
+def test_binary_verifier_tail_is_preserved_and_does_not_discard_reward(tmp_path, monkeypatch):
+    import argparse
+    import subprocess
+    from scripts.eval import run_suite
+    from scripts.eval.run_suite import Runner, TaskSpec
+
+    args = argparse.Namespace(
+        out=str(tmp_path), counter_container='', timeout_scale=1, model='stub',
+        base_url='local', api_key='', controller='', tell_agent_budget=False,
+        network='none', reuse_images=True,
+    )
+    runner = Runner(args, tmp_path)
+    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 1, 512)
+    tail = b'\x82\xac' + b'a' * 65534
+
+    monkeypatch.setattr(runner, 'build', lambda spec: None)
+    monkeypatch.setattr(runner, 'start_container', lambda spec: ('container', ''))
+    monkeypatch.setattr(runner, 'install', lambda container, spec: '')
+    done = ('agent done: solved=True stop=verified stage=checked deliverable=/app/report '
+            'steps=1/30 recovery=0 tokens=15\n')
+    proc = subprocess.CompletedProcess([], 0, done, '')
+    monkeypatch.setattr(runner, 'exec_agent', lambda container, spec: (proc, 1.0, False))
+    monkeypatch.setattr(runner, 'counter_call', lambda path, method: None)
+    monkeypatch.setattr(runner, 'verify', lambda container, spec: (1, ''))
+
+    def fake_run(cmd, *, timeout=run_suite.DOCKER_STEP_TIMEOUT_S, text=True):
+        if cmd[-2:-1] == ['-c']:
+            if text:
+                raise UnicodeDecodeError('utf-8', tail, 0, 1, 'split character')
+            return subprocess.CompletedProcess(cmd, 0, tail, b'')
+        return subprocess.CompletedProcess(cmd, 0, '' if text else b'', '' if text else b'')
+
+    monkeypatch.setattr(run_suite, 'run', fake_run)
+
+    result = runner.one(spec, 1)
+
+    assert result.reward == 1
+    assert (tmp_path / 'logs' / 'sample.r1.verifier.log').read_bytes() == tail
+
+
+def test_verifier_log_extraction_timeout_is_saved_without_raising(tmp_path, monkeypatch):
+    import argparse
+    import subprocess
+    from scripts.eval import run_suite
+    from scripts.eval.run_suite import Runner, TaskSpec
+
+    runner = Runner(argparse.Namespace(out=str(tmp_path)), tmp_path)
+    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 1, 512)
+
+    def timed_out(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, 30)
+
+    monkeypatch.setattr(run_suite, 'run', timed_out)
+    runner.save_verifier_logs('container', spec, 1)
+
+    assert (tmp_path / 'logs' / 'sample.r1.verifier.log').read_bytes() == b'unavailable: extraction timeout'
+
+
+def test_manifest_and_partial_suite_survive_interruption(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    import sys
+    import zipfile
+    import pytest
+    from scripts.eval import run_suite
+    tasks = tmp_path / 'tasks'
+    pkg = tasks / 'sample'
+    (pkg / 'environment').mkdir(parents=True)
+    (pkg / 'environment' / 'Dockerfile').write_text('FROM local\nWORKDIR /app\n')
+    (pkg / 'task.toml').write_text('[agent]\ntimeout_sec=10\n')
+    (pkg / 'instruction.md').write_text('write a report')
+    archive = tmp_path / 'agent.zip'
+    with zipfile.ZipFile(archive, 'w') as z:
+        z.writestr('run.sh', '#!/bin/sh\nexit 0\n')
+    out = tmp_path / 'new'
+    monkeypatch.setattr(sys, 'argv', ['suite', '--model', 'stub', '--base-url', 'local',
+        '--api-key', 'never-save-this-key', '--out', str(out), '--archive', str(archive),
+        '--tasks-root', str(tasks)])
+    def interrupted(self, spec, repeat):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(run_suite.Runner, 'one', interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        run_suite.main()
+    manifest = json.loads((out / 'manifest.json').read_text())
+    assert manifest['archive_sha256'] == hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert manifest['expected_tasks'] == ['sample']
+    assert 'never-save-this-key' not in (out / 'manifest.json').read_text()
+    assert json.loads((out / 'suite.json').read_text())['complete'] is False
+
+
+def test_reusing_images_records_exact_image_without_build_or_network(tmp_path, monkeypatch):
+    import argparse
+    import json
+    import subprocess
+    from scripts.eval import run_suite
+    runner = run_suite.Runner(argparse.Namespace(out=str(tmp_path), reuse_images=True), tmp_path)
+    spec = run_suite.TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 1, 512)
+    (tmp_path / 'manifest.json').write_text('{"images": {}}')
+    def local_inspect(cmd, **kwargs):
+        assert cmd[:3] == ['docker', 'image', 'inspect']
+        return subprocess.CompletedProcess(cmd, 0, 'sha256:local-image\n', '')
+    monkeypatch.setattr(run_suite, 'run', local_inspect)
+    assert runner.build(spec) is None
+    assert json.loads((tmp_path / 'manifest.json').read_text())['images']['sample'] == 'sha256:local-image'
