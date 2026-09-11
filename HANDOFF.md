@@ -13,7 +13,7 @@
 
 ## Активные задачи
 
-Codex, 11.09.2026 — выполняю пакеты E → O3 → F из `docs/superpowers/plans/2026-09-11-all-tasks-recovery.md` от `d079939` в этом worktree. Цель: честно закрыть P4 как инфраструктурный ноль, затем укрепить offline-контракты контекста/протокола и завершения файловых задач, не заявляя live gain без доступного endpoint. Проверка: воспроизводящие красные тесты, targeted/full pytest, архивный smoke и отдельные записи в `docs/experiments.md`; live-пилот только после подтверждения свободного стенда. Граница: без смены модели/context/budget, без нового runtime dependency, public hardcode, интернета/fetch/push, перезапуска процессов и изменения `deep-research-report.md`; чужие незакоммиченные файлы не трогаю. Текущий full gate: `python3 -m pytest -q` — 456 passed под локальным socket-разрешением; обычный sandbox даёт EPERM только на `tests/test_main.py::test_the_status_line_is_readable_before_the_process_is_killed`. E live gate заблокирован sandbox: Docker/Ollama/NVIDIA/endpoint недоступны.
+Codex, 11.09.2026 — после E и O3-пакета продолжаю F из `docs/superpowers/plans/2026-09-11-all-tasks-recovery.md` от `cfe9c8c` в этом worktree. Цель F: укрепить честное завершение простых exact-file задач через данные исходной instruction, сохранив четыре содержательные задачи без общего «любая запись = успех». Проверка: красные контрактные тесты до production-кода, targeted/full pytest, сборка и `check_submission.py`; live hello/bye-пилоты только после подтверждения свободного endpoint. Граница: без смены модели/context/budget, без нового runtime dependency, public hardcode, интернета/fetch/push, перезапуска процессов и изменения `deep-research-report.md`; чужие незакоммиченные файлы не трогаю. Текущий full gate: `python3 -m pytest -q` — 456 passed, 1 sandbox `EPERM` на socket-тесте; при разрешённом socket ожидается 457 passed. E live gate заблокирован sandbox: Docker/Ollama/NVIDIA/endpoint недоступны.
 
 Claude, 10.09.2026 (вечер) — продолжение public-solves в том же worktree, ветка
 `fix/public-solves` (запушена). Подобран незакоммиченный WIP Codex'а от 00:20–00:45
@@ -64,6 +64,14 @@ Codex, 07.09.2026, углубление organizer-first: проверить ко
 | 2026-08-25 | Claude | Остаток блокера: контейнерный прогон. ФС целевого образа больше не блокер — архив в ней исполнен | Внешний прогон M12: 15 непустых инструкций дали exit `0`, пустой аргумент — `2`, layout с одним верхним каталогом контрактом не принимается. Достоверность подтверждена пересчётом пяти fingerprint'ов и сверкой digest/слоёв. Разбор — `docs/research/verdict-submission-execution-check.md` | Прогнать тот же архив под `docker run --network none`: chroot не даёт cgroups, seccomp и `/proc`, поэтому `ps` и лимиты среды остаются неизвестными |
 
 ## Завершено
+
+**Codex, 11.09.2026 — O3 offline protocol gate.** `cfe9c8c` добавляет проверку
+имени native-функции: decoder не принимает аргументы от неизвестного function call,
+при этом valid `emit_action`/TGI/flat dialects и fallback не меняются. Красный тест
+сначала получил `LlmReply` для `not_emit_action`, после фикса targeted
+`tests/test_llm.py tests/test_prompt.py` — 58 passed; полный suite — 456 passed и
+один ожидаемый socket `EPERM` в обычном sandbox. Реальная вместимость context и
+live protocol effect не измерены: endpoint недоступен.
 
 **Codex, 11.09.2026 — O1/O2 пакеты плана recovery.** `048c03d` исправляет
 байтовую целостность `replace_text` (strict UTF-8, size cap, atomic replace и mode),
