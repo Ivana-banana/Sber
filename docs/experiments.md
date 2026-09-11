@@ -3048,3 +3048,22 @@ timeout 5400 python3 scripts/eval/run_suite.py \
   `0763c74f28a403752b12275bd34545340faf2f6a78c99ef425af99684a9bf4a3`;
   повторный `python3 scripts/check_submission.py ...` — PASS для всех offline
   gates. `secureintelligent/acp` smoke не выполнен.
+
+### E-live-retry (2026-09-11) — запуск не начат: endpoint и владелец стенда не подтверждены
+
+- Попытка запуска выполнена из чистого `fix/public-solves` на commit `19350fe`.
+  До `run_suite` проверены только read-only признаки: `docker ps` отказал с
+  `permission denied` к `/var/run/docker.sock`; `ollama ps` получил `EPERM` к
+  `127.0.0.1:11434`; `nvidia-smi` не связался с драйвером; `sber-proxy:8000`
+  не резолвится, `127.0.0.1:8000` не слушает; активного `run_suite`/model
+  процесса не найдено. Владение или свободное состояние стенда не подтверждено.
+- Поэтому live task-run не запускался: новые reward/eligible, endpoint/agent
+  tokens, wall, steps и причины нулей — **не измерялись / N/A**; старый E-BASE
+  `2/6` не заменялся и новых live-нолей не объявлялось. Чужой стенд не
+  перезапускался, fetch/push и интернет не использовались.
+- Независимая offline-проверка текущего submission:
+  `build/check-20260911-live-blocked-lAxnGQ/submission.zip`, размер 94 994 байта,
+  SHA-256
+  `0763c74f28a403752b12275bd34545340faf2f6a78c99ef425af99684a9bf4a3`;
+  `python3 scripts/check_submission.py ...` — PASS. Это не task metric и не
+  заменяет live public-run.

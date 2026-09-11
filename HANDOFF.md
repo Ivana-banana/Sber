@@ -63,6 +63,14 @@ Codex, 07.09.2026, углубление organizer-first: проверить ко
 
 ## Завершено
 
+**Codex, 11.09.2026 — live retry остановлен до запуска.** На чистом `19350fe`
+не подтвердились Docker/Ollama/NVIDIA/endpoint и владение стендом; `run_suite`
+не запускался, чужой процесс не перезапускался. Task reward, tokens и wall для
+этой попытки не измерялись; последний доказанный live score остаётся `2/6` из
+E-BASE. Offline archive smoke для
+`build/check-20260911-live-blocked-lAxnGQ/submission.zip` — PASS, SHA
+`0763c74f28a403752b12275bd34545340faf2f6a78c99ef425af99684a9bf4a3`.
+
 **Codex, 11.09.2026 — E/O3/F recovery-пакеты завершены в offline-контуре.** E
 зафиксирован в `fe660f0`, O3 — в `cfe9c8c` и handoff `64b30a9`, F — в
 `6f7131f`. F добавляет консервативную проверку exact-file: ожидаемый путь и
