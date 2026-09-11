@@ -2947,3 +2947,39 @@ timeout 5400 python3 scripts/eval/run_suite.py \
   старые epochs не участвуют ни в `blocked`, ни в `stuck`. Live pilot не выполнен:
   E endpoint gate остаётся blocked sandbox-окружением, поэтому solved/tokens/wall
   не заявляются.
+
+### E/P4-local (2026-09-11) — завершённый P4 классифицирован как infrastructure failure
+
+- Исходный treatment: `build/p4-replace-text.zip`, commit `271c8cc`, archive SHA-256
+  `27d958863d6481a9f8daf7b1766c94a1825bd55e35a431cf260d8280dd6399e2`;
+  harness SHA-256 `61e2bb72195b7e0175e17aefe91b3fdc264e6bcda1d2b25d20ef64ec0fb2bd3e`.
+  Модель `qwen2.5-coder:7b-instruct-q4_K_M`, temperature=0, context=4096,
+  timeout_scale=1.0, controller=archive default, `tell_agent_budget=false`,
+  `reuse_images=true`.
+- Сырые данные сохранены в новом для этого прогона каталоге
+  `build/public-20260910-P4-CJcFbF/`; `complete=true`, два ожидаемых задания, один
+  повтор. `results.tsv` SHA-256
+  `630cccbd7efc553ba1a339679e313113d0ed96b3896f3e2a7f3d8b56f61c6395`,
+  `suite.json` SHA-256
+  `ccaee9fc8372c4af5b3b0d844660033eb9f87be5f302f9372bac4b46799cdc73`,
+  `manifest.json` SHA-256
+  `307e74867d9354ad1f5c611532b9c2eff7c93d5307f230f743acdc4bc67c713f`.
+- `fix-sqli-login`: reward=0, eligible=false, agent_exit=0, timed_out=false,
+  stop=`llm-unusable`, failure=`endpoint`, endpoint calls=2, endpoint tokens=3730,
+  agent tokens=1918, wall=331.7 s; `inspect=0.037/1`, `plan=330.528/4`,
+  `act=0.002/1`. Первый ответ пришёл в `content` и был разобран/понижен до
+  `json_schema`, следующие два логических вызова закончились транспортным
+  таймаутом; verifier увидел исходный SQLi (2 failure из 2 security assertions).
+- `fix-sqli-search`: reward=0, eligible=false, agent_exit=0, timed_out=false,
+  stop=`llm-unusable`, failure=`endpoint`, endpoint calls=0, endpoint tokens=0,
+  agent tokens=0, wall=332.1 s; `inspect=0.102/1`, `plan=330.712/3`.
+  Два ответа endpoint пришли поздно и не были использованы; verifier увидел
+  исходную SQLi (1 failure из 8 assertions, остальные 7 passed).
+- Это **не** evidence за проигрыш `replace_text`: обе строки классифицированы как
+  `failure=endpoint`, а не reasoning/tool/verification. Внутри sandbox повторная
+  доступность не подтверждена: `docker ps` → permission denied к
+  `/var/run/docker.sock`, `ollama ps` → `EPERM`, `nvidia-smi` не связался с драйвером,
+  `sber-proxy:8000/v1/models` не резолвится, `127.0.0.1:8000/v1/models` не слушает.
+  Новые LLM/container-метрики не выдумываются; следующий live B/T требует владельца
+  свободного endpoint. Проверка и полный suite без live запуска остаются отдельными
+  offline gates.
