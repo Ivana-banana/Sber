@@ -2919,3 +2919,16 @@ timeout 5400 python3 scripts/eval/run_suite.py \
   `630cccbd7efc553ba1a339679e313113d0ed96b3896f3e2a7f3d8b56f61c6395`,
   `suite.json` SHA-256
   `ccaee9fc8372c4af5b3b0d844660033eb9f87be5f302f9372bac4b46799cdc73`.
+
+### O2-address-local (2026-09-11) — адрес источника в наблюдениях
+
+- Commit: `aa5e871`; один фактор после O1 — metadata для `read_range` и `list_dir`.
+  Сырой body остаётся первым, а suffix сообщает путь, диапазон, EOF/truncation или
+  shown/total entries; путь проходит через redaction. Loop передаёт secrets в listing.
+- Воспроизводящий красный набор: три новых теста на source/range/EOF и одинаковые
+  basename падали до изменения. После фикса `python3 -m pytest
+  tests/test_tools.py tests/test_loop.py tests/test_state.py tests/test_detectors.py -q`
+  — **107 passed**.
+- Live pilot не выполнен по тому же E-блокеру; solved/tokens/wall не измерялись.
+  Следующий фактор O2 — эпоха изменения состояния для repeat guards, отдельно от
+  этого формата наблюдений.
