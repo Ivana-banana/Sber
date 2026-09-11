@@ -2948,6 +2948,29 @@ timeout 5400 python3 scripts/eval/run_suite.py \
   E endpoint gate остаётся blocked sandbox-окружением, поэтому solved/tokens/wall
   не заявляются.
 
+### O3-protocol-local (2026-09-11) — неизвестное имя native-функции не исполняется
+
+- Изменён ровно один runtime-фактор: `agent.llm._read_tool_call` теперь принимает
+  native/TGI/flat вызов только если его `function.name`/`name` равен единственной
+  предложенной функции `emit_action`. `json_schema`, `json_object`, text fallback,
+  model, prompt, context, budgets и loop не менялись.
+- Воспроизводящий красный тест:
+  `python3 -m pytest tests/test_llm.py::test_a_native_call_for_an_unknown_function_is_rejected -q`
+  до фикса получил `LlmReply` для вызова `not_emit_action` с валидными аргументами;
+  это означало, что неизвестный native function мог попасть в loop.
+- Минимальный фикс зелёный:
+  `python3 -m pytest tests/test_llm.py::test_a_native_call_for_an_unknown_function_is_rejected -q`
+  — **1 passed**; targeted
+  `python3 -m pytest tests/test_llm.py tests/test_prompt.py -q` — **58 passed**.
+  Полный `python3 -m pytest -q` — **456 passed, 1 failed** только на
+  `tests/test_main.py::test_the_status_line_is_readable_before_the_process_is_killed`
+  из-за sandbox `socket.socket()` → `EPERM`.
+- Это offline protocol gate, не live quality/effect measurement: endpoint и
+  Docker/Ollama/NVIDIA недоступны в sandbox, поэтому input/output tokens, wall,
+  solved и context truncation не измерялись. Неизвестный function теперь даёт
+  `LlmError` при отключённом fallback или обычный переход по уже существующей
+  лестнице; valid emitted `emit_action` dialects проходят существующие tests.
+
 ### E/P4-local (2026-09-11) — завершённый P4 классифицирован как infrastructure failure
 
 - Исходный treatment: `build/p4-replace-text.zip`, commit `271c8cc`, archive SHA-256

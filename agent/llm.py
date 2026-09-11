@@ -488,6 +488,12 @@ class HttpLlm:
             # llama.cpp, not observed from it -- see the docstring.
             function = calls[0]
 
+        if function.get("name") != TOOL_NAME:
+            # The request offers exactly one function. Never execute arguments from
+            # a call for another function just because their JSON happens to match
+            # our action schema; an unknown function is a protocol error.
+            return None
+
         arguments = function.get("arguments")
         if isinstance(arguments, str):
             return arguments

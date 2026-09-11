@@ -587,6 +587,35 @@ def test_a_tool_call_stranded_in_content_is_recovered() -> None:
     )
 
 
+def test_a_native_call_for_an_unknown_function_is_rejected() -> None:
+    payload = json.dumps(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "not_emit_action",
+                                    "arguments": '{"action":"ls"}',
+                                }
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+    ).encode()
+    client, endpoint, _ = make_client([(200, payload)])
+    client.allow_fallback = False
+
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmError)
+    assert len(endpoint.bodies) == 1
+
+
 def test_several_tool_calls_are_recorded_not_silently_dropped() -> None:
     payload = json.dumps(
         {
