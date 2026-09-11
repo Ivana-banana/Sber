@@ -31,7 +31,7 @@ from typing import Any
 import json
 import shlex
 
-from agent import detectors, limits, prompt, tools
+from agent import detectors, limits, prompt, result_contract, tools
 from agent.playbooks import Playbook
 from agent.ports import LlmError, LlmPort
 from agent.preflight import EnvironmentBrief
@@ -170,7 +170,7 @@ def run(
             assert deliverable is not None
             command = str(act.get("verify", "") or "")
             refusal = _cannot_fail(command, deliverable)
-            if refusal:
+            if refusal and result_contract.exact_file_requirement(state.instruction) is None:
                 state.record("verify", "refused", refusal)
                 observations.append(f"[step {step}] {refusal}")
                 continue

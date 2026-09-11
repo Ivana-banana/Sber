@@ -311,3 +311,75 @@ def test_an_empty_stale_file_is_diagnosed_as_empty(tmp_path: Path) -> None:
     result = verify(state, deliverable=empty, command="")
 
     assert result.stage == "non-empty"
+
+
+def test_an_exact_file_requirement_rejects_wrong_bytes_without_a_model_check(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "answer.txt"
+    state = AgentState(
+        instruction=(
+            f"Create a file at `{target}` whose entire content is exactly the single "
+            "word `Expected` (the file must contain only those eight characters)."
+        ),
+        workspace=tmp_path,
+        budget=Budget(total_s=600.0, clock=lambda: 0.0),
+        named_paths=(target,),
+    )
+    from agent.paths import snapshot
+
+    state.baseline = snapshot((target,))
+    target.write_bytes(b"Wrong")
+
+    result = verify(state, deliverable=target, command="")
+
+    assert result.ok is False
+    assert result.stage == "exact-file"
+
+
+def test_an_exact_file_requirement_accepts_exact_bytes_without_a_model_check(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "answer.txt"
+    state = AgentState(
+        instruction=(
+            f"Create a file at `{target}` whose entire content is exactly the single "
+            "word `Expected` (the file must contain only those eight characters)."
+        ),
+        workspace=tmp_path,
+        budget=Budget(total_s=600.0, clock=lambda: 0.0),
+        named_paths=(target,),
+    )
+    from agent.paths import snapshot
+
+    state.baseline = snapshot((target,))
+    target.write_bytes(b"Expected")
+
+    result = verify(state, deliverable=target, command="")
+
+    assert result.ok is True
+    assert result.stage == "exact-file"
+
+
+@POSIX_ONLY
+def test_an_exact_file_requirement_does_not_run_the_model_verify_command(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "answer.txt"
+    marker = tmp_path / "side-effect.txt"
+    state = AgentState(
+        instruction=(
+            f"Create a file at `{target}` whose entire content is exactly the single "
+            "word `Expected` (the file must contain only those eight characters)."
+        ),
+        workspace=tmp_path,
+        budget=Budget(total_s=600.0, clock=lambda: 0.0),
+        named_paths=(target,),
+    )
+    target.write_bytes(b"Expected")
+
+    result = verify(state, deliverable=target, command=f"touch {marker}")
+
+    assert result.ok is True
+    assert result.stage == "exact-file"
+    assert not marker.exists()

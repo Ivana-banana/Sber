@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from agent import result_contract
 from agent.paths import digest, permits
 from agent.redact import redact
 from agent.state import AgentState
@@ -38,6 +39,7 @@ STAGE_STALE = "stale"
 STAGE_NON_EMPTY = "non-empty"
 STAGE_COMMAND = "command"
 STAGE_UNVERIFIED = "unverified"
+STAGE_EXACT_FILE = "exact-file"
 
 def _untouched(state: AgentState, deliverable: Path) -> bool:
     """Is this exactly the file that was already there when the run began?
@@ -124,6 +126,47 @@ def verify(state: AgentState, *, deliverable: Path, command: str) -> VerifyResul
             detail=f"expected deliverable not found: {deliverable}",
         )
     deliverable = resolved
+
+    exact = result_contract.exact_file_requirement(state.instruction)
+    if exact is not None:
+        expected_path, expected_bytes = exact
+        try:
+            expected_path = expected_path.resolve()
+        except OSError:
+            return VerifyResult(
+                ok=False,
+                stage=STAGE_EXACT_FILE,
+                detail="exact-file requirement has an unusable target path",
+            )
+        if deliverable != expected_path:
+            return VerifyResult(
+                ok=False,
+                stage=STAGE_EXACT_FILE,
+                detail=f"exact-file requirement expects {expected_path}, not {deliverable}",
+            )
+        try:
+            with deliverable.open("rb") as handle:
+                actual = handle.read(len(expected_bytes) + 1)
+        except OSError as exc:
+            return VerifyResult(
+                ok=False,
+                stage=STAGE_EXACT_FILE,
+                detail=f"exact-file requirement could not read the file: {type(exc).__name__}",
+            )
+        if actual != expected_bytes:
+            return VerifyResult(
+                ok=False,
+                stage=STAGE_EXACT_FILE,
+                detail=(
+                    f"exact-file requirement failed for {deliverable}: expected "
+                    f"{len(expected_bytes)} UTF-8 bytes"
+                ),
+            )
+        return VerifyResult(
+            ok=True,
+            stage=STAGE_EXACT_FILE,
+            detail=f"exact-file requirement passed for {deliverable}",
+        )
 
     if deliverable.stat().st_size == 0:
         return VerifyResult(

@@ -876,3 +876,38 @@ def test_an_edit_whose_anchor_is_not_in_the_file_changes_nothing(tmp_path: Path)
 
     assert target.read_text(encoding="utf-8") == "import os\n"
     assert outcome.solved is False
+
+
+def test_an_exact_file_finish_uses_the_instruction_oracle_before_a_reader_command(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "answer.txt"
+    state = AgentState(
+        instruction=(
+            f"Create a file at `{target}` whose entire content is exactly the single "
+            "word `Expected` (the file must contain only those eight characters)."
+        ),
+        workspace=tmp_path,
+        budget=Budget(total_s=600.0, clock=lambda: 0.0),
+        named_paths=(target,),
+    )
+    from agent.verify import verify as real_verify
+
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(target), content="Expected"),
+            action("finish", path=str(target), verify=f"cat {target}", summary="done"),
+        ]
+    )
+
+    outcome = loop.run(
+        state,
+        llm,
+        real_verify,
+        brief=make_brief(tmp_path),
+        playbook=playbooks.GENERAL,
+    )
+
+    assert outcome.solved is True
+    assert outcome.verdict is not None
+    assert outcome.verdict.stage == "exact-file"

@@ -3006,3 +3006,40 @@ timeout 5400 python3 scripts/eval/run_suite.py \
   Новые LLM/container-метрики не выдумываются; следующий live B/T требует владельца
   свободного endpoint. Проверка и полный suite без live запуска остаются отдельными
   offline gates.
+
+### F-exact-file-local (2026-09-11) — содержательная проверка простой файловой задачи
+
+- Изменён один runtime-фактор: добавлен консервативный
+  `agent.result_contract.exact_file_requirement(instruction)` и exact-file этап в
+  `agent.verify`. Для одной позитивной инструкции с одним quoted абсолютным путём и
+  одним quoted exact-content clause проверяются ожидаемый путь и полные UTF-8 bytes;
+  неоднозначные/слишком большие условия возвращают `None`. В `loop` такой контракт
+  позволяет безвредному `cat` дойти до содержательного oracle; сам `cat` не
+  исполняется, если exact check уже прошёл. Audit/fix/forensics без такого контракта
+  сохраняют прежний finish gate.
+- Красный цикл: `python3 -m pytest
+  tests/test_verify.py::test_an_exact_file_requirement_rejects_wrong_bytes_without_a_model_check -q`
+  до фикса получил `ok=True, stage=unverified` для bytes `Wrong` вместо отказа;
+  после добавления stub helper тесты сначала дали ожидаемый assertion failure, затем
+  зелёный exact-file oracle.
+- Offline targeted после фикса:
+  `python3 -m pytest tests/test_result_contract.py
+  tests/test_verify.py::test_an_exact_file_requirement_rejects_wrong_bytes_without_a_model_check
+  tests/test_verify.py::test_an_exact_file_requirement_accepts_exact_bytes_without_a_model_check
+  tests/test_verify.py::test_an_exact_file_requirement_does_not_run_the_model_verify_command
+  tests/test_loop.py::test_an_exact_file_finish_uses_the_instruction_oracle_before_a_reader_command -q`
+  — **10 passed**; пакет `tests/test_loop.py tests/test_verify.py
+  tests/test_result_contract.py` — **71 passed**.
+- Проверено, что правильные bytes проходят без model verify command, неправильные
+  bytes отвергаются, quoted path с пробелом и Unicode content извлекаются,
+  отрицательная/неоднозначная/later-sentence инструкция не получает invented oracle,
+  а model-supplied shell side effect не запускается после exact PASS. Live hello/bye
+  3/3, токены и время не измерялись: E endpoint gate заблокирован sandbox; это
+  offline contract evidence, не solved-gain.
+- Архивный offline gate на рабочем дереве до коммита: команда
+  `python3 scripts/build_submission.py --out build/candidate-20260911-F-3WhSka/submission.zip`
+  создала 94 994 байта, SHA-256
+  `0763c74f28a403752b12275bd34545340faf2f6a78c99ef425af99684a9bf4a3`;
+  `python3 scripts/check_submission.py ...` дал PASS для распаковки, root
+  executable `run.sh` (100755), cold-start contract и hostile instruction. Архив
+  пересобрать после коммита и сравнить SHA; secureintelligent/acp smoke не выполнен.
