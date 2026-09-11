@@ -2896,3 +2896,26 @@ timeout 5400 python3 scripts/eval/run_suite.py \
 диагнозов не проверен вторым прогоном; `fix-sqli-login` и `fix-sqli-search` дают
 разные классы отказа при почти одинаковой постановке, что само по себе говорит о
 большом разбросе.
+
+### O1-local (2026-09-11) — байтовый контракт `replace_text`
+
+- Commit: `048c03d`; изменён один runtime-фактор — anchored edit готовит полную
+  замену в bounded strict-UTF-8 буфере и устанавливает её атомарно с исходным mode.
+  Модель, prompt, context, budgets, loop и harness не менялись.
+- Красный цикл до фикса: временный тест на CRLF и invalid byte дал 1 failure:
+  исходный код нормализовал CRLF и заменял invalid byte символом replacement.
+  Финальный контракт оставляет CRLF/Unicode байты и явно отклоняет invalid UTF-8;
+  текущие проверки сохранены в `tests/test_tools.py`.
+- Targeted: `python3 -m pytest tests/test_tools.py tests/test_loop.py
+  tests/test_prompt.py -q` — **104 passed**. Полный: `python3 -m pytest -q` с
+  локальным socket-тестом под разрешённым sandbox runner — **449 passed**.
+- Live model/archive pilot не выполнен: Docker API, Ollama и NVIDIA в обычном
+  sandbox недоступны (`EPERM`/permission denied), endpoint не занимался. Поэтому
+  solved-gain и effect P4 не заявлены; следующий шаг — новая B/T-пара на свободном
+  стенде.
+- Исторический P4 зафиксирован отдельно: `build/public-20260910-P4-CJcFbF/`,
+  `complete=true`, оба reward=0, `failure=endpoint`,
+  `results.tsv` SHA-256
+  `630cccbd7efc553ba1a339679e313113d0ed96b3896f3e2a7f3d8b56f61c6395`,
+  `suite.json` SHA-256
+  `ccaee9fc8372c4af5b3b0d844660033eb9f87be5f302f9372bac4b46799cdc73`.
