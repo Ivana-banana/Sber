@@ -13,6 +13,8 @@
 
 ## Активные задачи
 
+Codex, 11.09.2026 — выполняю `docs/superpowers/plans/2026-09-11-all-tasks-recovery.md` по пакетам E → O1/O2/O3 → F → L/S/A/C/I → G/R от `8f27c1b` в этом worktree. Цель: минимальными отдельными факторами довести автономную петлю до подтверждённого public-кандидата, сохранив существующий baseline и не трогая чужой `deep-research-report.md`. Проверка каждого пакета: воспроизводящий тест до фикса, targeted/full pytest, затем живой pilot только при доступном и подтверждённо свободном endpoint; live evidence пишется в уникальный каталог и `docs/experiments.md`. Граница: без новых runtime-зависимостей, public hardcode, смены модели/контекста/budget без отдельного эксперимента, интернет/fetch/push и перезапуска чужого стенда. Baseline 11.09: `python3 -m pytest -q` — 440 passed, 1 sandbox `EPERM` на socket-тесте; Docker/Ollama/NVIDIA недоступны из текущего sandbox, поэтому E live gate пока blocked окружением.
+
 Claude, 10.09.2026 (вечер) — продолжение public-solves в том же worktree, ветка
 `fix/public-solves` (запушена). Подобран незакоммиченный WIP Codex'а от 00:20–00:45
 (P0 + четыре дефекта ревью + черновик P1): один красный тест починен, работа разнесена

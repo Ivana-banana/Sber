@@ -22,7 +22,9 @@ from __future__ import annotations
 import os
 import re
 import signal
+import stat
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -318,7 +320,10 @@ def replace_text(
 
     An anchor and not a line range, because `read_range` prints no line numbers, so
     the model has no numbers to give. It does have the text -- it quoted the block it
-    wanted to change verbatim, fourteen times, in the run that motivated this.
+    wanted to change verbatim, fourteen times, in the run that motivated this. The
+    source must be valid UTF-8 and fit the bounded edit size; otherwise the operation
+    refuses before touching the file. The replacement is prepared in a sibling
+    temporary file and installed atomically with the original mode.
 
     Ambiguity is refused rather than resolved. Replacing the first of several matches
     is a coin flip the model cannot see the result of, and the count of matches is
@@ -347,7 +352,26 @@ def replace_text(
 
     started = time.monotonic()
     try:
-        before = target.read_text(encoding="utf-8", errors="replace")
+        with target.open("rb") as handle:
+            before_bytes = handle.read(limits.REPLACE_MAX_BYTES + 1)
+        if len(before_bytes) > limits.REPLACE_MAX_BYTES:
+            return ToolResult(
+                name="replace_text",
+                ok=False,
+                detail=(
+                    f"refused: {target} is larger than the {limits.REPLACE_MAX_BYTES} "
+                    "byte replace limit; no bytes were changed"
+                ),
+                duration_s=time.monotonic() - started,
+            )
+        before = before_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return ToolResult(
+            name="replace_text",
+            ok=False,
+            detail=f"refused: {target} is not valid UTF-8; no bytes were changed",
+            duration_s=time.monotonic() - started,
+        )
     except OSError as exc:
         return ToolResult(
             name="replace_text",
@@ -379,8 +403,15 @@ def replace_text(
         )
 
     try:
-        with target.open("w", encoding="utf-8", newline="") as handle:
-            handle.write(before.replace(old, new, 1))
+        replacement = before.replace(old, new, 1).encode("utf-8")
+        mode = stat.S_IMODE(target.stat().st_mode)
+    except UnicodeEncodeError:
+        return ToolResult(
+            name="replace_text",
+            ok=False,
+            detail="refused: replacement is not valid UTF-8; no bytes were changed",
+            duration_s=time.monotonic() - started,
+        )
     except OSError as exc:
         return ToolResult(
             name="replace_text",
@@ -388,6 +419,35 @@ def replace_text(
             detail=redact(f"{exc.__class__.__name__}: {exc}", secrets),
             duration_s=time.monotonic() - started,
         )
+
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(replacement)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, target)
+        temporary = None
+    except OSError as exc:
+        return ToolResult(
+            name="replace_text",
+            ok=False,
+            detail=redact(f"{exc.__class__.__name__}: {exc}", secrets),
+            duration_s=time.monotonic() - started,
+        )
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
 
     line = before[: before.index(old)].count("\n") + 1
     return ToolResult(

@@ -186,6 +186,14 @@ READ_MAX_LINES = 200
 is re-readable at another offset, so a wide window buys nothing and costs context on
 every step."""
 
+REPLACE_MAX_BYTES = 1024 * 1024
+"""Maximum source size accepted by the anchored edit tool.
+
+`replace_text` must prepare the complete replacement before touching the original;
+this cap keeps that operation bounded and prevents an accidental data-file edit from
+consuming the task budget.
+"""
+
 LIST_MAX_ENTRIES = 100
 """Entries one directory listing may show before it says how many it hid."""
 

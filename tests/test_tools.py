@@ -10,6 +10,7 @@ and marked when cut, and no failure escapes as an exception.
 from __future__ import annotations
 
 import os
+import stat
 import sys
 import time
 from pathlib import Path
@@ -429,6 +430,104 @@ def test_replace_text_changes_the_anchor_and_nothing_else(tmp_path: Path) -> Non
     assert after.startswith("from fastapi import APIRouter, HTTPException")
     assert "router = APIRouter()" in after
     assert after.endswith("return LoginResponse(token=f\"token-{row['id']}\")\n")
+
+
+def test_replace_text_preserves_crlf_and_unicode_bytes_outside_anchor(tmp_path: Path) -> None:
+    target = tmp_path / "mixed.py"
+    before = "prefix\r\nvalue = 1\r\ntrailer = 'трейлер'\r\n".encode("utf-8")
+    target.write_bytes(before)
+
+    result = replace_text(target, "value = 1", "value = 2", workspace=tmp_path)
+
+    assert result.ok, result.detail
+    assert target.read_bytes() == "prefix\r\nvalue = 2\r\ntrailer = 'трейлер'\r\n".encode("utf-8")
+
+
+def test_replace_text_refuses_invalid_utf8_without_changing_file(tmp_path: Path) -> None:
+    target = tmp_path / "invalid.py"
+    before = b"value = 1\ntrailer = '\xff'\n"
+    target.write_bytes(before)
+
+    result = replace_text(target, "value = 1", "value = 2", workspace=tmp_path)
+
+    assert not result.ok
+    assert "UTF-8" in result.detail
+    assert target.read_bytes() == before
+
+
+def test_replace_text_refuses_an_empty_anchor(tmp_path: Path) -> None:
+    target = tmp_path / "empty.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+
+    result = replace_text(target, "", "value = 2", workspace=tmp_path)
+
+    assert not result.ok
+    assert target.read_text(encoding="utf-8") == "value = 1\n"
+
+
+def test_replace_text_refuses_an_unchanged_replacement(tmp_path: Path) -> None:
+    target = tmp_path / "same.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+
+    result = replace_text(target, "value = 1", "value = 1", workspace=tmp_path)
+
+    assert not result.ok
+    assert target.read_text(encoding="utf-8") == "value = 1\n"
+
+
+def test_replace_text_refuses_an_oversized_file_without_reading_it_all(tmp_path: Path) -> None:
+    target = tmp_path / "large.py"
+    before = b"x" * (1024 * 1024 + 1) + b"\nneedle\n"
+    target.write_bytes(before)
+
+    result = replace_text(target, "needle", "changed", workspace=tmp_path)
+
+    assert not result.ok
+    assert "large" in result.detail or "size" in result.detail
+    assert target.read_bytes() == before
+
+
+def test_replace_text_keeps_original_when_atomic_replace_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "atomic.py"
+    before = "value = 1\n"
+    target.write_text(before, encoding="utf-8")
+
+    def fail_replace(source: str, destination: Path) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("agent.tools.os.replace", fail_replace)
+    result = replace_text(target, "value = 1", "value = 2", workspace=tmp_path)
+
+    assert not result.ok
+    assert "disk full" in result.detail
+    assert target.read_text(encoding="utf-8") == before
+
+
+@POSIX_ONLY
+def test_replace_text_preserves_file_mode(tmp_path: Path) -> None:
+    target = tmp_path / "mode.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+    os.chmod(target, 0o640)
+
+    result = replace_text(target, "value = 1", "value = 2", workspace=tmp_path)
+
+    assert result.ok, result.detail
+    assert stat.S_IMODE(target.stat().st_mode) == 0o640
+
+
+@POSIX_ONLY
+def test_replace_text_refuses_a_symlink_to_outside_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_text("value = 1\n", encoding="utf-8")
+    link = workspace / "link.py"
+    link.symlink_to(outside)
+
+    result = replace_text(link, "value = 1", "value = 2", workspace=workspace)
+
+    assert not result.ok
+    assert outside.read_text(encoding="utf-8") == "value = 1\n"
 
 
 def test_replace_text_refuses_an_anchor_that_is_not_there(tmp_path: Path) -> None:
