@@ -591,3 +591,23 @@ solved — только gate (шум ±3 задачи), судим по непр
 он поднимает стенд и пропускает всякую метку, уже попавшую в `build/deep-queue-summary.tsv`.
 Ничего в `main` этой ночью не сливается: правило проекта требует человека для приёмки
 фактора, а один прогон на плечо для этого недостаточен.
+
+## Ночная AFK-очередь 2026-09-12 — public solvability, шаг за шагом
+
+Пользователь разрешил автономную работу до утра: тестировать, писать код и исправлять
+наблюдаемые ошибки по одной. Рабочая ветка — `fix/public-solves`; `main` не трогаю.
+Каждый шаг: root-cause evidence → красный тест → один минимальный фикс → targeted/full
+pytest → отдельный критик → archive/live контроль при доступном стенде → запись в
+`JOURNAL.md`/`docs/experiments.md` → отдельный коммит и push в эту ветку.
+
+| # | Следующий шаг | Состояние | Gate |
+|---|---|---|---|
+| 1 | Exact-file timeout: подтвердить, что после правильной записи `hello-file`/`bye-file` loop продолжает LLM-планирование вместо внешней проверки | **в работе** | трассы GPU `reward=1`, `eligible=false`, timeout 120.1 s; test-first regression |
+| 2 | Минимально завершать только однозначный exact-file oracle после успешной записи; не менять audit/fix/forensics finish gate | ждёт шага 1 | targeted loop/verify tests, полный pytest, archive preflight |
+| 3 | Повторить только `hello-file`/`bye-file` на том же model/archive/contract; затем полный public control, если короткий gate зелёный | ждёт шага 2 | eligible 2/2 — необходимый локальный gate, иначе фикс отклонить |
+| 4 | Разобрать SQLi reasoning/endpoint нули по сохранённым traces, выбрать один root cause без hardcode public names | ждёт | красная regression test и один фактор |
+| 5 | Проверить результат независимым критиком и обновить evidence/handoff | ждёт | critic verdict + clean status + commit |
+
+Непересекаемые ограничения: не менять public fixtures/checkers, не хардкодить ответы
+или имена задач, не смешивать GPU/CPU как причинный фактор, не трогать чужие изменения,
+не исправлять startup `incident-log-forensics` подменой отсутствующих fixture-файлов.
