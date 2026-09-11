@@ -22,7 +22,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from agent import limits
+from agent import limits, result_progress
 from agent.detectors import args_digest, digest
 from agent.ports import LlmReply
 from agent.redact import redact
@@ -227,6 +227,13 @@ class AgentState:
     and not timestamps: archives restore mtimes and `touch` rewrites them, and both
     mistakes are one-directional -- a real deliverable called stale, or an untouched
     file called solved.
+    """
+
+    source_snapshot: result_progress.SourceSnapshot | None = None
+    """Bounded production source/config snapshot, separate from named-path baseline.
+
+    ``None`` is used by low-level tests and adapters that do not own preflight. The
+    production entrypoint always fills it before the first agent action.
     """
 
     named_paths: tuple[Path, ...] = ()

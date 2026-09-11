@@ -14,10 +14,13 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from agent import limits, loop, playbooks
+import pytest
+
+from agent import limits, loop, playbooks, result_progress
 from agent.ports import LlmError, LlmReply
 from agent.preflight import EnvironmentBrief
 from agent.state import AgentState, Budget
@@ -63,13 +66,15 @@ def run(
     state: AgentState,
     llm: StubLlm,
     verify: FakeVerify | None = None,
+    *,
+    playbook: playbooks.Playbook = playbooks.FORENSICS,
 ) -> loop.Outcome:
     return loop.run(
         state,
         llm,
         verify or FakeVerify(),
         brief=make_brief(state.workspace),
-        playbook=playbooks.FORENSICS,
+        playbook=playbook,
     )
 
 
@@ -488,6 +493,108 @@ def test_a_stuck_run_holding_a_readable_file_is_still_a_zero(tmp_path: Path) -> 
 
     assert outcome.stop_reason == "stuck"
     assert outcome.solved is False
+
+
+def test_code_fix_does_not_finish_with_only_a_report_artifact(tmp_path: Path) -> None:
+    source = tmp_path / "app.py"
+    source.write_text("answer = 1\n", encoding="utf-8")
+    report = tmp_path / "README.md"
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(report), content="changed report"),
+            action("finish", path=str(report), verify="true", summary="fixed"),
+            LlmError(reason="no more", retryable=False),
+        ]
+    )
+    verify = FakeVerify((True, "command", ""))
+
+    outcome = run(state, llm, verify, playbook=playbooks.CODE_FIX)
+
+    assert outcome.solved is False
+    assert verify.calls == []
+    assert any("production source" in text for text in outcome.observations)
+
+
+def test_code_fix_does_not_stop_on_stuck_with_only_a_report_artifact(tmp_path: Path) -> None:
+    source = tmp_path / "app.py"
+    source.write_text("answer = 1\n", encoding="utf-8")
+    report = tmp_path / "README.md"
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    repeated = action("list_dir", path=str(tmp_path))
+    llm = StubLlm(
+        replies=[action("write_file", path=str(report), content="changed report")]
+        + [repeated for _ in range(limits.NO_PROGRESS_STOP + 4)]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert outcome.stop_reason != "stuck"
+    assert any("production source" in text for text in outcome.observations)
+
+
+def test_code_fix_can_finish_after_a_source_edit(tmp_path: Path) -> None:
+    target = tmp_path / "app.py"
+    target.write_text("answer = 1\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action("replace_text", path=str(target), old="answer = 1", new="answer = 2"),
+            action("finish", path=str(target), verify="python3 -c ''", summary="fixed"),
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify((True, "command", "")), playbook=playbooks.CODE_FIX)
+
+    assert outcome.solved is True
+    assert outcome.deliverable == target
+
+
+def test_code_fix_finalises_with_changed_source_not_a_report(tmp_path: Path) -> None:
+    target = tmp_path / "app.py"
+    target.write_text("answer = 1\n", encoding="utf-8")
+    report = tmp_path / "README.md"
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    repeated = action("list_dir", path=str(tmp_path))
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(report), content="notes"),
+            action("replace_text", path=str(target), old="answer = 1", new="answer = 2"),
+        ]
+        + [repeated for _ in range(limits.NO_PROGRESS_STOP + 4)]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert outcome.stop_reason == "stuck"
+    assert outcome.deliverable == target
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_finalises_with_source_changed_through_shell(tmp_path: Path) -> None:
+    target = tmp_path / "app.py"
+    target.write_text("answer = 1\n", encoding="utf-8")
+    report = tmp_path / "README.md"
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    repeated = action("list_dir", path=str(tmp_path))
+    command = f"printf 'answer = 2\\n' > '{target}'"
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(report), content="notes"),
+            action("run_shell", command=command),
+        ]
+        + [repeated for _ in range(limits.NO_PROGRESS_STOP + 4)]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert outcome.stop_reason == "stuck"
+    assert outcome.deliverable == target
 
 
 def test_solved_is_true_only_when_the_run_stopped_at_a_green_check(tmp_path: Path) -> None:

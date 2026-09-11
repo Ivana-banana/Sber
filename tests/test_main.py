@@ -50,6 +50,21 @@ def test_a_declared_workdir_wins(tmp_path: Path) -> None:
     assert limits.WORKSPACE_ENV_NAME in why
 
 
+def test_build_state_captures_a_separate_production_source_snapshot(tmp_path: Path) -> None:
+    source = tmp_path / "app.py"
+    source.write_text("answer = 1\n", encoding="utf-8")
+
+    state = build_state(
+        ["run.sh", f"Fix the source in {source}"],
+        {limits.WORKSPACE_ENV_NAME: str(tmp_path)},
+        tmp_path,
+    )
+
+    assert state.source_snapshot is not None
+    assert state.source_snapshot.known is True
+    assert state.source_snapshot.files == {"app.py": state.source_snapshot.files["app.py"]}
+
+
 def test_a_declared_workdir_that_does_not_exist_is_ignored(tmp_path: Path) -> None:
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()

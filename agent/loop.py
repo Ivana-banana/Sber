@@ -31,7 +31,7 @@ from typing import Any
 import json
 import shlex
 
-from agent import detectors, limits, prompt, result_contract, tools
+from agent import detectors, limits, prompt, result_contract, result_progress, tools
 from agent.playbooks import Playbook
 from agent.ports import LlmError, LlmPort
 from agent.preflight import EnvironmentBrief
@@ -119,6 +119,12 @@ def run(
                     "кода из наблюдения, с путём и номером, а не пересказ. Пустой "
                     "список findings — это утверждение, что прочитанный код безопасен."
                 )
+            elif playbook.name == "code-fix":
+                checkpoint += (
+                    " Для code-fix запиши минимальную правку production source/config и "
+                    "проверку поведения; README, отчёт или тест сами по себе не являются "
+                    "исправлением."
+                )
             observations.append(checkpoint)
 
         plan_started = state.start_phase("plan")
@@ -175,6 +181,23 @@ def run(
                 observations.append(f"[step {step}] {refusal}")
                 continue
 
+            source_changes = _source_changes(state, playbook)
+            if source_changes is not None and source_changes.known and not source_changes.paths:
+                refusal = (
+                    "finish refused: code-fix has not changed a production source/config file. "
+                    "A README, report, test, or other artifact is not a repair; change the "
+                    "relevant source and verify its behavior."
+                )
+                state.record("verify", "refused", refusal)
+                observations.append(f"[step {step}] {refusal}")
+                continue
+            if source_changes is not None and not source_changes.known:
+                state.record("verify", "source-progress-unknown", source_changes.reason)
+                observations.append(
+                    f"[step {step}] production source progress is unknown: "
+                    f"{source_changes.reason}. Do not treat an artifact alone as a repair."
+                )
+
             verify_started = state.start_phase("verify")
             last_verdict = verify(state, deliverable=deliverable, command=command)
             state.finish_phase("verify", verify_started)
@@ -218,7 +241,22 @@ def run(
             state.record("budget", signal.name, signal.detail)
             observations.append(f"[step {step}] {signal.detail}")
             if blocks_in_a_row >= limits.REPEAT_FAILURE_BLOCK:
-                if state.artifacts:
+                has_protected_candidate = bool(state.artifacts)
+                source_changes = _source_changes(state, playbook)
+                if source_changes is not None:
+                    has_protected_candidate = source_changes.known and bool(source_changes.paths)
+                    if not source_changes.known:
+                        observations.append(
+                            f"[step {step}] production source progress is unknown: "
+                            f"{source_changes.reason}. Keep working instead of treating "
+                            "the current artifact as a code repair."
+                        )
+                    elif not source_changes.paths:
+                        observations.append(
+                            f"[step {step}] code-fix has only artifact/report progress; "
+                            "change production source before stopping."
+                        )
+                if has_protected_candidate:
                     stop_reason = "stuck"
                     summary = signal.detail
                     break
@@ -261,7 +299,22 @@ def run(
         signal = detectors.stuck(state)
         if signal is not None:
             state.record("budget", signal.name, signal.detail)
-            if state.artifacts:
+            has_protected_candidate = bool(state.artifacts)
+            source_changes = _source_changes(state, playbook)
+            if source_changes is not None:
+                has_protected_candidate = source_changes.known and bool(source_changes.paths)
+                if not source_changes.known:
+                    observations.append(
+                        f"[step {step}] production source progress is unknown: "
+                        f"{source_changes.reason}. Keep working instead of treating the "
+                        "current artifact as a code repair."
+                    )
+                elif not source_changes.paths:
+                    observations.append(
+                        f"[step {step}] code-fix has only artifact/report progress; "
+                        "change production source before stopping."
+                    )
+            if has_protected_candidate:
                 # Circling with something to lose. E028/E029 removed this stop
                 # unconditionally and measured both halves of the trade: without it
                 # `fix-redirect-scheme` was gained twice, and `mut-salutation-beacon`
@@ -284,7 +337,9 @@ def run(
     if not stop_reason:
         stop_reason = "steps" if state.budget.steps_used >= state.budget.max_steps else "budget"
 
-    return _finalise(state, verify, stop_reason, summary, last_verdict, observations)
+    return _finalise(
+        state, verify, stop_reason, summary, last_verdict, observations, playbook=playbook
+    )
 
 
 # --- pieces small enough to read in one sitting -------------------------------
@@ -596,6 +651,19 @@ def _execute(tool: str, args: dict[str, object], state: AgentState) -> tools.Too
     return result
 
 
+def _source_changes(
+    state: AgentState, playbook: Playbook
+) -> result_progress.SourceChanges | None:
+    """Return source progress only for code-fix, where artifacts are too broad."""
+    if playbook.name != "code-fix":
+        return None
+    if state.source_snapshot is None:
+        return result_progress.SourceChanges(
+            (), False, "no production source snapshot was captured before the run"
+        )
+    return result_progress.changed_sources(state.workspace, state.source_snapshot)
+
+
 def _error_code(result: tools.ToolResult) -> str:
     """Short stable label for a failure, so repeats of the same failure look alike."""
     if result.exit_code is not None:
@@ -634,6 +702,8 @@ def _finalise(
     summary: str,
     verdict: VerifyResult | None,
     observations: list[str],
+    *,
+    playbook: Playbook,
 ) -> Outcome:
     """Look at whatever exists, report it, and claim nothing about it.
 
@@ -652,8 +722,19 @@ def _finalise(
     becomes a success in our own baseline. `stop_reason == "verified"` is the only
     thing that ever proves a task, and it never reaches this function.
     """
-    deliverable = state.artifacts[-1] if state.artifacts else None
-    if deliverable is not None and stop_reason != "verify-failed":
+    source_changes = _source_changes(state, playbook)
+    deliverable = None
+    if source_changes is not None and source_changes.known and source_changes.paths:
+        # A shell edit is a real source change but is not added to `artifacts`, while a
+        # preceding README/report may be. Prefer the changed production path so the
+        # final trace and injected verifier inspect the repair, not the notes.
+        deliverable = state.workspace / source_changes.paths[-1]
+    elif state.artifacts:
+        deliverable = state.artifacts[-1]
+    artifact_only_code_fix = (
+        source_changes is not None and source_changes.known and not source_changes.paths
+    )
+    if deliverable is not None and stop_reason != "verify-failed" and not artifact_only_code_fix:
         verify_started = state.start_phase("verify")
         verdict = verify(state, deliverable=deliverable, command="")
         state.finish_phase("verify", verify_started)

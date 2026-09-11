@@ -16,7 +16,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from agent import limits, loop, macro, paths, playbooks, preflight, redact, verify
+from agent import limits, loop, macro, paths, playbooks, preflight, redact, result_progress, verify
 from agent.llm import HttpLlm, LlmSettings
 from agent.ports import LlmPort
 from agent.state import AgentState, Budget, Event
@@ -129,6 +129,7 @@ def build_state(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> Agent
         workspace=workspace,
         named_paths=named,
         baseline=paths.snapshot(named),
+        source_snapshot=result_progress.snapshot_sources(workspace),
         budget=Budget.from_env(env),
         secrets=redact.secrets_from_env(env),
     )

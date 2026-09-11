@@ -13,6 +13,8 @@
 
 ## Активные задачи
 
+Codex, 12.09.2026, пакет C из `docs/superpowers/plans/2026-09-11-all-tasks-recovery.md` в worktree `fix/public-solves` (локально, не запушено). Цель — отделить изменение production source от README/отчётов/тестов в code-fix и не считать неполный snapshot отсутствием изменений. Проверка — test-first для `agent/result_progress.py`, targeted/full pytest и archive preflight; live endpoint не трогаю. Граница — `result_progress`, состояние/loop/verify и их тесты, без prompt, модели, budget, public hardcode, чужого `deep-research-report.md` и живых прогонов.
+
 Claude, 10.09.2026 (вечер) — продолжение public-solves в том же worktree, ветка
 `fix/public-solves` (запушена). Подобран незакоммиченный WIP Codex'а от 00:20–00:45
 (P0 + четыре дефекта ревью + черновик P1): один красный тест починен, работа разнесена
