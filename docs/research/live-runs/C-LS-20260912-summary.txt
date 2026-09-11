@@ -1,0 +1,54 @@
+C package L/S attempt — 2026-09-12 (MSK)
+
+This is an infrastructure-blocked attempt, not a solved-score measurement.
+
+Code commit: bfa5f9f (runtime content is 8da5cde; docs-only commit follows it)
+Archive: build/candidate-20260912-C-post-d5kNFh/submission.zip
+Archive SHA-256: acde4f09377220fffbe84551c140bfdd29df0bd5f466eab0f9425a92c6022ccc
+Archive size: 98173 bytes
+Model: qwen2.5-coder:7b-instruct-q4_K_M
+Model digest: dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364
+Context: 4096; timeout scale: 1.0; controller: archive default loop
+
+Infrastructure observations:
+- Existing sber-model could not start: its stale GPU container requested a missing
+  host file, libnvidia-egl-wayland.so.1.1.21.
+- Existing sber-proxy was stopped after exit 137. It was not removed or restarted.
+- A unique CPU-only model/proxy pair was started for this attempt and removed after
+  the task-image check: model image sha256:662109db8037..., proxy image
+  sha256:78387bc3881b....
+- Endpoint protocol smoke through the counting proxy passed all four rungs:
+  native_tools 158+25 tokens, response arrived in content;
+  json_schema 38+7; json_object 73+10; text 73+10.
+
+Command:
+  python3 scripts/eval/run_suite.py --tasks-root local_task \
+    --archive build/candidate-20260912-C-post-d5kNFh/submission.zip \
+    --model qwen2.5-coder:7b-instruct-q4_K_M \
+    --base-url http://codex-c-proxy-20260912:8000/v1 --api-key ollama \
+    --network sber-eval --counter-container codex-c-proxy-20260912 \
+    --timeout-scale 1.0 --reuse-images \
+    --label public-20260912-C-LS-wQVYq8 \
+    --out build/public-20260912-C-LS-wQVYq8 \
+    --only fix-sqli-login fix-sqli-search
+
+Result:
+- fix-sqli-login: reward=None, eligible=false, wall=0.0s, failure=startup.
+- fix-sqli-search: reward=None, eligible=false, wall=0.0s, failure=startup.
+- Both rows stopped before agent start because local images
+  sber-eval/fix-sqli-login:latest and sber-eval/fix-sqli-search:latest were absent.
+- Their Dockerfiles require secureintelligent/acp:latest, which is also absent
+  locally. No pull/build was attempted because project rules prohibit internet use.
+- Task solved/tokens/wall: N/A; no reasoning zeros were assigned.
+
+Raw files:
+- build/public-20260912-C-LS-wQVYq8/results.tsv
+  SHA-256 725cac2eb1b7c808ff17c3f173893c18b52c930b1131b70a781a9c2f9d4f3ba7
+- build/public-20260912-C-LS-wQVYq8/suite.json
+  SHA-256 c446339a6b5f86bb3065ad2ef289a886ee25a305f114f33913425e77069b4ba6
+- build/public-20260912-C-LS-wQVYq8/manifest.json
+  SHA-256 c4a41b8224872ff0a65f021e39226c79fabae72e731585894eec175014e8ca88
+
+The L/S expectation came from package C's plan; a separate prediction file was not
+created before this operator-requested resumed run. Full public six was not started
+because the exact task-image prerequisite was missing.

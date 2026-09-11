@@ -3095,3 +3095,44 @@ timeout 5400 python3 scripts/eval/run_suite.py \
 - Decision: offline evidence подтверждает контракт и регрессии, но не solved-gain и
   не заменяет внешний verifier; следующий L/S-пилот возможен только на доступном
   endpoint.
+
+### C-LS-startup (2026-09-12) — endpoint отвечает, task images отсутствуют
+
+- Commit / archive: runtime `8da5cde`, evidence state `bfa5f9f`; архив
+  `build/candidate-20260912-C-post-d5kNFh/submission.zip`, 98 173 байта, SHA-256
+  `acde4f09377220fffbe84551c140bfdd29df0bd5f466eab0f9425a92c6022ccc`.
+- Model / stand: `qwen2.5-coder:7b-instruct-q4_K_M`, digest
+  `dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364`, context 4096,
+  timeout scale 1.0. Уникальная CPU-only модель/proxy пара была поднята без
+  перезаписи старых контейнеров; затем удалена. Старый GPU `sber-model` не стартовал
+  из-за отсутствующего `libnvidia-egl-wayland.so.1.1.21`.
+- Endpoint smoke: 4/4 protocol rungs PASS через counting proxy; native tools
+  пришёл в `content` (158+25 tokens), далее `json_schema` 38+7,
+  `json_object` 73+10, `text` 73+10. Это probe metric, не task score.
+- Command: `python3 scripts/eval/run_suite.py --tasks-root local_task
+  --archive build/candidate-20260912-C-post-d5kNFh/submission.zip
+  --model qwen2.5-coder:7b-instruct-q4_K_M --base-url
+  http://codex-c-proxy-20260912:8000/v1 --api-key ollama --network sber-eval
+  --counter-container codex-c-proxy-20260912 --timeout-scale 1.0 --reuse-images
+  --label public-20260912-C-LS-wQVYq8 --out
+  build/public-20260912-C-LS-wQVYq8 --only fix-sqli-login fix-sqli-search`.
+- Result: `complete=true`, но оба запуска остановлены до agent phase:
+  `fix-sqli-login` — `reward=None`, `eligible=false`, `wall=0.0s`,
+  `failure=startup`; `fix-sqli-search` — те же значения. Причина каждого ряда:
+  отсутствуют локальные `sber-eval/fix-sqli-login:latest` и
+  `sber-eval/fix-sqli-search:latest`; их Dockerfiles требуют отсутствующий локальный
+  `secureintelligent/acp:latest`. Pull не выполнялся: интернет запрещён правилами.
+- Task solved / task tokens / task wall: **N/A**, не нули решаемости. Полная
+  public-шестёрка не запускалась по той же причине. Raw summary:
+  `docs/research/live-runs/C-LS-20260912-summary.txt`, SHA-256
+  `3ca4c39bf2a1a0d46b3a6ec82e42523fa843c8bc528ed2341e6c0ed09adae2ea`.
+- Raw hashes: `results.tsv`
+  `725cac2eb1b7c808ff17c3f173893c18b52c930b1131b70a781a9c2f9d4f3ba7`,
+  `suite.json`
+  `c446339a6b5f86bb3065ad2ef289a886ee25a305f114f33913425e77069b4ba6`,
+  `manifest.json`
+  `c4a41b8224872ff0a65f021e39226c79fabae72e731585894eec175014e8ca88`.
+- Verdict: **blocked / no solved-gain evidence**. Нужен локальный образ
+  `secureintelligent/acp:latest` или разрешённый владелец стенда, который его
+  предоставит; после этого повторить L/S, затем полную шестёрку, не подменяя эти
+  startup-ряды reasoning-нолями.

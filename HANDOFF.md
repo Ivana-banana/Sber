@@ -66,8 +66,10 @@ Codex, 07.09.2026, углубление organizer-first: проверить ко
 **Codex, 12.09.2026 — пакет C завершён в offline-контуре.** Коммит `8da5cde`
 добавляет bounded snapshot production source/config и не принимает README, отчёт
 или тест за code-fix; неполный snapshot остаётся `unknown`. Targeted — 106 passed,
-полный suite — 482 passed. Archive preflight — PASS, live endpoint не запускался и
-чужой `deep-research-report.md` не менялся; task solved/tokens/wall не измерялись.
+полный suite — 482 passed. Archive preflight — PASS. После этого выполнен endpoint
+smoke 4/4, но L/S task-run остановился до агента: оба task image отсутствуют,
+поэтому task solved/tokens/wall не измерялись и два ряда классифицированы как
+`startup`, а не как reasoning-ноли. Чужой `deep-research-report.md` не менялся.
 
 **Codex, 11.09.2026 — live retry остановлен до запуска.** На чистом `19350fe`
 не подтвердились Docker/Ollama/NVIDIA/endpoint и владение стендом; `run_suite`
