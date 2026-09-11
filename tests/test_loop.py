@@ -94,6 +94,30 @@ def test_a_written_and_verified_deliverable_is_the_only_way_to_solve(tmp_path: P
     assert verify.calls == [(target, "test -s incident.txt")]
 
 
+def test_a_successful_file_edit_advances_the_state_epoch(tmp_path: Path) -> None:
+    target = tmp_path / "source.py"
+    target.write_text("before", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.budget.max_steps = 2
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(target), content="after"),
+            action("read_range", path=str(target), start_line=1),
+        ]
+    )
+
+    run(state, llm, FakeVerify())
+
+    assert state.state_epoch == 1
+
+
+def test_shell_state_change_classifier_is_conservative() -> None:
+    assert loop._shell_can_change("ls /app") is False
+    assert loop._shell_can_change("cat app.py > copy.py") is True
+    assert loop._shell_can_change("touch marker") is True
+    assert loop._shell_can_change("python3 -c 'write()'") is True
+
+
 def test_finish_pointing_at_a_file_that_does_not_exist_is_refused(tmp_path: Path) -> None:
     # M13: every public verifier reads the environment, never the agent's answer. A
     # model declaring success without an artifact is the single most expensive lie.

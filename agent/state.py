@@ -56,6 +56,9 @@ class ActionRecord:
     args_digest: str
     result_fingerprint: str
     ok: bool
+    state_epoch: int = 0
+    """State version in which this action was observed."""
+
     error_code: str = ""
     """Short machine-readable failure label, e.g. `exit:127`. Empty on success."""
 
@@ -252,6 +255,9 @@ class AgentState:
     queries on every step. Merging them would make one of the two wrong.
     """
 
+    state_epoch: int = 0
+    """Incremented after a file or service mutation invalidates old observations."""
+
     seen_results: set[str] = field(default_factory=set, repr=False)
     """Every result fingerprint this run has produced, for the progress detector."""
 
@@ -264,6 +270,12 @@ class AgentState:
 
     event_sink: Callable[[Event], None] | None = field(default=None, repr=False)
     """Optional live diagnostic sink. Exceptions are isolated; synchronous latency is not."""
+
+    def advance_state_epoch(self) -> int:
+        """Forget detector evidence from before a possible environment mutation."""
+        self.state_epoch += 1
+        self.seen_results.clear()
+        return self.state_epoch
 
     def record(
         self,
@@ -343,6 +355,7 @@ class AgentState:
             args_digest=args_digest(args),
             result_fingerprint=fingerprint,
             ok=ok,
+            state_epoch=self.state_epoch,
             error_code=error_code,
             novel=novel,
         )

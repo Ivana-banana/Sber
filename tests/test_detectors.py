@@ -94,6 +94,28 @@ def test_a_repeat_whose_result_is_already_known_is_refused(tmp_path: Path) -> No
     assert "list_dir" in signal.detail
 
 
+def test_a_repeat_from_before_state_change_is_not_blocked(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+    args = {"path": "/app/source.py"}
+
+    for _ in range(limits.REPEAT_RESULT_BLOCK):
+        observe(state, "read_range", args, "old contents")
+
+    state.advance_state_epoch()
+
+    assert detectors.blocked(state, "read_range", detectors.args_digest(args)) is None
+
+
+def test_stuck_detector_does_not_mix_epochs(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+    for index in range(limits.NO_PROGRESS_STOP):
+        observe(state, "read_range", {"path": "/app/source.py", "start_line": index}, "old")
+
+    state.advance_state_epoch()
+
+    assert detectors.stuck(state) is None
+
+
 def test_the_same_action_with_the_same_result_stops_the_loop(tmp_path: Path) -> None:
     state = make_state(tmp_path)
 

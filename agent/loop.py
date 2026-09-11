@@ -45,6 +45,19 @@ Injected rather than imported so the loop can be regression-tested against a rec
 transcript and a scripted verdict, at no tokens and no network.
 """
 
+READ_ONLY_SHELLS = frozenset(
+    {
+        "cat", "echo", "file", "find", "grep", "head", "id", "ls", "more", "printf",
+        "ps", "pwd", "readlink", "rg", "stat", "tail", "true", "false", "uname", "wc",
+        "which", "whoami",
+    }
+)
+"""Commands treated as read-only when no shell operator is present.
+
+Unknown commands and compound commands are considered capable of changing files or
+services. This is a progress-detector hint, not a shell security boundary.
+"""
+
 
 @dataclass(frozen=True)
 class Outcome:
@@ -222,6 +235,10 @@ def run(
         act_started = state.start_phase("act")
         result = _execute(tool, args, state)
         state.finish_phase("act", act_started)
+        if _advances_state_epoch(tool, args) and (
+            result.ok or tool == prompt.RUN_SHELL
+        ):
+            state.advance_state_epoch()
         state.record(
             "tool",
             tool,
@@ -584,6 +601,30 @@ def _error_code(result: tools.ToolResult) -> str:
     if result.exit_code is not None:
         return f"exit:{result.exit_code}"
     return f"error:{result.detail.split(':')[0][:40]}"
+
+
+def _shell_can_change(command: str) -> bool:
+    """Conservatively decide whether a shell action invalidates old observations."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return True
+    if not words:
+        return False
+    if any(
+        marker in command for marker in ("$((", "$(", "`", ";", "&&", "||", "|", ">", ">>", "<", "<<", "&")
+    ):
+        return True
+    if any(word in {"-delete", "-exec", "-execdir"} for word in words):
+        return True
+    return PurePosixPath(words[0]).name not in READ_ONLY_SHELLS
+
+
+def _advances_state_epoch(tool: str, args: dict[str, object]) -> bool:
+    """Whether an executed action may have changed files or a local service."""
+    if tool in {prompt.WRITE_FILE, prompt.REPLACE_TEXT}:
+        return True
+    return tool == prompt.RUN_SHELL and _shell_can_change(str(args.get("command", "")))
 
 
 def _finalise(

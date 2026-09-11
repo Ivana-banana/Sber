@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 from agent import limits
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from agent.state import AgentState
+    from agent.state import ActionRecord, AgentState
 
 DIGEST_CHARS = 16
 
@@ -69,6 +69,11 @@ def args_digest(args: Mapping[str, object]) -> str:
     return digest(canonical)
 
 
+def _current_actions(state: AgentState) -> list[ActionRecord]:
+    """Return detector evidence from the current environment epoch only."""
+    return [record for record in state.actions if record.state_epoch == state.state_epoch]
+
+
 def blocked(state: AgentState, tool: str, args: str) -> Signal | None:
     """Whether this exact call has already earned a refusal before it runs.
 
@@ -81,9 +86,10 @@ def blocked(state: AgentState, tool: str, args: str) -> Signal | None:
     A repeat whose output differs is still allowed. Re-reading a file that changed is
     work, and refusing it would be the detector inventing a rule nobody asked for.
     """
+    current = _current_actions(state)
     identical = [
         record
-        for record in state.actions
+        for record in current
         if not record.ok and record.tool == tool and record.args_digest == args
     ]
     if len(identical) < limits.REPEAT_FAILURE_BLOCK:
@@ -103,9 +109,10 @@ def blocked(state: AgentState, tool: str, args: str) -> Signal | None:
 
 def _repeated_result(state: AgentState, tool: str, args: str) -> Signal | None:
     """Whether this exact call has already returned one and the same output."""
+    current = _current_actions(state)
     identical = [
         record
-        for record in state.actions
+        for record in current
         if record.ok and record.tool == tool and record.args_digest == args
     ]
     if len(identical) < limits.REPEAT_RESULT_BLOCK:
@@ -126,7 +133,7 @@ def _repeated_result(state: AgentState, tool: str, args: str) -> Signal | None:
 
 def stuck(state: AgentState) -> Signal | None:
     """Whether the recent history has the shape of a loop rather than of work."""
-    history = state.actions
+    history = _current_actions(state)
     window = history[-limits.NO_PROGRESS_STOP :]
     if len(window) >= limits.NO_PROGRESS_STOP and not any(record.novel for record in window):
         # Checked first because it is the cheapest question and the broadest answer:
