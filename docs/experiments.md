@@ -3065,5 +3065,33 @@ timeout 5400 python3 scripts/eval/run_suite.py \
   `build/check-20260911-live-blocked-lAxnGQ/submission.zip`, размер 94 994 байта,
   SHA-256
   `0763c74f28a403752b12275bd34545340faf2f6a78c99ef425af99684a9bf4a3`;
-  `python3 scripts/check_submission.py ...` — PASS. Это не task metric и не
-  заменяет live public-run.
+`python3 scripts/check_submission.py ...` — PASS. Это не task metric и не
+заменяет live public-run.
+
+### C-offline-local (2026-09-12) — production source progress отдельно от артефактов
+
+- Commit / dirty state: `8da5cde`; рабочее дерево было чистым после коммита перед
+  этой evidence-записью, кроме последующего изменения только этого журнала и
+  `HANDOFF.md`.
+- Hypothesis: для `code-fix` README, отчёт и тест не должны открывать завершение;
+  неполный bounded snapshot не должен доказывать отсутствие source-изменения.
+- Красный цикл: новый тест сначала получил `ModuleNotFoundError` для отсутствующего
+  `agent.result_progress`; после реализации integration-red набор показал 3 отказа
+  до подключения snapshot к `AgentState`/`build_state`/loop.
+- Baseline до фактора: на `dc09034` `python3 -m pytest -q` — **467 passed** за
+  25.08 с.
+- Command / result: `python3 -m pytest tests/test_result_progress.py tests/test_loop.py
+  tests/test_state.py tests/test_verify.py tests/test_budget.py -q` — **106 passed**
+  за 0.26 с; `python3 -m pytest -q` — **482 passed** за 25.90 с.
+- Archive: `python3 scripts/build_submission.py --out
+  build/candidate-20260912-C-post-d5kNFh/submission.zip`; 98 173 байта, SHA-256
+  `acde4f09377220fffbe84551c140bfdd29df0bd5f466eab0f9425a92c6022ccc`;
+  `python3 scripts/check_submission.py
+  build/candidate-20260912-C-post-d5kNFh/submission.zip` — PASS для распаковки,
+  `run.sh` 100755, cold-start contract и hostile instruction.
+- Task solved / tokens / wall: **N/A** — LLM/endpoint/live task suite не запускались;
+  нулей по задачам не присваивалось. Причина ограничения — endpoint и стенд не
+  подтверждены в текущем окружении; offline archive preflight не заменяет live score.
+- Decision: offline evidence подтверждает контракт и регрессии, но не solved-gain и
+  не заменяет внешний verifier; следующий L/S-пилот возможен только на доступном
+  endpoint.

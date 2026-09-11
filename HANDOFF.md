@@ -13,8 +13,6 @@
 
 ## Активные задачи
 
-Codex, 12.09.2026, пакет C из `docs/superpowers/plans/2026-09-11-all-tasks-recovery.md` в worktree `fix/public-solves` (локально, не запушено). Цель — отделить изменение production source от README/отчётов/тестов в code-fix и не считать неполный snapshot отсутствием изменений. Проверка — test-first для `agent/result_progress.py`, targeted/full pytest и archive preflight; live endpoint не трогаю. Граница — `result_progress`, состояние/loop/verify и их тесты, без prompt, модели, budget, public hardcode, чужого `deep-research-report.md` и живых прогонов.
-
 Claude, 10.09.2026 (вечер) — продолжение public-solves в том же worktree, ветка
 `fix/public-solves` (запушена). Подобран незакоммиченный WIP Codex'а от 00:20–00:45
 (P0 + четыре дефекта ревью + черновик P1): один красный тест починен, работа разнесена
@@ -64,6 +62,12 @@ Codex, 07.09.2026, углубление organizer-first: проверить ко
 | 2026-08-25 | Claude | Остаток блокера: контейнерный прогон. ФС целевого образа больше не блокер — архив в ней исполнен | Внешний прогон M12: 15 непустых инструкций дали exit `0`, пустой аргумент — `2`, layout с одним верхним каталогом контрактом не принимается. Достоверность подтверждена пересчётом пяти fingerprint'ов и сверкой digest/слоёв. Разбор — `docs/research/verdict-submission-execution-check.md` | Прогнать тот же архив под `docker run --network none`: chroot не даёт cgroups, seccomp и `/proc`, поэтому `ps` и лимиты среды остаются неизвестными |
 
 ## Завершено
+
+**Codex, 12.09.2026 — пакет C завершён в offline-контуре.** Коммит `8da5cde`
+добавляет bounded snapshot production source/config и не принимает README, отчёт
+или тест за code-fix; неполный snapshot остаётся `unknown`. Targeted — 106 passed,
+полный suite — 482 passed. Archive preflight — PASS, live endpoint не запускался и
+чужой `deep-research-report.md` не менялся; task solved/tokens/wall не измерялись.
 
 **Codex, 11.09.2026 — live retry остановлен до запуска.** На чистом `19350fe`
 не подтвердились Docker/Ollama/NVIDIA/endpoint и владение стендом; `run_suite`
