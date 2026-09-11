@@ -549,7 +549,7 @@ def _execute(tool: str, args: dict[str, object], state: AgentState) -> tools.Too
             Path(str(args["path"])), start_line=int(args["start_line"]), secrets=secrets
         )
     if tool == prompt.LIST_DIR:
-        return tools.list_dir(Path(str(args["path"])))
+        return tools.list_dir(Path(str(args["path"])), secrets=secrets)
     if tool == prompt.SEARCH:
         return tools.search(str(args["pattern"]), Path(str(args["path"])), secrets=secrets)
 

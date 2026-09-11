@@ -530,27 +530,51 @@ def read_range(
                 collected.append(line)
                 used += len(line)
     except OSError as exc:
-        return ToolResult(name="read_range", ok=False, detail=f"{exc.__class__.__name__}: {exc}")
+        return ToolResult(
+            name="read_range",
+            ok=False,
+            detail=redact(f"{exc.__class__.__name__}: {exc} ({path})", secrets),
+        )
 
     if not collected:
         return ToolResult(
             name="read_range",
             ok=False,
-            detail=f"no line {start_line}: file has {last_line} lines",
+            detail=redact(f"no line {start_line}: file has {last_line} lines ({path})", secrets),
         )
 
     body = "".join(collected)
     if truncated:
         body += f"\n… [window cut at line {start_line + len(collected) - 1}] …"
-    return ToolResult(name="read_range", ok=True, output=redact(body, secrets), truncated=truncated)
+    end_line = start_line + len(collected) - 1
+    metadata = (
+        f"[read_range source={redact(str(path), secrets)} start_line={start_line} "
+        f"end_line={end_line} eof={'no' if truncated else 'yes'} "
+        f"truncated={'yes' if truncated else 'no'}]"
+    )
+    return ToolResult(
+        name="read_range",
+        ok=True,
+        output=f"{redact(body, secrets)}\n{metadata}",
+        truncated=truncated,
+    )
 
 
-def list_dir(path: Path, *, limit: int = limits.LIST_MAX_ENTRIES) -> ToolResult:
+def list_dir(
+    path: Path,
+    *,
+    limit: int = limits.LIST_MAX_ENTRIES,
+    secrets: Iterable[str] = (),
+) -> ToolResult:
     """List one directory, bounded, directories marked with a trailing slash."""
     try:
         entries = sorted(path.iterdir(), key=lambda item: (not item.is_dir(), item.name))
     except OSError as exc:
-        return ToolResult(name="list_dir", ok=False, detail=f"{exc.__class__.__name__}: {exc}")
+        return ToolResult(
+            name="list_dir",
+            ok=False,
+            detail=redact(f"{exc.__class__.__name__}: {exc} ({path})", secrets),
+        )
 
     shown, lines = entries[:limit], []
     for entry in shown:
@@ -565,7 +589,17 @@ def list_dir(path: Path, *, limit: int = limits.LIST_MAX_ENTRIES) -> ToolResult:
     truncated = len(entries) > len(shown)
     if truncated:
         lines.append(f"… {len(entries) - len(shown)} more entries")
-    return ToolResult(name="list_dir", ok=True, output="\n".join(lines), truncated=truncated)
+    metadata = (
+        f"[list_dir source={redact(str(path), secrets)} entries_shown={len(shown)} "
+        f"entries_total={len(entries)} truncated={'yes' if truncated else 'no'}]"
+    )
+    body = "\n".join(lines)
+    return ToolResult(
+        name="list_dir",
+        ok=True,
+        output=f"{body}\n{metadata}" if body else metadata,
+        truncated=truncated,
+    )
 
 
 def _files_under(root: Path) -> Iterable[Path]:

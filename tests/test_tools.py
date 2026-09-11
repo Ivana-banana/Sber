@@ -198,6 +198,34 @@ def test_read_range_bounds_a_single_enormous_line(tmp_path: Path) -> None:
     assert len(result.output) < limits.READ_MAX_BYTES + 500
 
 
+def test_read_range_reports_source_and_actual_truncated_window_after_raw_body(tmp_path: Path) -> None:
+    target = tmp_path / "same.txt"
+    target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    result = read_range(target, start_line=2, max_lines=1)
+
+    assert result.ok is True
+    assert result.output.startswith("two\n"), "metadata must not prefix copyable anchor text"
+    assert f"source={target}" in result.output
+    assert "start_line=2" in result.output
+    assert "end_line=2" in result.output
+    assert "eof=no" in result.output
+    assert "truncated=yes" in result.output
+
+
+def test_read_range_marks_eof_when_the_requested_window_reaches_file_end(tmp_path: Path) -> None:
+    target = tmp_path / "tail.txt"
+    target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    result = read_range(target, start_line=2, max_lines=5)
+
+    assert result.ok is True
+    assert "start_line=2" in result.output
+    assert "end_line=3" in result.output
+    assert "eof=yes" in result.output
+    assert "truncated=no" in result.output
+
+
 def test_reading_the_environment_out_of_a_file_does_not_leak_the_key(tmp_path: Path) -> None:
     # `/proc/self/environ` is a file, so the shell is not the only way a key reaches
     # the context. Whatever redaction the shell tool gets, the file tools get too.
@@ -234,6 +262,22 @@ def test_list_dir_marks_directories_and_sizes(tmp_path: Path) -> None:
     assert result.ok is True
     assert "sub/" in result.output
     assert "file.txt" in result.output
+
+
+def test_list_dir_reports_the_full_source_path_for_same_named_directories(tmp_path: Path) -> None:
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+    (left / "same.txt").write_text("left", encoding="utf-8")
+    (right / "same.txt").write_text("right", encoding="utf-8")
+
+    left_result = list_dir(left)
+    right_result = list_dir(right)
+
+    assert f"source={left}" in left_result.output
+    assert f"source={right}" in right_result.output
+    assert left_result.output != right_result.output
 
 
 def test_list_dir_stops_at_the_entry_cap(tmp_path: Path) -> None:
