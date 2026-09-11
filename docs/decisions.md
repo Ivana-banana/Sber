@@ -99,6 +99,8 @@
 
 | 2026-09-12 | гипотеза | Отдельный bounded snapshot production source/config используется только как progress-сигнал для `code-fix`: README, отчёты и тесты не открывают путь к завершению; неполный snapshot даёт `unknown`, а не «изменений нет». | Новый deep-модуль `result_progress` скрывает обход файлов, лимиты и digest за небольшим интерфейсом; `AgentState` хранит его отдельно от named-path baseline. Loop не меняет внешний verifier и не считает один diff доказательством исправления. Принять или отклонить по нейтральным тестам и живому L/S-пилоту; до endpoint-проверки это только offline-гипотеза. |
 
+| 2026-09-12 | принято (eval) | В live public-метрике сырое `reward=1` после kill не считается решением: итоговый счёт — `eligible_success`, то есть reward=1, exit=0 и отсутствие timeout/killed. CPU baseline C дал 0/6 eligible; GPU контроль дал raw 2/6, но 0/6 eligible. Startup из-за неполного fixture-пакета не превращается в reasoning-ноль. | `run_suite.py` записал отдельные `reward`, `timed_out`, `agent_exit`, `failure_mode`, `eligible_success`; четыре полных/частичных запуска сохранены в `C-live-20260912-summary.txt`. GPU менял только runtime/hardware и не дал eligible solve, поэтому причинного эффекта package C не заявляем. |
+
 ## Шаблон новой записи
 
 ```text

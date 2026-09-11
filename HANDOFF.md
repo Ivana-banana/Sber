@@ -39,6 +39,15 @@ Codex, 07.09.2026, углубление organizer-first: проверить ко
 запись; runtime не меняется. Проверка — replay текущего кода, official fixtures,
 изолированные offline-пробы и исполнимые команды для каждого предлагаемого фактора.
 
+Codex, 12.09.2026 — live evidence для пакета C завершена в worktree
+`.worktrees/public-solves`, пока локально до docs-коммита. После разрешения pull/install
+поднят уникальный Ollama/counting-proxy стенд, task images собраны, выполнены CPU L/S,
+CPU full, GPU short и GPU full. CPU full: 0/6 eligible; GPU full: raw 2/6, но 0/6
+eligible из-за двух timeout exact-file задач. SQLi-нули классифицированы по строкам,
+incident startup не засчитан как reasoning. Граница сохраняется: agent-код, prompt,
+budgets и public fixtures после `718700e` не менялись; старые `sber-*` контейнеры не
+перезапускались.
+
 | Владелец | Ветка | Задача | Файлы/контракт | Проверка | Статус |
 |---|---|---|---|---|---|
 | — | — | **Кандидат КТ №4 сдан вне репозитория 31.08** — в Git нет ни тега, ни коммита, ни метрик отправленного. Значит rollback-кандидат для КТ №5 неизвестен, а «воспроизводим из тега одной командой» (DoD этапа 4 `PLAN.md`) не выполнено. Нужно от того, кто отправлял: SHA собранного, SHA-256 и размер архива, модель и числа прогона | тег `submit-2026-08-31-kt4`, `docs/experiments.md` | `git show <тег>` даёт код, из которого архив пересобирается побайтово | **свободно, нужен человек, который отправлял** |
@@ -62,6 +71,15 @@ Codex, 07.09.2026, углубление organizer-first: проверить ко
 | 2026-08-25 | Claude | Остаток блокера: контейнерный прогон. ФС целевого образа больше не блокер — архив в ней исполнен | Внешний прогон M12: 15 непустых инструкций дали exit `0`, пустой аргумент — `2`, layout с одним верхним каталогом контрактом не принимается. Достоверность подтверждена пересчётом пяти fingerprint'ов и сверкой digest/слоёв. Разбор — `docs/research/verdict-submission-execution-check.md` | Прогнать тот же архив под `docker run --network none`: chroot не даёт cgroups, seccomp и `/proc`, поэтому `ps` и лимиты среды остаются неизвестными |
 
 ## Завершено
+
+**Codex, 12.09.2026 — настоящий public-прогон пакета C завершён.** На commit
+`718700e` и archive SHA `acde4f09377220fffbe84551c140bfdd29df0bd5f466eab0f9425a92c6022ccc`
+выполнены CPU L/S (`0/2 eligible`), CPU full (`0/6 eligible`) и GPU full
+(`raw 2/6`, `0/6 eligible`); GPU short также дал raw `2/2`, `0/2 eligible`.
+GPU сократил wall SQLi-задач, но eligible solve не появился. `incident-log-forensics`
+не собрался из-за четырёх отсутствующих файлов, это `startup/N/A`, не reasoning zero.
+Все команды, строки, токены, wall, failure modes и SHA raw-файлов записаны в
+`docs/experiments.md` и `docs/research/live-runs/C-live-20260912-summary.txt`.
 
 **Codex, 12.09.2026 — пакет C завершён в offline-контуре.** Коммит `8da5cde`
 добавляет bounded snapshot production source/config и не принимает README, отчёт

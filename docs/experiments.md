@@ -3136,3 +3136,98 @@ timeout 5400 python3 scripts/eval/run_suite.py \
   `secureintelligent/acp:latest` или разрешённый владелец стенда, который его
   предоставит; после этого повторить L/S, затем полную шестёрку, не подменяя эти
   startup-ряды reasoning-нолями.
+
+### C-live-LS (2026-09-12) — первый настоящий L/S после восстановления стенда
+
+- Commit / archive: runtime `718700e`; рабочее дерево было чистым до этой
+  docs-only evidence-записи; архив
+  `build/candidate-20260912-C-post-d5kNFh/submission.zip`, 98 173 байта,
+  SHA-256 `acde4f09377220fffbe84551c140bfdd29df0bd5f466eab0f9425a92c6022ccc`.
+- Model / stand: `qwen2.5-coder:7b-instruct-q4_K_M`, manifest
+  `dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364`, Ollama
+  0.20.5, context 4096, temperature 0, CPU-only container, `timeout_scale=1.0`,
+  `tell-agent-budget=false`, archive default controller. Task images были
+  собраны свежо; base `secureintelligent/acp:latest` — digest
+  `1324d7bb140422a9929f5bc538f55ec0480d2731742effee02bf67604130c8a3`.
+- Command: `python3 scripts/eval/run_suite.py --tasks-root local_task
+  --only fix-sqli-login fix-sqli-search --model
+  qwen2.5-coder:7b-instruct-q4_K_M --base-url
+  http://codex-c-proxy-C-live-20260912:8000/v1 --api-key ollama --network
+  sber-eval --counter-container codex-c-proxy-C-live-20260912 --timeout-scale
+  1.0 --archive build/candidate-20260912-C-post-d5kNFh/submission.zip --out
+  build/public-20260912-C-LS-live-9qyDfH --label
+  public-20260912-C-LS-live-9qyDfH`.
+- Result: `complete=true`, **eligible 0/2**, raw reward 0/2, endpoint tokens
+  28 040, wall 812 s. `fix-sqli-login`: 0, 20 597 endpoint tokens, 10 calls,
+  480.5 s, `budget/reasoning`; `fix-sqli-search`: 0, 7 443 endpoint tokens,
+  3 calls, 1 late response, 331.1 s, `llm-unusable/endpoint`. Оба задания
+  дошли до verifier; это настоящие task-ноли, а не startup-ряды.
+- Raw: `build/public-20260912-C-LS-live-9qyDfH/`; `results.tsv` SHA-256
+  `01ea0a9ee0515e32a42ff3382b3bb972df85cd8dfd3f869373e85fe605dce254`,
+  `suite.json` `8e492569683dcb8f404f67831b80ead6b5de7eeb9a157a5841eb5addab174621`,
+  `manifest.json` `5bddad3b39b03ebe0dc7d99cf45c20fd0fa9b2bd0eb9a9c30489115b951f9879`.
+  Полный компактный summary с командами и всеми строками:
+  `docs/research/live-runs/C-live-20260912-summary.txt`.
+
+### C-live-full-CPU (2026-09-12) — полный public baseline на том же архиве
+
+- Тот же commit `718700e`, archive SHA, model, context, sampling и contract,
+  что в `C-live-LS`; CPU-only stand, `reuse_images=false`, no `AGENT_TIMEOUT_S`.
+- Command: `python3 scripts/eval/run_suite.py --tasks-root local_task --model
+  qwen2.5-coder:7b-instruct-q4_K_M --base-url
+  http://codex-c-proxy-C-live-20260912:8000/v1 --api-key ollama --network
+  sber-eval --counter-container codex-c-proxy-C-live-20260912 --timeout-scale
+  1.0 --archive build/candidate-20260912-C-post-d5kNFh/submission.zip --out
+  build/public-20260912-C-full-live-rSfJ8g --label
+  public-20260912-C-full-live-rSfJ8g`.
+- Result: `complete=true`, **eligible 0/6**, raw reward 0/5 plus one N/A
+  startup row, endpoint tokens 96 920, wall 1 465 s. `bye-file` and
+  `hello-file` — timeout at 120.1 s with no endpoint tokens; `find-sqli-login`
+  — 0, 66 806 endpoint tokens, 31 calls, 413.2 s, steps/reasoning;
+  `fix-sqli-login` — 0, 20 633 tokens, 480.5 s, budget/reasoning;
+  `fix-sqli-search` — 0, 9 481 tokens, 331.1 s, one late response,
+  llm-unusable/endpoint. `incident-log-forensics` — N/A/startup: its Dockerfile
+  references four files absent from `local_task/incident-log-forensics/environment`;
+  no reasoning zero assigned.
+- Raw: `build/public-20260912-C-full-live-rSfJ8g/`; `results.tsv` SHA-256
+  `9f9f584e02cbab6a8b6a82bebccbcd66d40ae117ba17a026e9ebc66fe9b47438`,
+  `suite.json` `f497e36714a4f3d02155be98c91da8c67da5854f2fcede3cda4fd63d3193d361`,
+  `manifest.json` `082ccdd3e3ec3835d8b01cd498cd773a36c66baaa888e4c2fe8b3575ff8339c0`.
+
+### C-live-GPU (2026-09-12) — инфраструктурный контроль скорости, не новый фактор агента
+
+- Same archive/model/prompt/budgets/timeout contract as CPU runs. Fresh GPU
+  containers used the legacy NVIDIA runtime because stale `/etc/cdi/nvidia.yaml`
+  pointed at missing `libnvidia-egl-wayland.so.1.1.21`; the installed
+  `egl-wayland` is `1.1.22`. No system file was changed and old `sber-*`
+  containers were not restarted. `ollama ps` after loading reported
+  `39% CPU/61% GPU`, context 4096, on RTX 3050 Laptop 4 GiB.
+- Short control command selected `hello-file` and `bye-file`; result was raw
+  reward **2/2**, but **eligible 0/2** because both agents were killed at the
+  120 s contract limit. Endpoint tokens 53 752, wall 240 s. This is not a
+  successful score.
+- Full command: `python3 scripts/eval/run_suite.py --tasks-root local_task
+  --model qwen2.5-coder:7b-instruct-q4_K_M --base-url
+  http://codex-c-proxy-C-live-20260912:8000/v1 --api-key ollama --network
+  sber-eval --counter-container codex-c-proxy-C-live-20260912 --timeout-scale
+  1.0 --archive build/candidate-20260912-C-post-d5kNFh/submission.zip --out
+  build/public-20260912-C-GPU-full-live-r1 --label
+  public-20260912-C-GPU-full-live-r1`.
+- Full result: `complete=true`, raw reward **2/6**, **eligible 0/6**, endpoint
+  tokens 250 905, wall 1 224 s. `bye-file`/`hello-file`: reward 1 each but
+  timeout at 120.1 s; `find-sqli-login`: 0, 74 179 tokens, 219.2 s,
+  steps/reasoning; `fix-sqli-login`: 0, 77 078 tokens, 372.5 s,
+  steps/reasoning; `fix-sqli-search`: 0, 41 881 tokens, 392.4 s,
+  stuck/reasoning; incident remains N/A/startup for the same missing fixtures.
+  The SQLi wall times improved relative to CPU, but no eligible solve appeared;
+  this is a runtime-control observation, not a causal claim about package C.
+- Raw short: `build/public-20260912-C-GPU-short-live-r1/`, hashes
+  `results.tsv` `92e477e727a9cc8d76c6444471b799406ecc30a606613222bdee49cab5276faf`,
+  `suite.json` `a159f2599f2e0d050300ef8c3aa313ac33bab9a1a04ca56ac190caecb86a3122`,
+  `manifest.json` `f979676fda9806e3c28e4d2222fe1dbe21268da89d7cef4fd0d28998ca05d815`.
+- Raw full: `build/public-20260912-C-GPU-full-live-r1/`, hashes
+  `results.tsv` `e8218f8bc82cde5174915965310f7a4032de184f7123160d0e466efcbaa29cbd`,
+  `suite.json` `64be62cade3f151c8e97b60821b8018df157ca5841cbd534a3ec2270d8651da0`,
+  `manifest.json` `8bab88145a9c543ea0a0c8e1fca30d4622567067f21a611bb2d39badb7faf17d`.
+- Combined raw summary: `docs/research/live-runs/C-live-20260912-summary.txt`,
+  SHA-256 `d97ca2527829dceb6bd3ef9cc40357976b75ff04f7a376f5802707c67ce01ff4`.

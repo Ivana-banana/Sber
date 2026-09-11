@@ -1,0 +1,117 @@
+C-live-20260912 — real public measurements
+
+Date: 2026-09-12 MSK
+Runtime commit: 718700e (docs: record blocked source progress pilot)
+Archive: build/candidate-20260912-C-post-d5kNFh/submission.zip
+Archive size/SHA-256: 98173 bytes / acde4f09377220fffbe84551c140bfdd29df0bd5f466eab0f9425a92c6022ccc
+Model: qwen2.5-coder:7b-instruct-q4_K_M
+Model manifest: dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364
+Ollama: 0.20.5, context 4096, temperature=0, timeout_scale=1.0,
+  tell-agent-budget=false, controller=archive default, repeats=1.
+Harness: scripts/eval/run_suite.py SHA-256
+  61e2bb72195b7e0175e17aefe91b3fdc264e6bcda1d2b25d20ef64ec0fb2bd3e
+Task base: secureintelligent/acp:latest pulled at
+  sha256:1324d7bb140422a9929f5bc538f55ec0480d2731742effee02bf67604130c8a3.
+Task image builds were performed with reuse_images=false; image IDs are in each
+manifest.json. The incident package could not be built because its Dockerfile
+COPY names proxy_access.log, auth.log, edge_decisions.log and
+edge_decisions_fragment.log, while those files are absent from its environment/.
+
+Run A — CPU L/S live measurement
+Started: 2026-09-12 01:18:28
+Command:
+  python3 scripts/eval/run_suite.py --tasks-root local_task --only fix-sqli-login fix-sqli-search \
+    --model qwen2.5-coder:7b-instruct-q4_K_M \
+    --base-url http://codex-c-proxy-C-live-20260912:8000/v1 --api-key ollama \
+    --network sber-eval --counter-container codex-c-proxy-C-live-20260912 \
+    --timeout-scale 1.0 --archive build/candidate-20260912-C-post-d5kNFh/submission.zip \
+    --out build/public-20260912-C-LS-live-9qyDfH \
+    --label public-20260912-C-LS-live-9qyDfH
+Stand: CPU-only Ollama container, no GPU runtime/device.
+Suite: solved 0/2, eligible 0/2, complete=true, endpoint tokens 28040,
+  summed wall 812 s.
+results.tsv SHA-256: 01ea0a9ee0515e32a42ff3382b3bb972df85cd8dfd3f869373e85fe605dce254
+suite.json SHA-256: 8e492569683dcb8f404f67831b80ead6b5de7eeb9a157a5841eb5addab174621
+manifest.json SHA-256: 5bddad3b39b03ebe0dc7d99cf45c20fd0fa9b2bd0eb9a9c30489115b951f9879
+
+task                 reward eligible ep_tokens calls late wall_s stop/failure
+fix-sqli-login       0      false    20597     10    0    480.5 budget/reasoning
+fix-sqli-search      0      false     7443      3    1    331.1 llm-unusable/endpoint
+
+Run B — CPU full public six
+Started: 2026-09-12 01:34:59
+Command:
+  python3 scripts/eval/run_suite.py --tasks-root local_task \
+    --model qwen2.5-coder:7b-instruct-q4_K_M \
+    --base-url http://codex-c-proxy-C-live-20260912:8000/v1 --api-key ollama \
+    --network sber-eval --counter-container codex-c-proxy-C-live-20260912 \
+    --timeout-scale 1.0 --archive build/candidate-20260912-C-post-d5kNFh/submission.zip \
+    --out build/public-20260912-C-full-live-rSfJ8g \
+    --label public-20260912-C-full-live-rSfJ8g
+Stand: CPU-only Ollama container, no GPU runtime/device.
+Suite: solved 0/6, eligible 0/6, complete=true, endpoint tokens 96920,
+  summed wall 1465 s.
+results.tsv SHA-256: 9f9f584e02cbab6a8b6a82bebccbcd66d40ae117ba17a026e9ebc66fe9b47438
+suite.json SHA-256: f497e36714a4f3d02155be98c91da8c67da5854f2fcede3cda4fd63d3193d361
+manifest.json SHA-256: 082ccdd3e3ec3835d8b01cd498cd773a36c66baaa888e4c2fe8b3575ff8339c0
+
+task                 reward eligible ep_tokens calls late wall_s stop/failure
+bye-file             0      false        0      0    1    120.1 killed/timeout
+find-sqli-login      0      false    66806     31    3    413.2 steps/reasoning
+fix-sqli-login       0      false    20633     10    0    480.5 budget/reasoning
+fix-sqli-search      0      false     9481      4    1    331.1 llm-unusable/endpoint
+hello-file           0      false        0      0    0    120.1 killed/timeout
+incident-log-forensics ?      false        ?      ?    ?      0 startup/build: missing fixture files in Dockerfile
+
+Run C — GPU short control (same archive/model/contract)
+Started: 2026-09-12 02:07:44
+Command:
+  python3 scripts/eval/run_suite.py --tasks-root local_task --only hello-file bye-file \
+    --model qwen2.5-coder:7b-instruct-q4_K_M \
+    --base-url http://codex-c-proxy-C-live-20260912:8000/v1 --api-key ollama \
+    --network sber-eval --counter-container codex-c-proxy-C-live-20260912 \
+    --timeout-scale 1.0 --archive build/candidate-20260912-C-post-d5kNFh/submission.zip \
+    --out build/public-20260912-C-GPU-short-live-r1 \
+    --label public-20260912-C-GPU-short-live-r1
+Stand: legacy NVIDIA runtime (stale CDI was not used), RTX 3050 Laptop 4 GiB;
+  Ollama reported 39% CPU / 61% GPU for the 7B model, context 4096.
+Suite: raw reward 2/2, eligible 0/2, complete=true, endpoint tokens 53752,
+  summed wall 240 s. Both rows were killed at the 120 s agent limit; raw reward
+  is not an eligible solve.
+results.tsv SHA-256: 92e477e727a9cc8d76c6444471b799406ecc30a606613222bdee49cab5276faf
+suite.json SHA-256: a159f2599f2e0d050300ef8c3aa313ac33bab9a1a04ca56ac190caecb86a3122
+manifest.json SHA-256: f979676fda9806e3c28e4d2222fe1dbe21268da89d7cef4fd0d28998ca05d815
+
+task                 reward eligible ep_tokens calls late wall_s stop/failure
+bye-file             1      false    24204     23    0    120.1 killed/timeout
+hello-file           1      false    29548     27    0    120.1 killed/timeout
+
+Run D — GPU full public six
+Started: 2026-09-12 02:12:19
+Command:
+  python3 scripts/eval/run_suite.py --tasks-root local_task \
+    --model qwen2.5-coder:7b-instruct-q4_K_M \
+    --base-url http://codex-c-proxy-C-live-20260912:8000/v1 --api-key ollama \
+    --network sber-eval --counter-container codex-c-proxy-C-live-20260912 \
+    --timeout-scale 1.0 --archive build/candidate-20260912-C-post-d5kNFh/submission.zip \
+    --out build/public-20260912-C-GPU-full-live-r1 \
+    --label public-20260912-C-GPU-full-live-r1
+Stand: same legacy NVIDIA runtime; model PROCESSOR=39% CPU/61% GPU,
+  CONTEXT=4096. No AGENT_TIMEOUT_S was passed.
+Suite: raw reward 2/6, eligible 0/6, complete=true, endpoint tokens 250905,
+  summed wall 1224 s.
+results.tsv SHA-256: e8218f8bc82cde5174915965310f7a4032de184f7123160d0e466efcbaa29cbd
+suite.json SHA-256: 64be62cade3f151c8e97b60821b8018df157ca5841cbd534a3ec2270d8651da0
+manifest.json SHA-256: 8bab88145a9c543ea0a0c8e1fca30d4622567067f21a611bb2d39badb7faf17d
+
+task                 reward eligible ep_tokens calls late wall_s stop/failure
+bye-file             1      false    28219     26    0    120.1 killed/timeout
+find-sqli-login      0      false    74179     30    0    219.2 steps/reasoning
+fix-sqli-login       0      false    77078     30    0    372.5 steps/reasoning
+fix-sqli-search      0      false    41881     14    0    392.4 stuck/reasoning
+hello-file           1      false    29548     27    0    120.1 killed/timeout
+incident-log-forensics ?      false        ?      ?    ?      0 startup/build: missing fixture files in Dockerfile
+
+The GPU run is an infrastructure/runtime control, not a new agent factor: the
+archive, model, prompt, budgets, task packages and timeout contract stayed fixed.
+The GPU reduced wall time for the SQLi rows but did not produce an eligible solve.
