@@ -3040,6 +3040,11 @@ timeout 5400 python3 scripts/eval/run_suite.py \
   `python3 scripts/build_submission.py --out build/candidate-20260911-F-3WhSka/submission.zip`
   создала 94 994 байта, SHA-256
   `0763c74f28a403752b12275bd34545340faf2f6a78c99ef425af99684a9bf4a3`;
-  `python3 scripts/check_submission.py ...` дал PASS для распаковки, root
-  executable `run.sh` (100755), cold-start contract и hostile instruction. Архив
-  пересобрать после коммита и сравнить SHA; secureintelligent/acp smoke не выполнен.
+-  `python3 scripts/check_submission.py ...` дал PASS для распаковки, root
+  executable `run.sh` (100755), cold-start contract и hostile instruction.
+- После коммита F `6f7131f` архив пересобран в новом каталоге:
+  `build/candidate-20260911-F-post-L26EUu/submission.zip`, размер 94 994 байта,
+  SHA-256 тот же
+  `0763c74f28a403752b12275bd34545340faf2f6a78c99ef425af99684a9bf4a3`;
+  повторный `python3 scripts/check_submission.py ...` — PASS для всех offline
+  gates. `secureintelligent/acp` smoke не выполнен.

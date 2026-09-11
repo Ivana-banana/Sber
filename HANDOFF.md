@@ -13,8 +13,6 @@
 
 ## Активные задачи
 
-Codex, 11.09.2026 — после E и O3-пакета продолжаю F из `docs/superpowers/plans/2026-09-11-all-tasks-recovery.md` от `cfe9c8c` в этом worktree. Цель F: укрепить честное завершение простых exact-file задач через данные исходной instruction, сохранив четыре содержательные задачи без общего «любая запись = успех». Проверка: красные контрактные тесты до production-кода, targeted/full pytest, сборка и `check_submission.py`; live hello/bye-пилоты только после подтверждения свободного endpoint. Граница: без смены модели/context/budget, без нового runtime dependency, public hardcode, интернета/fetch/push, перезапуска процессов и изменения `deep-research-report.md`; чужие незакоммиченные файлы не трогаю. Текущий full gate: `python3 -m pytest -q` — 456 passed, 1 sandbox `EPERM` на socket-тесте; при разрешённом socket ожидается 457 passed. E live gate заблокирован sandbox: Docker/Ollama/NVIDIA/endpoint недоступны.
-
 Claude, 10.09.2026 (вечер) — продолжение public-solves в том же worktree, ветка
 `fix/public-solves` (запушена). Подобран незакоммиченный WIP Codex'а от 00:20–00:45
 (P0 + четыре дефекта ревью + черновик P1): один красный тест починен, работа разнесена
@@ -64,6 +62,19 @@ Codex, 07.09.2026, углубление organizer-first: проверить ко
 | 2026-08-25 | Claude | Остаток блокера: контейнерный прогон. ФС целевого образа больше не блокер — архив в ней исполнен | Внешний прогон M12: 15 непустых инструкций дали exit `0`, пустой аргумент — `2`, layout с одним верхним каталогом контрактом не принимается. Достоверность подтверждена пересчётом пяти fingerprint'ов и сверкой digest/слоёв. Разбор — `docs/research/verdict-submission-execution-check.md` | Прогнать тот же архив под `docker run --network none`: chroot не даёт cgroups, seccomp и `/proc`, поэтому `ps` и лимиты среды остаются неизвестными |
 
 ## Завершено
+
+**Codex, 11.09.2026 — E/O3/F recovery-пакеты завершены в offline-контуре.** E
+зафиксирован в `fe660f0`, O3 — в `cfe9c8c` и handoff `64b30a9`, F — в
+`6f7131f`. F добавляет консервативную проверку exact-file: ожидаемый путь и
+полные UTF-8 bytes следуют только из однозначной исходной инструкции; общий
+finish gate для audit/fix/forensics не превращён в «любая запись = успех».
+Targeted F — 71 passed; повторный полный `python3 -m pytest -q` — 466 passed и
+один sandbox `EPERM` на socket-тесте (`tests/test_main.py`), то есть 467 passed
+ожидаются при разрешении socket. Архив после F пересобран и побайтно совпал с
+pre-commit SHA `0763c74f28a403752b12275bd34545340faf2f6a78c99ef425af99684a9bf4a3`;
+`check_submission.py` — PASS. Live hello/bye 3/3, токены и время не измерены:
+Docker/Ollama/NVIDIA/endpoint недоступны в sandbox; чужой стенд не
+перезапускался. Работа локально не запушена.
 
 **Codex, 11.09.2026 — O3 offline protocol gate.** `cfe9c8c` добавляет проверку
 имени native-функции: decoder не принимает аргументы от неизвестного function call,
