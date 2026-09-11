@@ -13,7 +13,7 @@
 
 ## Активные задачи
 
-Codex, 11.09.2026 — выполняю `docs/superpowers/plans/2026-09-11-all-tasks-recovery.md` по пакетам E → O1/O2/O3 → F → L/S/A/C/I → G/R от `8f27c1b` в этом worktree. Цель: минимальными отдельными факторами довести автономную петлю до подтверждённого public-кандидата, сохранив существующий baseline и не трогая чужой `deep-research-report.md`. Проверка каждого пакета: воспроизводящий тест до фикса, targeted/full pytest, затем живой pilot только при доступном и подтверждённо свободном endpoint; live evidence пишется в уникальный каталог и `docs/experiments.md`. Граница: без новых runtime-зависимостей, public hardcode, смены модели/контекста/budget без отдельного эксперимента, интернет/fetch/push и перезапуска чужого стенда. Baseline 11.09: `python3 -m pytest -q` — 440 passed, 1 sandbox `EPERM` на socket-тесте; Docker/Ollama/NVIDIA недоступны из текущего sandbox, поэтому E live gate пока blocked окружением.
+Следующая сессия, 11.09.2026 — продолжить `docs/superpowers/plans/2026-09-11-all-tasks-recovery.md` от `ab20a71` в этом worktree. Сначала проверить status/новые коммиты, затем пакет O3 или F по prompt с одним фактором; не начинать live run, пока E не подтвердит свободный endpoint. Не трогать `deep-research-report.md`, модель/context/budget, интернет/fetch/push и чужой стенд. Текущий full gate: `python3 -m pytest -q` — 456 passed под локальным socket-разрешением; обычный sandbox даёт EPERM только на `tests/test_main.py::test_the_status_line_is_readable_before_the_process_is_killed`. Live public/extra ещё не измерены.
 
 Claude, 10.09.2026 (вечер) — продолжение public-solves в том же worktree, ветка
 `fix/public-solves` (запушена). Подобран незакоммиченный WIP Codex'а от 00:20–00:45
@@ -64,6 +64,15 @@ Codex, 07.09.2026, углубление organizer-first: проверить ко
 | 2026-08-25 | Claude | Остаток блокера: контейнерный прогон. ФС целевого образа больше не блокер — архив в ней исполнен | Внешний прогон M12: 15 непустых инструкций дали exit `0`, пустой аргумент — `2`, layout с одним верхним каталогом контрактом не принимается. Достоверность подтверждена пересчётом пяти fingerprint'ов и сверкой digest/слоёв. Разбор — `docs/research/verdict-submission-execution-check.md` | Прогнать тот же архив под `docker run --network none`: chroot не даёт cgroups, seccomp и `/proc`, поэтому `ps` и лимиты среды остаются неизвестными |
 
 ## Завершено
+
+**Codex, 11.09.2026 — O1/O2 пакеты плана recovery.** `048c03d` исправляет
+байтовую целостность `replace_text` (strict UTF-8, size cap, atomic replace и mode),
+`aa5e871` добавляет адрес/диапазон/полноту к `read_range` и полный source к
+`list_dir`, `ab20a71` привязывает repeat/no-progress guards к `state_epoch` и
+инвалидирует старые наблюдения после file/shell mutation. Проверки: O1 targeted
+104 passed, O2-address 107 passed, O2-epoch 111 passed, полный suite 456 passed с
+разрешённым локальным socket-тестом. Evidence: `docs/experiments.md`; live E/P4
+pilot не выполнен, Docker/Ollama/NVIDIA недоступны из обычного sandbox.
 
 **Codex, 08.09.2026 — план реализации передан для Claude.**
 `docs/superpowers/plans/2026-09-08-public-solves-implementation.md`: P0 измерения,

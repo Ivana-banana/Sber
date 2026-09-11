@@ -2932,3 +2932,18 @@ timeout 5400 python3 scripts/eval/run_suite.py \
 - Live pilot не выполнен по тому же E-блокеру; solved/tokens/wall не измерялись.
   Следующий фактор O2 — эпоха изменения состояния для repeat guards, отдельно от
   этого формата наблюдений.
+
+### O2-epoch-local (2026-09-11) — повтор после изменения состояния
+
+- Commit: `ab20a71`; один фактор — detector history привязана к `state_epoch`.
+  Успешные `write_file`/`replace_text` и shell, который не доказан простым
+  read-only, инвалидируют старую evidence; для shell это делается и при ошибке,
+  потому что команда могла изменить состояние до ненулевого exit.
+- Красный тест до фикса получал `AttributeError` на отсутствующем epoch; после
+  фикса `python3 -m pytest tests/test_detectors.py tests/test_loop.py
+  tests/test_state.py tests/test_tools.py -q` — **111 passed**. Полный
+  `python3 -m pytest -q` с разрешённым локальным socket-тестом — **456 passed**.
+- Guard для неизменённого повторения сохранён; отдельные tests подтверждают, что
+  старые epochs не участвуют ни в `blocked`, ни в `stuck`. Live pilot не выполнен:
+  E endpoint gate остаётся blocked sandbox-окружением, поэтому solved/tokens/wall
+  не заявляются.
