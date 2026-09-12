@@ -13,6 +13,18 @@
 
 ## Активные задачи
 
+Claude, 12.09.2026 (день) — пакет E плана `2026-09-11-all-tasks-recovery.md`, ветка
+`fix/public-solves`, worktree `.worktrees/public-solves`. Подобран и закоммичен
+завершённый незакоммиченный WIP ночной сессии (evaluator-guard, `f5c15ee`, 723 passed).
+Найдены и исправлены две причины вчерашних нулей: журналы `incident-log-forensics`
+были скрыты правилом `*.log` в `.gitignore`, поэтому образ задачи не собирался
+(`15720ca`); `--gpus all` падал на устаревшей CDI-спеке хоста, стенд уходил на CPU и
+задачи убивались по таймауту (`0e22553`, откат на `--runtime=nvidia`). Стенд поднят как
+`claude-e-model-20260912` / `claude-e-proxy-20260912`, first-call 91,2 с, warm 2,1 с,
+0 upstream errors. Идёт полный public baseline `build/public-20260912-E-BASE-r1`
+архивом `133b81d0…`. Намеренно не менялись: prompt, budgets, MAX_STEPS, модель,
+`run.sh`, сборщик submission, чужие worktree и `deep-research-report.md`.
+
 Claude, 10.09.2026 (вечер) — продолжение public-solves в том же worktree, ветка
 `fix/public-solves` (запушена). Подобран незакоммиченный WIP Codex'а от 00:20–00:45
 (P0 + четыре дефекта ревью + черновик P1): один красный тест починен, работа разнесена
