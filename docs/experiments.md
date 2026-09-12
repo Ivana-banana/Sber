@@ -3313,3 +3313,12 @@ timeout 5400 python3 scripts/eval/run_suite.py \
 - **Классификация нуля:** reasoning (verification/serialization), не packaging/tool/startup.
 - **Вывод:** узкое место — ручная JSON-сериализация слабой моделью, не навигация/понимание/аудит. Диагностика ≠ починка (эхо P2). Кандидат: структурный finding-tool + `json.dumps` на стороне harness (tool policy, ревью человеком). Не хардкодить схему; safe-case допускает пустой отчёт.
 - **Разбор:** `docs/research/live-runs/2026-09-12-find-sqli-writefile-guard-measured.md`.
+
+## P5-forensic-baseline-20260912 — свежий baseline, нуль по рассуждению (фабрикация значений)
+
+- **Тип:** живой прогон, свежий autonomous baseline на текущем HEAD-архиве `def0e669…`, стенд `claude-e-model-20260912`, GPU 61% offload, context 4096, `--reuse-images` (forensic image `ccad631`, совпадает с манифестом E-BASE).
+- **Команда:** `scripts/eval/run_suite.py --only incident-log-forensics --archive build/p3-withfix-*/submission.zip --model qwen2.5-coder:7b-instruct-q4_K_M --base-url http://claude-e-proxy-20260912:8000/v1 --reuse-images --timeout-scale 1.0`. results.tsv sha `0a3350efd30fddb3cb947d8673645297df8b73fab18d0eb0ab782d19c163684a`.
+- **Результат:** reward=0, 66198 tok (ep 68422), 317.6с, 30 шагов, stop=steps, wrote=yes. E-BASE: 0, 66795 tok, 305.8с — совпадает.
+- **Классификация нуля:** reasoning (**фабрикация**), не serialization/packaging/tool. Формат deliverable корректный (4 строки, верные ключи), но значения выдуманы: `10.0.0.1 / jdoe / 123456789 / …12:34:56.789Z` против эталона `203.0.113.50 / deploysvc / 2457600 / …14:03:44.900Z`. Шаги 27–30 — осцилляция между `unknown` и придуманными значениями; мультилог-корреляция (nested JSONL → malicious record → proxy XFF → exfil bytes) не выполнена.
+- **Вывод:** потолок рассуждения 7B на тяжёлой forensic-корреляции. В отличие от find-sqli (модель находит ответ, теряет в JSON), здесь модель **ответ не выводит**. Тулинг/prompt дёшево не чинят; кандидат — не серийный фактор, а вопрос достижимости на этой модели.
+- **Оговорка:** `verifier.log: unavailable: FileNotFoundError` — лог verifier не захвачен; reward=0 обоснован независимо, значения deliverable явно неверны против эталона. Отметить как возможный дефект захвата логов, не как false-zero.
