@@ -3302,3 +3302,14 @@ timeout 5400 python3 scripts/eval/run_suite.py \
   tokens; H09 focused had 16/38 053) but gives **no solved gain**. The common remaining
   failure is action selection/recovery, not absence of verifier text. Next factor must
   be separate and test-first.
+
+## P3-writefile-guard-20260912 — write_file JSON-guard измерен, зачёта нет
+
+- **Тип:** живой прогон, один фактор (`f6c10cb` on/off), стенд `claude-e-model-20260912`, GPU 61% offload, context 4096.
+- **Архивы:** with-fix `def0e66928436e17794b7b5b61c6b49dd4212c0eeaf09b3889c02ec495aac0b2`; without-fix `133b81d0…` (реверс только `f6c10cb`, байт-в-байт = E-BASE-r1).
+- **Команда:** `scripts/eval/run_suite.py --only find-sqli-login --archive <with-fix> --model qwen2.5-coder:7b-instruct-q4_K_M --base-url http://claude-e-proxy-20260912:8000/v1 --reuse-images --timeout-scale 1.0`.
+- **Результат:** with-fix reward=0, 70062 tok (ep 72438), 205.4с, 30 шагов, stop=steps, deliverable `{"findings": []}`. without-fix (E-BASE) reward=0, 71758 tok, 306.4с. **0 → 0, без прироста.**
+- **Диагноз:** на call 9 обе руки пишут байт-в-байт одинаковую находку, текстово проходящую все 3 gate verifier, но невалидный JSON (`Expecting ',' delimiter: col 309`). Guard сработал (сообщение получено), но 7B не чинит экранирование — одна оборванная попытка (`{"findings": [`) и коллапс в пустой отчёт. Diff траекторий: guard изменил ровно одно действие.
+- **Классификация нуля:** reasoning (verification/serialization), не packaging/tool/startup.
+- **Вывод:** узкое место — ручная JSON-сериализация слабой моделью, не навигация/понимание/аудит. Диагностика ≠ починка (эхо P2). Кандидат: структурный finding-tool + `json.dumps` на стороне harness (tool policy, ревью человеком). Не хардкодить схему; safe-case допускает пустой отчёт.
+- **Разбор:** `docs/research/live-runs/2026-09-12-find-sqli-writefile-guard-measured.md`.
