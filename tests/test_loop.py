@@ -1018,3 +1018,102 @@ def test_an_exact_file_finish_uses_the_instruction_oracle_before_a_reader_comman
     assert outcome.solved is True
     assert outcome.verdict is not None
     assert outcome.verdict.stage == "exact-file"
+
+
+def test_a_successful_exact_file_write_finishes_without_an_extra_model_turn(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "answer.txt"
+    state = AgentState(
+        instruction=(
+            f"Create a file at `{target}` whose entire content is exactly the single "
+            "word `Expected` (the file must contain only those eight characters)."
+        ),
+        workspace=tmp_path,
+        budget=Budget(total_s=600.0, clock=lambda: 0.0),
+        named_paths=(target,),
+    )
+    from agent.verify import verify as real_verify
+
+    llm = StubLlm(replies=[action("write_file", path=str(target), content="Expected")])
+
+    outcome = loop.run(
+        state,
+        llm,
+        real_verify,
+        brief=make_brief(tmp_path),
+        playbook=playbooks.GENERAL,
+    )
+
+    assert len(llm.calls) == 1, "a green exact-file write must not spend another model turn"
+    assert outcome.solved is True
+    assert outcome.stop_reason == "verified"
+    assert outcome.deliverable == target
+    assert outcome.verdict is not None and outcome.verdict.stage == "exact-file"
+
+
+@pytest.mark.parametrize("playbook", playbooks.PLAYBOOKS, ids=lambda item: item.name)
+def test_exact_file_write_fast_path_is_reserved_for_general_tasks(
+    tmp_path: Path, playbook: playbooks.Playbook
+) -> None:
+    target = tmp_path / "answer.txt"
+    state = AgentState(
+        instruction=(
+            f"Create a file at `{target}` whose entire content is exactly the single "
+            "word `Expected` (the file must contain only those eight characters)."
+        ),
+        workspace=tmp_path,
+        budget=Budget(total_s=600.0, clock=lambda: 0.0),
+        named_paths=(target,),
+    )
+    state.budget.max_steps = 1
+    llm = StubLlm(replies=[action("write_file", path=str(target), content="Expected")])
+    verify = FakeVerify((True, "exact-file", "passed"))
+
+    outcome = loop.run(
+        state,
+        llm,
+        verify,
+        brief=make_brief(tmp_path),
+        playbook=playbook,
+    )
+
+    if playbook.name == "general":
+        assert outcome.solved is True
+        assert outcome.stop_reason == "verified"
+        assert verify.calls == [(target, "")]
+    else:
+        assert outcome.solved is False
+        assert outcome.stop_reason != "verified"
+
+
+def test_exact_file_fast_path_records_one_empty_command_verification(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "answer.txt"
+    state = AgentState(
+        instruction=(
+            f"Create a file at `{target}` whose entire content is exactly the single "
+            "word `Expected` (the file must contain only those eight characters)."
+        ),
+        workspace=tmp_path,
+        budget=Budget(total_s=600.0, clock=lambda: 0.0),
+        named_paths=(target,),
+    )
+    llm = StubLlm(replies=[action("write_file", path=str(target), content="Expected")])
+    verify = FakeVerify((True, "exact-file", "passed"))
+
+    outcome = loop.run(
+        state,
+        llm,
+        verify,
+        brief=make_brief(tmp_path),
+        playbook=playbooks.GENERAL,
+    )
+
+    assert outcome.solved is True
+    assert verify.calls == [(target, "")]
+    phase_names = [(event.kind, event.name, event.detail) for event in state.audit]
+    assert phase_names.count(("phase", "verify", "start")) == 1
+    assert phase_names.count(("phase", "verify", "end")) == 1
+    assert sum(event.kind == "verify" for event in state.audit) == 1

@@ -296,6 +296,23 @@ def run(
             f"[step {step}] {tool} -> {'ok' if result.ok else 'FAIL'}\n{body}".rstrip()
         )
 
+        if result.ok and tool == prompt.WRITE_FILE:
+            exact = _verify_exact_write(state, verify, args, playbook=playbook)
+            if exact is not None:
+                deliverable, verdict = exact
+                if verdict.ok:
+                    return Outcome(
+                        solved=True,
+                        stop_reason="verified",
+                        deliverable=deliverable,
+                        summary="exact-file instruction oracle passed after write",
+                        verdict=verdict,
+                        observations=tuple(observations),
+                    )
+                observations.append(
+                    f"[step {step}] exact-file check failed: {verdict.detail}"
+                )
+
         signal = detectors.stuck(state)
         if signal is not None:
             state.record("budget", signal.name, signal.detail)
@@ -649,6 +666,39 @@ def _execute(tool: str, args: dict[str, object], state: AgentState) -> tools.Too
         # variant of it is a different string to a verifier that compares paths.
         state.artifacts.append(target)
     return result
+
+
+def _verify_exact_write(
+    state: AgentState,
+    verify: VerifyFn,
+    args: dict[str, object],
+    *,
+    playbook: Playbook,
+) -> tuple[Path, VerifyResult] | None:
+    """Check a successful write immediately when the instruction is an exact-file task.
+
+    The ordinary verifier is intentionally not a post-write success gate: a report or
+    source edit must still be finished by the model and checked according to its
+    playbook. The conservative exact-file contract is different only for the
+    unclassified/general one-step task: its path and bytes come from the instruction,
+    so a successful `write_file` can be checked without another model turn. A failed
+    check is only an observation; the model may correct the file and try again. A
+    specialized playbook must still perform its investigation or repair procedure,
+    even if its first artifact happens to look like an exact-file answer.
+    """
+    if playbook.name != "general" or result_contract.exact_file_requirement(state.instruction) is None:
+        return None
+    deliverable = Path(str(args.get("path", "")))
+    verify_started = state.start_phase("verify")
+    verdict = verify(state, deliverable=deliverable, command="")
+    state.finish_phase("verify", verify_started)
+    state.record(
+        "verify",
+        verdict.stage,
+        verdict.detail or "passed",
+        exit_code=0 if verdict.ok else 1,
+    )
+    return deliverable, verdict
 
 
 def _source_changes(

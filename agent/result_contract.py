@@ -12,10 +12,29 @@ _TARGET = re.compile(
     re.IGNORECASE,
 )
 _CONTENT = re.compile(
-    r"\b(?:whose\s+entire\s+content|(?:the\s+)?content)\s+"
-    r"(?:is|must\s+be|should\s+be)\s+exactly\s+"
+    r"\b(?:whose\s+(?:entire\s+)?content|(?:the\s+)?content)\s+"
+    r"(?:(?:is|must\s+be|should\s+be)\s+)?exactly\s+"
     r"(?:the\s+single\s+word\s+)?"
     r"(?:(?P<quote>[`\"'])(?P<quoted>[^`\"']+)(?P=quote))",
+    re.IGNORECASE,
+)
+_BRIDGE = re.compile(r"\s*(?:,\s*)?(?:with(?:\s+(?:its?|the))?\s+)?\s*\Z", re.IGNORECASE)
+_TAIL = re.compile(
+    r"\s*(?:\((?P<note>[^().!?;\n]*)\))?\s*\.?\s*\Z",
+    re.IGNORECASE,
+)
+_NOTE = re.compile(
+    r"\s*(?:"
+    r"(?:(?:no|without)\s+(?:trailing\s+)?(?:newline|line\s+break|whitespace)\s+"
+    r"(?:is\s+)?(?:required|needed|allowed)(?:\s*,?\s*but\s*)?)?"
+    r"(?:the\s+file\s+(?:must|should)\s+contain\s+only\s+"
+    r"(?:those|these|the)\s+[a-z0-9_-]+\s+(?:characters?|bytes?))?"
+    r")\s*\Z",
+    re.IGNORECASE,
+)
+_NEGATION = re.compile(
+    r"\b(?:do|does|did|must|should|shall|may|can)\s+not\b"
+    r"|\b(?:never|don't|doesn't|didn't|mustn't|shouldn't|can't|cannot|not)\b",
     re.IGNORECASE,
 )
 
@@ -24,8 +43,7 @@ MAX_EXACT_BYTES = 4096
 
 
 def _is_negated(instruction: str, start: int) -> bool:
-    prefix = instruction[max(0, start - 12) : start].lower()
-    return bool(re.search(r"(?:\bdo\s+not|\bdon't|\bnever)\s+$", prefix))
+    return bool(_NEGATION.search(instruction[:start]))
 
 
 def _path(match: re.Match[str]) -> str:
@@ -50,10 +68,24 @@ def exact_file_requirement(instruction: str) -> tuple[Path, bytes] | None:
         return None
 
     target, content = targets[0], contents[0]
+    prefix = instruction[: target.start()].strip()
+    if prefix.lower() not in {"", "please"}:
+        return None
     if target.end() > content.start():
         return None
     bridge = instruction[target.end() : content.start()]
-    if any(mark in bridge for mark in ".!?\n"):
+    # The exact fast path is a one-step contract. A comma is allowed before the
+    # content clause, but words or clause separators there can hide "and run ..."
+    # or another imperative between the file write and its claimed bytes.
+    if _BRIDGE.fullmatch(bridge) is None:
+        return None
+
+    tail = instruction[content.end() :]
+    tail_match = _TAIL.fullmatch(tail)
+    if tail_match is None:
+        return None
+    note = tail_match.group("note") or ""
+    if note and _NOTE.fullmatch(note) is None:
         return None
 
     raw_path = _path(target)
