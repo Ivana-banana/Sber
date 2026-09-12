@@ -29,6 +29,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 import json
+import os
+import re
 import shlex
 
 from agent import detectors, limits, prompt, result_contract, result_progress, tools
@@ -271,7 +273,7 @@ def run(
 
         blocks_in_a_row = 0
         act_started = state.start_phase("act")
-        result = _execute(tool, args, state)
+        result = _execute(tool, args, state, playbook=playbook)
         state.finish_phase("act", act_started)
         if _advances_state_epoch(tool, args) and (
             result.ok or tool == prompt.RUN_SHELL
@@ -622,11 +624,1547 @@ def _line(value: object) -> int:
         return 1
 
 
-def _execute(tool: str, args: dict[str, object], state: AgentState) -> tools.ToolResult:
+_EVALUATOR_DIRS = frozenset({"test", "tests", "spec", "specs", "fixtures"})
+_EVALUATOR_FILES = frozenset({"conftest.py", "pytest.ini", "tox.ini"})
+_FIND_MUTATION_OPTIONS = frozenset(
+    {
+        "-delete",
+        "-exec",
+        "-execdir",
+        "-ok",
+        "-okdir",
+        "-fprint",
+        "-fprint0",
+        "-fprintf",
+        "-fls",
+    }
+)
+_GIT_READ_ONLY_COMMANDS = frozenset({"diff", "log", "ls-files", "show", "status"})
+_SHELL_WRAPPERS = frozenset({"bash", "command", "dash", "env", "exec", "ksh", "nohup", "sh", "sudo", "zsh"})
+_OPAQUE_COMMAND_RUNNERS = frozenset(
+    {
+        "at",
+        "batch",
+        "bwrap",
+        "busybox",
+        "ccache",
+        "chroot",
+        "crontab",
+        "daemon",
+        "daemonize",
+        "chrt",
+        "doas",
+        "fakeroot",
+        "firejail",
+        "flock",
+        "ionice",
+        "intercept-build",
+        "lxc-attach",
+        "nsenter",
+        "nohup",
+        "nice",
+        "openssl",
+        "parallel",
+        "prlimit",
+        "proot",
+        "runc",
+        "runuser",
+        "scan-build",
+        "screen",
+        "setsid",
+        "setpriv",
+        "ssh",
+        "ssh-agent",
+        "ssh-keygen",
+        "sqlite3",
+        "stdbuf",
+        "start-stop-daemon",
+        "su",
+        "sudo",
+        "systemd-run",
+        "tmux",
+        "time",
+        "timeout",
+        "taskset",
+        "unshare",
+        "watch",
+        "zip",
+    }
+)
+_CODE_LOADING_ASSIGNMENTS = frozenset(
+    {
+        "BASH_ENV",
+        "CLASSPATH",
+        "CCC_OVERRIDE_OPTIONS",
+        "COMPILER_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "ENV",
+        "GEM_HOME",
+        "GEM_PATH",
+        "GCONV_PATH",
+        "GCC_EXEC_PREFIX",
+        "GIT_ASKPASS",
+        "GIT_CONFIG",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_DIR",
+        "GIT_EDITOR",
+        "GIT_EXEC_PATH",
+        "GIT_EXTERNAL_DIFF",
+        "GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE",
+        "GIT_INDEX_FILE",
+        "GIT_PAGER",
+        "GIT_PROXY_COMMAND",
+        "GIT_SEQUENCE_EDITOR",
+        "GIT_SSH",
+        "GIT_SSH_COMMAND",
+        "GIT_TEMPLATE_DIR",
+        "GIT_WORK_TREE",
+        "HOME",
+        "JAVA_TOOL_OPTIONS",
+        "LD_LIBRARY_PATH",
+        "LD_AUDIT",
+        "LD_AUDIT_32",
+        "LD_AUDIT_64",
+        "LD_PRELOAD",
+        "LUA_CPATH",
+        "LUA_INIT",
+        "LUA_PATH",
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "PATH",
+        "PERL5LIB",
+        "PERL5OPT",
+        "PROMPT_COMMAND",
+        "PYTHONHOME",
+        "PYTHONINSPECT",
+        "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "PYTEST_ADDOPTS",
+        "PYTEST_PLUGINS",
+        "RUBYLIB",
+        "RUBYOPT",
+        "XDG_CONFIG_DIRS",
+        "XDG_CONFIG_HOME",
+        "ZDOTDIR",
+    }
+)
+_BROAD_MUTATORS = frozenset(
+    {
+        "cp",
+        "cmake",
+        "chmod",
+        "chown",
+        "aria2c",
+        "curl",
+        "go",
+        "install",
+        "7z",
+        "bsdtar",
+        "ar",
+        "cpio",
+        "docker",
+        "ex",
+        "gdb",
+        "jar",
+        "java",
+        "jshell",
+        "jjs",
+        "lldb",
+        "make",
+        "m4",
+        "mkdir",
+        "mv",
+        "npm",
+        "npx",
+        "nerdctl",
+        "ninja",
+        "patch",
+        "pip",
+        "pip3",
+        "rm",
+        "rmdir",
+        "rsync",
+        "scp",
+        "setfacl",
+        "sftp",
+        "tar",
+        "touch",
+        "truncate",
+        "unzip",
+        "uv",
+        "vim",
+        "nvim",
+        "podman",
+        "wget",
+    }
+)
+_GIT_MUTATION_AFTER_SEPARATOR = re.compile(
+    r"(?:^|(?:;|&&|\|\||\||\n)\s*)"
+    r"(?:(?:[a-z_][a-z0-9_]*=\S+|"
+    r"(?:bash|command|dash|env|exec|ksh|nohup|sh|sudo|zsh))\s+)*"
+    r"(?:[^\s;&|]+/)?git\s+([a-z][a-z0-9-]*)(?=\s|$)",
+    re.IGNORECASE,
+)
+_GIT_COMMAND_ANYWHERE = re.compile(
+    r"(?<![a-z0-9_./-])git\s+([a-z][a-z0-9-]*)(?=\s|$)", re.IGNORECASE
+)
+_EVALUATOR_TOKEN = re.compile(
+    r"(?<![a-z0-9_])(?:tests?|specs?|fixtures)(?=[/\\\s:'\"]|$)"
+    r"|(?<![a-z0-9_])(?:test_[a-z0-9_.-]+\.(?:py|js|jsx|ts|tsx)|"
+    r"[a-z0-9_.-]+_test\.py|conftest\.py)"
+    r"(?![a-z0-9_])",
+    re.IGNORECASE,
+)
+
+
+def _is_evaluator_path(path: Path, state: AgentState) -> bool:
+    try:
+        root = state.workspace.resolve()
+        target = (path if path.is_absolute() else root / path).resolve()
+    except OSError:
+        return False
+
+    try:
+        relative = target.relative_to(root)
+        parts = tuple(part.lower() for part in relative.parts)
+    except ValueError:
+        # Named task paths may intentionally live outside the process workspace. In
+        # that case there is no relative path, so inspect the absolute path instead.
+        parts = tuple(part.lower() for part in target.parts)
+    filename = parts[-1] if parts else ""
+    return any(part in _EVALUATOR_DIRS for part in parts) or (
+        filename in _EVALUATOR_FILES
+        or filename.startswith("test_")
+        or filename.endswith("_test.py")
+    )
+
+
+def _shares_evaluator_inode(path: Path, state: AgentState) -> bool:
+    """Catch a non-obvious hardlink alias for an evaluator file."""
+    if _is_evaluator_path(path, state):
+        return True
+    try:
+        target = (path if path.is_absolute() else state.workspace / path).resolve()
+        target_stat = target.stat()
+    except OSError:
+        return False
+    target_inode = (target_stat.st_dev, target_stat.st_ino)
+    try:
+        candidates = list(state.workspace.rglob("*"))
+    except OSError:
+        candidates = []
+    candidates.extend(state.named_paths)
+    for candidate in candidates:
+        try:
+            if candidate.resolve() == target or not candidate.is_file():
+                continue
+            if not _is_evaluator_path(candidate, state):
+                continue
+            candidate_stat = candidate.stat()
+        except OSError:
+            continue
+        if (candidate_stat.st_dev, candidate_stat.st_ino) == target_inode:
+            return True
+    return False
+
+
+def _is_repository_control_path(path: Path, state: AgentState) -> bool:
+    try:
+        root = state.workspace.resolve()
+        raw_target = path if path.is_absolute() else root / path
+        try:
+            raw_relative = raw_target.relative_to(root)
+            raw_parts = tuple(part.lower() for part in raw_relative.parts)
+        except ValueError:
+            raw_parts = tuple(part.lower() for part in raw_target.parts)
+        if ".git" in raw_parts:
+            return True
+        target = raw_target.resolve()
+    except OSError:
+        return False
+    try:
+        relative = target.relative_to(root)
+        parts = tuple(part.lower() for part in relative.parts)
+    except ValueError:
+        parts = tuple(part.lower() for part in target.parts)
+    return ".git" in parts
+
+
+def _shares_repository_control_inode(path: Path, state: AgentState) -> bool:
+    if _is_repository_control_path(path, state):
+        return True
+    try:
+        target = (path if path.is_absolute() else state.workspace / path).resolve()
+        target_stat = target.stat()
+    except OSError:
+        return False
+    target_inode = (target_stat.st_dev, target_stat.st_ino)
+    try:
+        candidates = list(state.workspace.rglob("*"))
+    except OSError:
+        candidates = []
+    candidates.extend(state.named_paths)
+    for candidate in candidates:
+        try:
+            if candidate.resolve() == target or not candidate.is_file():
+                continue
+            if not _is_repository_control_path(candidate, state):
+                continue
+            candidate_stat = candidate.stat()
+        except OSError:
+            continue
+        if (candidate_stat.st_dev, candidate_stat.st_ino) == target_inode:
+            return True
+    return False
+
+
+def _shares_code_fix_protected_inode(path: Path, state: AgentState) -> bool:
+    return _shares_evaluator_inode(path, state) or _shares_repository_control_inode(
+        path, state
+    )
+
+
+def _code_fix_shell_expand_workspace_alias(value: str, state: AgentState) -> tuple[str, ...]:
+    """Resolve the shell's cwd aliases without trying to emulate arbitrary env vars."""
+    expanded = [value]
+    try:
+        workspace = state.workspace.resolve()
+    except OSError:
+        return tuple(expanded)
+    for alias in ("$PWD", "${PWD}"):
+        if value == alias or value.startswith(f"{alias}/"):
+            expanded.append(str(workspace / value[len(alias) :].lstrip("/")))
+    return tuple(expanded)
+
+
+def _evaluator_path_refusal(path: Path, state: AgentState) -> str:
+    """Refuse a code-fix edit that would rewrite its own evaluator."""
+    try:
+        target = (path if path.is_absolute() else state.workspace / path).resolve()
+    except OSError:
+        return ""
+    repository_control = _is_repository_control_path(path, state) or (
+        _shares_repository_control_inode(target, state)
+    )
+    if not _shares_evaluator_inode(target, state) and not repository_control:
+        return ""
+    if repository_control:
+        return (
+            f"code-fix refused: {target} is a repository control path. Keep .git "
+            "metadata and hooks immutable; change production source/config instead."
+        )
+    return (
+        f"code-fix refused: {target} is an evaluator/test path. Keep tests, fixtures "
+        "and expected answers immutable; change production source/config instead."
+    )
+
+
+def _code_fix_shell_has_output_option(words: list[str]) -> bool:
+    return any(
+        word.startswith("-o")
+        or word == "--basetemp"
+        or word.startswith("--basetemp=")
+        or (
+            word.startswith("-")
+            and any(
+                marker in word.lower()
+                for marker in ("output", "report", "cache", "junit", "xml", "html")
+            )
+        )
+        for word in words
+    )
+
+
+def _code_fix_shell_c_payloads(command: str) -> tuple[str, ...]:
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return ()
+    payloads: list[str] = []
+    for index, word in enumerate(words):
+        if PurePosixPath(word).name not in {"bash", "dash", "ksh", "sh", "zsh"}:
+            continue
+        for option_index in range(index + 1, len(words) - 1):
+            if words[option_index] in {"-c", "-ec", "-lc"}:
+                payloads.append(words[option_index + 1])
+                break
+            if not words[option_index].startswith("-"):
+                break
+    return tuple(payloads)
+
+
+def _code_fix_is_dynamic_loader(word: str) -> bool:
+    name = PurePosixPath(word).name.lower()
+    return (
+        name.startswith("ld-linux")
+        or name.startswith("ld-musl")
+        or name.startswith("ld64")
+        or name in {"ld.so", "ld.so.1"}
+    )
+
+
+def _code_fix_shell_has_find_mutation(command: str) -> bool:
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_find_mutation(nested_command):
+            return True
+    for nested in re.finditer(
+        r"\$\(([^()]*)\)|`([^`]*)`|\(([^()]*)\)|\{([^{}]*)\}", command
+    ):
+        nested_command = (
+            nested.group(1) or nested.group(2) or nested.group(3) or nested.group(4) or ""
+        )
+        if nested_command and _code_fix_shell_has_find_mutation(nested_command):
+            return True
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    return (
+        any(PurePosixPath(word).name == "find" for word in words)
+        and any(word in _FIND_MUTATION_OPTIONS for word in words)
+    )
+
+
+def _code_fix_shell_operator_flags(command: str) -> tuple[bool, bool]:
+    compound = False
+    output_redirect = False
+    quote: str | None = None
+    escaped = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quote = None
+            elif char == "`" or (char == "$" and command[index + 1 : index + 2] == "("):
+                compound = True
+            index += 1
+            continue
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char in {"'", '"'}:
+            quote = char
+        elif char in ";&|\n<" or char in "({" or char == "`":
+            compound = True
+        elif char == "$" and command[index + 1 : index + 2] == "(":
+            compound = True
+        elif char == ">":
+            output_redirect = True
+        index += 1
+    return compound, output_redirect
+
+
+def _code_fix_shell_has_compound_syntax(command: str) -> bool:
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_compound_syntax(nested_command):
+            return True
+    return _code_fix_shell_operator_flags(command)[0]
+
+
+def _code_fix_shell_redirect_targets(command: str) -> tuple[str, ...]:
+    targets: list[str] = []
+    quote: str | None = None
+    escaped = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\" and quote == '"':
+                escaped = True
+            elif char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if char != ">":
+            index += 1
+            continue
+        index += 1
+        if index < len(command) and command[index] == ">":
+            index += 1
+        while index < len(command) and command[index].isspace():
+            index += 1
+        if index >= len(command):
+            break
+        if command[index] in {"'", '"'}:
+            target_quote = command[index]
+            index += 1
+            start = index
+            while index < len(command) and command[index] != target_quote:
+                index += 1
+            targets.append(command[start:index])
+            if index < len(command):
+                index += 1
+            continue
+        start = index
+        while (
+            index < len(command)
+            and not command[index].isspace()
+            and command[index] not in ";|&<>"
+        ):
+            index += 1
+        if index > start:
+            targets.append(command[start:index])
+    return tuple(targets)
+
+
+def _code_fix_is_python_executable(word: str, workspace: Path | None = None) -> bool:
+    names = [PurePosixPath(word).name.lower()]
+    if workspace is not None and ("/" in word or "\\" in word):
+        try:
+            target = (Path(word) if Path(word).is_absolute() else workspace / word).resolve()
+            names.append(target.name.lower())
+        except OSError:
+            pass
+    return any(
+        re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", name) is not None
+        for name in names
+    )
+
+
+def _code_fix_executable_names(word: str, workspace: Path | None = None) -> set[str]:
+    names = {PurePosixPath(word).name.lower()}
+    if workspace is not None:
+        try:
+            candidate = Path(word) if Path(word).is_absolute() else workspace / word
+            if candidate.exists() or candidate.is_symlink():
+                names.add(candidate.resolve().name.lower())
+        except OSError:
+            pass
+    return names
+
+
+def _code_fix_shell_has_resolved_unsafe_executable(
+    command: str, state: AgentState
+) -> bool:
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_resolved_unsafe_executable(nested_command, state):
+            return True
+    try:
+        words = _code_fix_shell_unwrap_simple_wrappers(shlex.split(command))
+    except ValueError:
+        return False
+    if not words:
+        return False
+    raw_name = PurePosixPath(words[0]).name.lower()
+    names = _code_fix_executable_names(words[0], state.workspace)
+    resolved_names = names - {raw_name}
+    script_names = {
+        "awk",
+        "gawk",
+        "mawk",
+        "nawk",
+        "lua",
+        "luajit",
+        "node",
+        "nodejs",
+        "perl",
+        "php",
+        "rscript",
+        "ruby",
+        "tclsh",
+        "wish",
+        "bash",
+        "dash",
+        "ksh",
+        "sh",
+        "zsh",
+        "find",
+        "xargs",
+        "git",
+    }
+    return bool(
+        any(_code_fix_is_dynamic_loader(name) for name in resolved_names)
+        or resolved_names & (script_names | _OPAQUE_COMMAND_RUNNERS | _BROAD_MUTATORS)
+    )
+
+
+def _code_fix_shell_has_unknown_local_script_runner(
+    command: str, state: AgentState
+) -> bool:
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_unknown_local_script_runner(nested_command, state):
+            return True
+    try:
+        words = _code_fix_shell_unwrap_simple_wrappers(shlex.split(command))
+    except ValueError:
+        return False
+    if not words or "/" not in words[0]:
+        return False
+    raw_name = PurePosixPath(words[0]).name.lower()
+    known_names = (
+        set(READ_ONLY_SHELLS)
+        | set(_SHELL_WRAPPERS)
+        | set(_OPAQUE_COMMAND_RUNNERS)
+        | set(_BROAD_MUTATORS)
+        | set(_GIT_READ_ONLY_COMMANDS)
+        | {"git", "pytest", "py.test", "ruff", "mypy", "flake8", "pylint"}
+    )
+    if raw_name in known_names or _code_fix_is_python_executable(words[0], state.workspace):
+        return False
+    try:
+        executable = (Path(words[0]) if Path(words[0]).is_absolute() else state.workspace / words[0])
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            return False
+    except OSError:
+        return False
+    return True
+
+
+def _code_fix_shell_has_compiler_plugin(command: str) -> bool:
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_compiler_plugin(nested_command):
+            return True
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    words = _code_fix_shell_unwrap_simple_wrappers(words)
+    executable_name = PurePosixPath(words[0]).name.lower() if words else ""
+    compiler_names = {
+        "cc",
+        "c++",
+        "clang",
+        "clang-cpp",
+        "clang++",
+        "clang-cl",
+        "clang-tidy",
+        "gcc",
+        "g++",
+        "gcc-ar",
+        "gcc-nm",
+        "gcc-ranlib",
+        "ld",
+        "ld.bfd",
+        "ld.gold",
+        "ld.lld",
+        "nm",
+        "ranlib",
+        "objcopy",
+        "objdump",
+        "readelf",
+        "strip",
+    }
+    versioned_driver = any(
+        re.fullmatch(rf"{re.escape(base)}-\d+(?:\.\d+)*", executable_name)
+        for base in {
+            "cc",
+            "c++",
+            "clang",
+            "clang-cpp",
+            "clang++",
+            "clang-cl",
+            "clang-tidy",
+            "gcc",
+            "g++",
+            "gcc-ar",
+            "gcc-nm",
+            "gcc-ranlib",
+            "ld",
+            "ld.bfd",
+            "ld.gold",
+            "ld.lld",
+        }
+    )
+    if not words or (executable_name not in compiler_names and not versioned_driver):
+        return False
+    if any(word.startswith("@") for word in words[1:]):
+        return True
+    linker_names = {"ld", "ld.bfd", "ld.gold", "ld.lld"}
+    versioned_linker = any(
+        re.fullmatch(rf"{re.escape(base)}-\d+(?:\.\d+)*", executable_name)
+        for base in linker_names
+    )
+    if (executable_name in linker_names or versioned_linker) and any(
+        word == "-c"
+        or word == "--mri-script"
+        or word.startswith("--mri-script=")
+        for word in words[1:]
+    ):
+        return True
+    return any(
+        word == "-fplugin"
+        or word.startswith("-fplugin=")
+        or word.startswith("-fplugin-arg-")
+        or word == "-fpass-plugin"
+        or word.startswith("-fpass-plugin=")
+        or word == "-load"
+        or word.startswith("-load=")
+        or word == "--config"
+        or word.startswith("--config=")
+        or word == "-B"
+        or (word.startswith("-B") and len(word) > 2)
+        or word == "-T"
+        or (word.startswith("-T") and len(word) > 2)
+        or word == "--script"
+        or word.startswith("--script=")
+        or word == "--default-script"
+        or word.startswith("--default-script=")
+        or word == "-dT"
+        or (word.startswith("-dT") and len(word) > 2)
+        or word == "--error-handling-script"
+        or word.startswith("--error-handling-script=")
+        or word == "-specs"
+        or word.startswith("-specs=")
+        or word == "-wrapper"
+        or word.startswith("-wrapper=")
+        or word == "-Xclang"
+        or word.startswith("-Xclang=")
+        or word == "-cc1"
+        or word == "-Xlinker"
+        or word.startswith("-Xlinker=")
+        or word.lower().startswith("/clang:")
+        or word == "-plugin"
+        or word.startswith("-plugin=")
+        or word == "--plugin"
+        or word.startswith("--plugin=")
+        or word == "-plugin-opt"
+        or word.startswith("-plugin-opt=")
+        or (
+            word.startswith("-Wl,")
+            and any(
+                part == "-plugin"
+                or part.startswith("-plugin=")
+                or part == "-plugin-opt"
+                or part.startswith("-plugin-opt=")
+                or part == "--plugin"
+                or part.startswith("--plugin=")
+                or part == "--plugin-opt"
+                or part.startswith("--plugin-opt=")
+                or part == "-T"
+                or (part.startswith("-T") and len(part) > 2)
+                or part == "--script"
+                or part.startswith("--script=")
+                or part == "--default-script"
+                or part.startswith("--default-script=")
+                or part == "-dT"
+                or (part.startswith("-dT") and len(part) > 2)
+                or part == "--error-handling-script"
+                or part.startswith("--error-handling-script=")
+                or part == "-c"
+                or part == "--mri-script"
+                or part.startswith("--mri-script=")
+                for part in word[4:].split(",")
+            )
+        )
+        for word in words[1:]
+    )
+
+
+def _code_fix_shell_has_evaluator_redirect(command: str, state: AgentState) -> bool:
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_evaluator_redirect(nested_command, state):
+            return True
+    for target_text in _code_fix_shell_redirect_targets(command):
+        if _shares_code_fix_protected_inode(Path(target_text), state):
+            return True
+    return False
+
+
+def _code_fix_shell_has_evaluator_operand(command: str, state: AgentState) -> bool:
+    """Catch mutating commands that name a production alias, not the evaluator."""
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_evaluator_operand(nested_command, state):
+            return True
+    if _code_fix_shell_is_read_only(command):
+        return False
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    for word in words:
+        candidates = [word]
+        if "=" in word:
+            candidates.append(word.split("=", 1)[1])
+        if word.startswith("-o") and len(word) > 2:
+            candidates.append(word[2:])
+        if word.startswith("-MF") and len(word) > 3:
+            candidates.append(word[3:])
+        if word.startswith("-Wl,"):
+            linker_parts = word[4:].split(",")
+            for index, part in enumerate(linker_parts):
+                if part in {"-Map", "--Map"} and index + 1 < len(linker_parts):
+                    candidates.append(linker_parts[index + 1])
+                if part.startswith(("-Map=", "--Map=")):
+                    candidates.append(part.split("=", 1)[1])
+                if part == "--dependency-file" and index + 1 < len(linker_parts):
+                    candidates.append(linker_parts[index + 1])
+                if part.startswith("--dependency-file="):
+                    candidates.append(part.split("=", 1)[1])
+        if word.startswith("-"):
+            candidates = [candidate for candidate in candidates if not candidate.startswith("-")]
+        for candidate in candidates:
+            if candidate.startswith("$"):
+                return True
+            for expanded in _code_fix_shell_expand_workspace_alias(candidate, state):
+                if expanded and _shares_code_fix_protected_inode(Path(expanded), state):
+                    return True
+    return False
+
+
+def _code_fix_shell_is_read_only(command: str) -> bool:
+    """Allow common test/read commands while leaving arbitrary shell mutation visible."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    if not words or any(_code_fix_shell_operator_flags(command)):
+        return False
+    if any(word in _FIND_MUTATION_OPTIONS for word in words):
+        return False
+    executable = PurePosixPath(words[0]).name
+    if executable in READ_ONLY_SHELLS:
+        return True
+    if executable in {"pytest", "py.test"}:
+        return not _code_fix_shell_has_output_option(words[1:])
+    if executable == "ruff":
+        if len(words) < 2:
+            return False
+        if words[1] == "check":
+            return not any(
+                word == "--fix" or word.startswith("--fix=") for word in words[2:]
+            ) and not _code_fix_shell_has_output_option(words[2:])
+        return (
+            words[1] == "format"
+            and "--check" in words[2:]
+            and not _code_fix_shell_has_output_option(words[2:])
+        )
+    if executable in {"mypy", "flake8", "pylint"}:
+        return not _code_fix_shell_has_output_option(words[1:])
+    if _code_fix_is_python_executable(words[0]):
+        if len(words) < 3 or words[1] != "-m" or words[2] not in {"pytest", "compileall"}:
+            return False
+        return not _code_fix_shell_has_output_option(words[3:])
+    if executable == "git":
+        return (
+            len(words) >= 2
+            and words[1] in _GIT_READ_ONLY_COMMANDS
+            and "--ext-diff" not in words[2:]
+            and not any(
+                word == "-o"
+                or (word.startswith("-o") and not word.startswith("--"))
+                or word == "--output"
+                or word.startswith("--output=")
+                for word in words[2:]
+            )
+        )
+    return False
+
+
+def _code_fix_shell_has_glob_mutation(command: str) -> bool:
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    if not any(any(marker in word for marker in "*?[") for word in words):
+        return False
+    return not _code_fix_shell_is_read_only(command)
+
+
+def _code_fix_shell_has_xargs(command: str) -> bool:
+    if re.search(r"(?<![a-z0-9_./-])xargs(?=\s|$)", command, re.I):
+        return True
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        words = []
+    if any(PurePosixPath(word).name == "xargs" for word in words):
+        return True
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_xargs(nested_command):
+            return True
+    for nested in re.finditer(
+        r"\$\(([^()]*)\)|`([^`]*)`|\(([^()]*)\)|\{([^{}]*)\}", command
+    ):
+        nested_command = (
+            nested.group(1) or nested.group(2) or nested.group(3) or nested.group(4) or ""
+        )
+        if nested_command and _code_fix_shell_has_xargs(nested_command):
+            return True
+    return False
+
+
+def _code_fix_shell_strip_assignments(words: list[str]) -> list[str]:
+    while len(words) > 1 and re.fullmatch(r"[a-z_][a-z0-9_]*=.*", words[0], re.I):
+        words = words[1:]
+    return words
+
+
+def _code_fix_shell_unwrap_simple_wrappers(words: list[str]) -> list[str]:
+    words = _code_fix_shell_strip_assignments(words)
+    while words and PurePosixPath(words[0]).name in {
+        "builtin",
+        "command",
+        "env",
+        "exec",
+        "nohup",
+        "sudo",
+    }:
+        wrapper = PurePosixPath(words.pop(0)).name
+        if wrapper == "env":
+            while words:
+                option = words[0]
+                if "=" in option and not option.startswith("-"):
+                    words.pop(0)
+                    continue
+                if option == "--":
+                    words.pop(0)
+                    break
+                if option in {"-u", "--unset", "-C", "--chdir", "-a", "--argv0"}:
+                    words.pop(0)
+                    if words:
+                        words.pop(0)
+                    continue
+                if (
+                    option.startswith("-u")
+                    and not option.startswith("--")
+                    or option.startswith("--unset=")
+                    or option.startswith("-C")
+                    and not option.startswith("--")
+                    or option.startswith("--chdir=")
+                    or option.startswith("-a")
+                    and not option.startswith("--")
+                    or option.startswith("--argv0=")
+                ):
+                    words.pop(0)
+                    continue
+                if option.startswith("-"):
+                    words.pop(0)
+                    continue
+                break
+        else:
+            while words and words[0].startswith("-"):
+                option = words.pop(0)
+                if wrapper == "exec" and (
+                    option == "-a"
+                    or option.startswith("-a")
+                    and not option.startswith("--")
+                ):
+                    if option == "-a" and words:
+                        words.pop(0)
+        words = _code_fix_shell_strip_assignments(words)
+    return words
+
+
+def _code_fix_shell_has_eval(command: str) -> bool:
+    try:
+        words = _code_fix_shell_unwrap_simple_wrappers(shlex.split(command))
+    except ValueError:
+        words = []
+    if words and PurePosixPath(words[0]).name == "eval":
+        return True
+    return any(_code_fix_shell_has_eval(payload) for payload in _code_fix_shell_c_payloads(command))
+
+
+def _code_fix_shell_has_trap(command: str) -> bool:
+    """Reject exit handlers whose quoted body can mutate after the tool returns."""
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_trap(nested_command):
+            return True
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    return any(PurePosixPath(word).name == "trap" for word in words)
+
+
+def _code_fix_shell_has_env_split_string(command: str) -> bool:
+    """Reject GNU env's option that reparses one opaque string as a command."""
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_env_split_string(nested_command):
+            return True
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    env_seen = False
+    for word in words:
+        if PurePosixPath(word).name == "env":
+            env_seen = True
+            continue
+        if env_seen and (
+            word == "-S"
+            or word.startswith("-S")
+            or word == "--split-string"
+            or word.startswith("--split-string=")
+        ):
+            return True
+    return False
+
+
+def _code_fix_shell_has_opaque_runner(command: str) -> bool:
+    """Reject tools that execute a quoted command outside this parser's grammar."""
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_opaque_runner(nested_command):
+            return True
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    return any(
+        PurePosixPath(word).name in _OPAQUE_COMMAND_RUNNERS
+        or _code_fix_is_dynamic_loader(word)
+        for word in words
+    )
+
+
+def _code_fix_shell_has_startup_hook_assignment(command: str) -> bool:
+    """Reject assignments that load code or select an untrusted executable."""
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_startup_hook_assignment(nested_command):
+            return True
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    for word in words:
+        if "=" not in word:
+            continue
+        name = word.split("=", 1)[0].rstrip("+").upper()
+        if (
+            name in _CODE_LOADING_ASSIGNMENTS
+            or name.startswith("GIT_CONFIG_")
+            or name.startswith(("LUA_CPATH_", "LUA_INIT_", "LUA_PATH_"))
+            or (name.startswith("BASH_FUNC_") and name.endswith("%%"))
+        ):
+            return True
+    return False
+
+
+def _code_fix_python_module(words: list[str]) -> str | None:
+    """Return a Python -m module, including attached ``-mMODULE`` syntax."""
+    for index, word in enumerate(words[1:], start=1):
+        if word == "-m":
+            return words[index + 1] if index + 1 < len(words) else ""
+        if word.startswith("-m") and not word.startswith("--"):
+            return word[2:]
+    return None
+
+
+def _code_fix_shell_has_pytest_plugin_option(command: str) -> bool:
+    """Reject pytest plugin imports hidden in otherwise read-only test commands."""
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_pytest_plugin_option(nested_command):
+            return True
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    if not any(
+        PurePosixPath(word).name in {"pytest", "py.test"} for word in words
+    ) and "pytest" not in command:
+        return False
+    return any(
+        word == "-p"
+        or (word.startswith("-p") and not word.startswith("--"))
+        or word == "-o"
+        or (word.startswith("-o") and not word.startswith("--"))
+        or word == "-c"
+        or (word.startswith("-c") and not word.startswith("--"))
+        or word == "--plugin"
+        or word.startswith("--plugin=")
+        or word == "--pyargs"
+        or word == "--doctest-modules"
+        or word == "--doctest-glob"
+        or word.startswith("--doctest-glob=")
+        or word == "--override-ini"
+        or word.startswith("--override-ini=")
+        or word == "--pdbcls"
+        or word.startswith("--pdbcls=")
+        or word == "--debug"
+        or word.startswith("--debug=")
+        or word == "--config-file"
+        or word.startswith("--config-file=")
+        or word == "--rootdir"
+        or word.startswith("--rootdir=")
+        or word == "--log-file"
+        or word.startswith("--log-file=")
+        for word in words
+    )
+
+
+def _code_fix_shell_has_python_script(
+    command: str, workspace: Path | None = None
+) -> bool:
+    try:
+        words = _code_fix_shell_unwrap_simple_wrappers(shlex.split(command))
+    except ValueError:
+        words = []
+    if words and _code_fix_is_python_executable(words[0], workspace):
+        if any(word == "-c" or word.startswith("-c") for word in words[1:]):
+            return True
+        module = _code_fix_python_module(words)
+        return module is not None and module not in {"pytest", "compileall"}
+    return any(
+        _code_fix_shell_has_python_script(payload, workspace)
+        for payload in _code_fix_shell_c_payloads(command)
+    )
+
+
+def _code_fix_shell_has_script_invocation(
+    command: str, workspace: Path | None = None
+) -> bool:
+    try:
+        words = _code_fix_shell_unwrap_simple_wrappers(shlex.split(command))
+    except ValueError:
+        words = []
+    if not words:
+        return False
+    executable = PurePosixPath(words[0]).name
+    executable_names = _code_fix_executable_names(words[0], workspace)
+    shell_names = {"bash", "dash", "ksh", "sh", "zsh"}
+    if executable not in shell_names and executable_names & shell_names:
+        return True
+    if executable in shell_names:
+        for word in words[1:]:
+            if word in {"-c", "-ec", "-lc"}:
+                break
+            if word == "--" or word.startswith("-"):
+                continue
+            return True
+    if words[0] in {".", "source"}:
+        return len(words) > 1
+    if _code_fix_is_python_executable(words[0], workspace):
+        if any(word == "-c" or word.startswith("-c") for word in words[1:]):
+            return True
+        module = _code_fix_python_module(words)
+        if module is not None:
+            return module not in {"pytest", "compileall"}
+        return any(not word.startswith("-") for word in words[1:])
+    if executable in {
+        "lua",
+        "luajit",
+        "node",
+        "nodejs",
+        "perl",
+        "php",
+        "Rscript",
+        "ruby",
+        "tclsh",
+        "wish",
+    }:
+        if executable in {"node", "nodejs"} and any(
+            word == "--run" or word.startswith("--run=") for word in words[1:]
+        ):
+            return True
+        if executable in {"node", "nodejs"} and any(
+            word == "--env-file"
+            or word.startswith("--env-file=")
+            or word == "--env-file-if-exists"
+            or word.startswith("--env-file-if-exists=")
+            for word in words[1:]
+        ):
+            return True
+        if executable in {"node", "nodejs"} and any(
+            word in {
+                "--experimental-default-config-file",
+                "--experimental-config-file",
+            }
+            or word.startswith("--experimental-config-file=")
+            for word in words[1:]
+        ):
+            return True
+        if executable in {"node", "nodejs"} and any(
+            word == "--snapshot-blob"
+            or word.startswith("--snapshot-blob=")
+            or word == "--build-snapshot"
+            or word == "--build-snapshot-config"
+            or word.startswith("--build-snapshot-config=")
+            for word in words[1:]
+        ):
+            return True
+        if executable in {"lua", "luajit"} and any(
+            word == "-l" or word.startswith("-l") for word in words[1:]
+        ):
+            return True
+        if executable in {"lua", "luajit"} and any(
+            word in {"-e", "-E"}
+            or word.startswith(("-e", "-E"))
+            for word in words[1:]
+        ):
+            return True
+        if executable == "perl" and any(
+            word in {"-M", "-m", "-d", "-p", "-n", "-e", "-E"}
+            or word.startswith(("-M", "-m", "-d", "-p", "-n", "-e", "-E"))
+            for word in words[1:]
+        ):
+            return True
+        if executable in {"node", "nodejs"} and any(
+            word in {"-r", "--require", "--loader", "--import"}
+            or word.startswith(
+                ("-r", "--require=", "--loader=", "--import=", "--experimental-loader=")
+            )
+            or word in {"--experimental-loader"}
+            for word in words[1:]
+        ):
+            return True
+        if any(
+            word in {"-e", "--eval", "-n", "-p", "-r"}
+            or word.startswith(("--eval=", "-e="))
+            for word in words[1:]
+        ):
+            return True
+        return any(not word.startswith("-") for word in words[1:])
+    if executable in {"awk", "gawk", "mawk", "nawk"}:
+        return True
+    return any(
+        _code_fix_shell_has_script_invocation(payload, workspace)
+        for payload in _code_fix_shell_c_payloads(command)
+    )
+
+
+def _code_fix_shell_word_is_workspace_root(word: str, workspace: Path) -> bool:
+    for alias in ("$PWD", "${PWD}"):
+        if word.startswith(alias):
+            try:
+                if (workspace / word[len(alias) :].lstrip("/")).resolve() == workspace:
+                    return True
+            except OSError:
+                pass
+    if word in {".", "./", "..", "../", "$PWD", "${PWD}"} or any(
+        word.startswith(alias) and word[len(alias) :] in {"/", "/.", "/./"}
+        for alias in ("$PWD", "${PWD}")
+    ):
+        return True
+    try:
+        target = (Path(word) if Path(word).is_absolute() else workspace / word).resolve()
+    except OSError:
+        return False
+    return target == workspace
+
+
+def _code_fix_shell_has_broad_workspace_mutation(command: str, state: AgentState) -> bool:
+    try:
+        raw_words = shlex.split(command)
+        workspace = state.workspace.resolve()
+    except (OSError, ValueError):
+        return False
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_broad_workspace_mutation(nested_command, state):
+            return True
+    words = _code_fix_shell_unwrap_simple_wrappers(raw_words)
+    executable = PurePosixPath(words[0]).name if words else ""
+    if executable not in _BROAD_MUTATORS:
+        return False
+    if executable in {
+        "cmake",
+        "aria2c",
+        "curl",
+        "make",
+        "m4",
+        "ninja",
+        "npm",
+        "npx",
+        "patch",
+        "pip",
+        "pip3",
+        "scp",
+        "sftp",
+        "uv",
+        "wget",
+        "7z",
+        "ar",
+        "bsdtar",
+        "cpio",
+        "docker",
+        "ex",
+        "gdb",
+        "jar",
+        "java",
+        "jshell",
+        "jjs",
+        "lldb",
+        "nerdctl",
+        "podman",
+        "vim",
+        "nvim",
+    }:
+        return True
+    if executable == "go":
+        return True
+    if executable == "tar" and any(
+        word in {"--extract", "--get"}
+        or word.startswith("--extract=")
+        or word.startswith("--get=")
+        or word == "--checkpoint-action"
+        or word.startswith("--checkpoint-action=")
+        or (word.startswith("-") and not word.startswith("--") and "x" in word[1:])
+        for word in words[1:]
+    ):
+        return True
+    if executable == "unzip" and not any(
+        word in {"-l", "--list", "-t", "--test"} for word in words[1:]
+    ):
+        return True
+    attached_targets: list[str] = []
+    if executable == "tar":
+        attached_targets.extend(
+            word.split("=", 1)[1]
+            for word in words[1:]
+            if word.startswith("--directory=")
+        )
+        attached_targets.extend(word[2:] for word in words[1:] if word.startswith("-C") and word != "-C")
+    elif executable == "unzip":
+        attached_targets.extend(
+            word.split("=", 1)[1]
+            for word in words[1:]
+            if word.startswith("--extract-dir=")
+        )
+        attached_targets.extend(word[2:] for word in words[1:] if word.startswith("-d") and word != "-d")
+    if any(_code_fix_shell_word_is_workspace_root(word, workspace) for word in attached_targets):
+        return True
+    for word in words[1:]:
+        if word == "--" or word.startswith("-"):
+            continue
+        if _code_fix_shell_word_is_workspace_root(word, workspace):
+            return True
+    return False
+
+
+def _code_fix_shell_has_git_mutation(command: str) -> bool:
+    for nested in re.finditer(
+        r"\$\(([^()]*)\)|`([^`]*)`|\(([^()]*)\)|\{([^{}]*)\}", command
+    ):
+        nested_command = (
+            nested.group(1) or nested.group(2) or nested.group(3) or nested.group(4) or ""
+        )
+        if nested_command and _code_fix_shell_has_git_mutation(nested_command):
+            return True
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    words = _code_fix_shell_strip_assignments(words)
+    if not _code_fix_shell_is_read_only(command) and any(
+        match.group(1).lower() not in _GIT_READ_ONLY_COMMANDS
+        for match in _GIT_COMMAND_ANYWHERE.finditer(command)
+    ):
+        return True
+    if any(
+        match.group(1).lower() not in _GIT_READ_ONLY_COMMANDS
+        for match in _GIT_MUTATION_AFTER_SEPARATOR.finditer(command)
+    ):
+        return True
+    executable = PurePosixPath(words[0]).name if words else ""
+    if executable == "git":
+        return len(words) >= 2 and words[1] not in _GIT_READ_ONLY_COMMANDS
+    if executable not in _SHELL_WRAPPERS:
+        return False
+    for index, word in enumerate(words[:-1]):
+        if PurePosixPath(word).name == "git" and words[index + 1] not in _GIT_READ_ONLY_COMMANDS:
+            return True
+    if any(
+        match.group(1) not in _GIT_READ_ONLY_COMMANDS
+        for word in words
+        for match in [re.search(r"(?<![a-z0-9_./-])git\s+([a-z][a-z0-9-]*)(?=\s|$)", word, re.I)]
+        if match
+    ):
+        return True
+    return False
+
+
+def _code_fix_shell_has_git_external_diff(command: str) -> bool:
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_git_external_diff(nested_command):
+            return True
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    for index, word in enumerate(words):
+        if PurePosixPath(word).name != "git":
+            continue
+        tail = words[index + 1 :]
+        if any(option in tail for option in {"--ext-diff", "--textconv", "--submodule=diff"}):
+            return True
+        if any(
+            option == "--submodule" and next_option == "diff"
+            for option, next_option in zip(tail, tail[1:])
+        ):
+            return True
+    return False
+
+
+def _code_fix_git_config_execution_modes(state: AgentState) -> tuple[bool, bool, bool]:
+    """Read local Git config markers without invoking Git or any configured hook."""
+    try:
+        git_marker = state.workspace.resolve() / ".git"
+    except OSError:
+        return False, False, False
+    config_roots: list[Path] = []
+    try:
+        if git_marker.is_file():
+            marker_text = git_marker.read_text(encoding="utf-8", errors="ignore")
+            gitdir_line = next(
+                (line for line in marker_text.splitlines() if line.lower().startswith("gitdir:")),
+                "",
+            )
+            if gitdir_line:
+                gitdir = Path(gitdir_line.split(":", 1)[1].strip())
+                worktree_gitdir = (
+                    (git_marker.parent / gitdir).resolve()
+                    if not gitdir.is_absolute()
+                    else gitdir
+                )
+                config_roots.append(worktree_gitdir)
+                commondir_file = worktree_gitdir / "commondir"
+                if commondir_file.is_file():
+                    common = Path(
+                        commondir_file.read_text(encoding="utf-8", errors="ignore").strip()
+                    )
+                    config_roots.append(
+                        (worktree_gitdir / common).resolve()
+                        if not common.is_absolute()
+                        else common
+                    )
+        elif git_marker.is_dir():
+            config_roots.append(git_marker)
+    except OSError:
+        return False, False, False
+    config_paths: set[Path] = set()
+    for root in config_roots:
+        config_paths.add(root / "config")
+        config_paths.add(root / "config.worktree")
+        try:
+            config_paths.update(root.rglob("config"))
+            config_paths.update(root.rglob("config.worktree"))
+        except OSError:
+            continue
+    has_external = False
+    has_textconv = False
+    has_unsafe_config = False
+    for config_path in config_paths:
+        try:
+            text = config_path.read_text(encoding="utf-8", errors="ignore")[:1_000_000]
+        except OSError:
+            continue
+        has_external |= re.search(
+            r"(?im)^\s*(?:external|command|clean|smudge|process)\s*=", text
+        ) is not None
+        has_textconv |= re.search(r"(?im)^\s*textconv\s*=", text) is not None
+        has_unsafe_config |= re.search(
+            r"(?im)^\s*(?:path|includeif|fsmonitor)\s*=", text
+        ) is not None
+    return has_external, has_textconv, has_unsafe_config
+
+
+def _code_fix_shell_has_configured_git_execution(command: str, state: AgentState) -> bool:
+    for nested_command in _code_fix_shell_c_payloads(command):
+        if _code_fix_shell_has_configured_git_execution(nested_command, state):
+            return True
+    has_external, has_textconv, has_unsafe_config = _code_fix_git_config_execution_modes(state)
+    if not has_external and not has_textconv and not has_unsafe_config:
+        return False
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    for index, word in enumerate(words):
+        if PurePosixPath(word).name != "git" or index + 1 >= len(words):
+            continue
+        subcommand = words[index + 1]
+        tail = words[index + 1 :]
+        if has_unsafe_config:
+            return True
+        if subcommand == "diff":
+            if has_external and "--no-ext-diff" not in tail:
+                return True
+            if has_textconv and "--no-textconv" not in tail:
+                return True
+        elif subcommand == "show" and has_textconv and "--no-textconv" not in tail:
+            return True
+        elif subcommand == "log" and has_textconv and any(
+            option in tail for option in {"-p", "--patch"}
+        ) and "--no-textconv" not in tail:
+            return True
+    return False
+
+
+def _code_fix_shell_refusal(command: str, state: AgentState) -> str:
+    """Reject an explicit shell mutation aimed at the evaluator, not source edits."""
+    try:
+        workspace_text = str(state.workspace.resolve()).lower()
+    except OSError:
+        workspace_text = ""
+    command_for_path_scan = command.lower().replace(workspace_text, "") if workspace_text else command.lower()
+    if (
+        _code_fix_shell_has_compound_syntax(command)
+        or _code_fix_shell_has_find_mutation(command)
+        or _code_fix_shell_has_glob_mutation(command)
+        or _code_fix_shell_has_resolved_unsafe_executable(command, state)
+        or _code_fix_shell_has_unknown_local_script_runner(command, state)
+        or _code_fix_shell_has_compiler_plugin(command)
+        or _code_fix_shell_has_git_mutation(command)
+        or _code_fix_shell_has_git_external_diff(command)
+        or _code_fix_shell_has_configured_git_execution(command, state)
+        or _code_fix_shell_has_xargs(command)
+        or _code_fix_shell_has_broad_workspace_mutation(command, state)
+        or _code_fix_shell_has_eval(command)
+        or _code_fix_shell_has_trap(command)
+        or _code_fix_shell_has_env_split_string(command)
+        or _code_fix_shell_has_opaque_runner(command)
+        or _code_fix_shell_has_startup_hook_assignment(command)
+        or _code_fix_shell_has_python_script(command, state.workspace)
+        or _code_fix_shell_has_script_invocation(command, state.workspace)
+        or _code_fix_shell_has_pytest_plugin_option(command)
+        or _code_fix_shell_has_evaluator_redirect(command, state)
+        or _code_fix_shell_has_evaluator_operand(command, state)
+    ):
+        return (
+            "code-fix refused: this shell command may mutate an evaluator/test or "
+            "repository control path. Keep tests, fixtures, expected answers and "
+            ".git metadata immutable; use a read-only single command or edit "
+            "production source/config instead."
+        )
+    if (
+        _code_fix_shell_is_read_only(command)
+        or not _EVALUATOR_TOKEN.search(command_for_path_scan)
+    ):
+        return ""
+    return (
+        "code-fix refused: this shell command may mutate an evaluator/test or "
+        "repository control path. Keep tests, fixtures, expected answers and .git "
+        "metadata immutable; use a read-only test command or edit production "
+        "source/config instead."
+    )
+
+
+def _execute(
+    tool: str,
+    args: dict[str, object],
+    state: AgentState,
+    *,
+    playbook: Playbook,
+) -> tools.ToolResult:
     """Run one action. Every failure comes back as a `ToolResult`, never as a raise."""
     secrets = state.secrets
 
     if tool == prompt.RUN_SHELL:
+        if playbook.name == "code-fix":
+            refusal = _code_fix_shell_refusal(str(args["command"]), state)
+            if refusal:
+                return tools.ToolResult(name=tool, ok=False, detail=refusal)
         return tools.run_shell(
             str(args["command"]),
             cwd=state.workspace,
@@ -643,6 +2181,10 @@ def _execute(tool: str, args: dict[str, object], state: AgentState) -> tools.Too
         return tools.search(str(args["pattern"]), Path(str(args["path"])), secrets=secrets)
 
     target = Path(str(args["path"]))
+    if playbook.name == "code-fix" and tool in {prompt.WRITE_FILE, prompt.REPLACE_TEXT}:
+        refusal = _evaluator_path_refusal(target, state)
+        if refusal:
+            return tools.ToolResult(name=tool, ok=False, detail=refusal)
     if tool == prompt.REPLACE_TEXT:
         result = tools.replace_text(
             target,

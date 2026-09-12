@@ -15,6 +15,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
+import subprocess
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -551,6 +555,5733 @@ def test_code_fix_can_finish_after_a_source_edit(tmp_path: Path) -> None:
 
     assert outcome.solved is True
     assert outcome.deliverable == target
+
+
+def test_code_fix_cannot_mutate_evaluator_tests(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "replace_text",
+                path=str(target),
+                old="assert status == 200",
+                new="assert status == 400",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="hardlink semantics differ on Windows")
+@pytest.mark.parametrize("tool", ["write_file", "replace_text"])
+def test_code_fix_cannot_edit_evaluator_through_hardlink(
+    tmp_path: Path, tool: str
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    if tool == "write_file":
+        reply = action(tool, path=str(alias), content="value = 900\n")
+    else:
+        reply = action(
+            tool,
+            path=str(alias),
+            old="value = 200",
+            new="value = 900",
+        )
+    outcome = run(state, StubLlm(replies=[reply]), FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="hardlink semantics differ on Windows")
+def test_code_fix_cannot_redirect_to_external_named_evaluator_through_hardlink(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    target = tmp_path / "srv" / "tests" / "test_api.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = workspace / "app.py"
+    alias.hardlink_to(target)
+    state = AgentState(
+        instruction=f"Fix the bug in {target}.",
+        workspace=workspace,
+        budget=Budget(total_s=600.0, clock=lambda: 0.0),
+        named_paths=(target,),
+    )
+    state.source_snapshot = result_progress.snapshot_sources(workspace)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="printf 'value = 900\\n' > app.py",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_the_evaluator_path_guard_is_scoped_to_code_fix(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.txt"
+    state = make_state(tmp_path)
+    state.budget.max_steps = 1
+    llm = StubLlm(replies=[action("write_file", path=str(target), content="data")])
+
+    run(state, llm, FakeVerify(), playbook=playbooks.GENERAL)
+
+    assert target.read_text(encoding="utf-8") == "data"
+
+
+def test_code_fix_cannot_mutate_evaluator_tests_through_shell(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"printf 'assert status = 400\\n' > '{target}'",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_guard_covers_named_evaluator_paths_outside_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    target = tmp_path / "srv" / "tests" / "test_api.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = AgentState(
+        instruction=f"Fix the bug in {target}.",
+        workspace=workspace,
+        budget=Budget(total_s=600.0, clock=lambda: 0.0),
+        named_paths=(target,),
+    )
+    state.source_snapshot = result_progress.snapshot_sources(workspace)
+    llm = StubLlm(
+        replies=[action("write_file", path=str(target), content="assert status == 400\n")]
+    )
+
+    outcome = loop.run(
+        state,
+        llm,
+        FakeVerify(),
+        brief=make_brief(workspace),
+        playbook=playbooks.CODE_FIX,
+    )
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_hide_evaluator_mutation_in_find_exec(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"find '{target.parent}' -name test_api.py -exec sed -i 's/200/400/' {{}} +",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_mutate_evaluator_tests_through_find_glob_delete(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="find . -name 'test_*.py' -delete",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_mutate_evaluator_tests_through_shell_glob(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="sed -i 's/200/400/' t*sts/fixture.py",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_find_fprint_on_evaluator_tests(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"find '{target.parent}' -type f -fprint '{target}'",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_find_fprint0_on_evaluator_tests(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"find '{target.parent}' -type f -fprint0 '{target}'",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_workspace_named_tests_does_not_block_production_source(tmp_path: Path) -> None:
+    workspace = tmp_path / "tests"
+    workspace.mkdir()
+    target = workspace / "app.py"
+    target.write_text("answer = 1\n", encoding="utf-8")
+    state = make_state(workspace)
+    state.source_snapshot = result_progress.snapshot_sources(workspace)
+    state.budget.max_steps = 1
+    llm = StubLlm(replies=[action("write_file", path=str(target), content="answer = 2\n")])
+
+    run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "answer = 2\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_workspace_named_tests_does_not_block_production_shell_edit(tmp_path: Path) -> None:
+    workspace = tmp_path / "tests"
+    workspace.mkdir()
+    target = workspace / "app.py"
+    target.write_text("answer = 1\n", encoding="utf-8")
+    state = make_state(workspace)
+    state.source_snapshot = result_progress.snapshot_sources(workspace)
+    state.budget.max_steps = 1
+    llm = StubLlm(
+        replies=[action("run_shell", command=f"printf 'answer = 2\\n' > '{target}'")]
+    )
+
+    run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "answer = 2\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_allows_quoted_shell_separator_in_production_write(tmp_path: Path) -> None:
+    target = tmp_path / "app.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.budget.max_steps = 1
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"printf 'value = 2;\\n' > '{target}'",
+            )
+        ]
+    )
+
+    run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 2;\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink semantics differ on Windows")
+def test_code_fix_cannot_redirect_through_source_symlink_into_evaluator(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    source = tmp_path / "app.py"
+    source.symlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="printf 'value = 900\\n' > app.py",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="hardlink semantics differ on Windows")
+def test_code_fix_cannot_redirect_through_hardlink_into_evaluator(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="printf 'value = 900\\n' > app.py",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="hardlink semantics differ on Windows")
+def test_code_fix_cannot_redirect_through_nested_shell_into_evaluator(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command='sh -c "echo value > app.py"',
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="hardlink semantics differ on Windows")
+def test_code_fix_cannot_redirect_through_combined_shell_option_into_evaluator(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command='sh -xc "echo value > app.py"',
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell builtins differ on Windows")
+def test_code_fix_cannot_hide_evaluator_mutation_behind_builtin_eval(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="builtin eval 'printf bad > app.py'",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="hardlink semantics differ on Windows")
+def test_code_fix_cannot_redirect_through_env_alias_into_evaluator(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="env TARGET=app.py sh -c 'printf bad > \"$TARGET\"'",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="hardlink semantics differ on Windows")
+def test_code_fix_cannot_redirect_through_pwd_env_alias_into_evaluator(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="env TARGET=\"$PWD/app.py\" sh -c 'printf bad > \"$TARGET\"'",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="hardlink semantics differ on Windows")
+def test_code_fix_cannot_hide_evaluator_redirect_in_trap_handler(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="trap 'printf bad > app.py' 0",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="hardlink semantics differ on Windows")
+def test_code_fix_cannot_hide_evaluator_mutation_in_env_split_string(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command='env -S "truncate -s 0 app.py"',
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="hardlink semantics differ on Windows")
+def test_code_fix_cannot_hide_evaluator_mutation_in_opaque_runner(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command='parallel "truncate -s 0 app.py"',
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="hardlink semantics differ on Windows")
+def test_code_fix_cannot_hide_evaluator_mutation_in_bash_env_hook(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    hook = tmp_path / "payload.sh"
+    hook.write_text("printf bad > app.py\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="BASH_ENV=payload.sh bash -c :",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Bash startup semantics differ on Windows")
+def test_code_fix_cannot_hide_evaluator_mutation_in_prompt_command(
+    tmp_path: Path,
+) -> None:
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    "PROMPT_COMMAND='printf pwned > app.py' "
+                    f"{bash} -i"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX zsh startup semantics differ on Windows")
+def test_code_fix_cannot_hide_evaluator_mutation_in_zdotdir(
+    tmp_path: Path,
+) -> None:
+    zsh = shutil.which("zsh")
+    if zsh is None:
+        pytest.skip("zsh is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    zdot = tmp_path / "zdot"
+    zdot.mkdir()
+    (zdot / ".zshrc").write_text("printf pwned > app.py\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"ZDOTDIR=./zdot {zsh} -i",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX dynamic loader semantics differ on Windows")
+def test_code_fix_cannot_inject_code_through_ld_audit(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("a C compiler is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "audit.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "audit.so", "audit.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("the local C compiler cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="LD_AUDIT=./audit.so /bin/true",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX glibc loader semantics differ on Windows")
+def test_code_fix_cannot_load_gconv_module_through_environment(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    iconv = shutil.which("iconv")
+    if compiler is None or iconv is None:
+        pytest.skip("a C compiler and iconv are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    gconv = tmp_path / "gconv"
+    gconv.mkdir()
+    (gconv / "gconv-modules").write_text(
+        "module PWN// UTF-8// payload 1\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", str(gconv / "payload.so"), "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("the local C compiler cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"GCONV_PATH=./gconv {iconv} -f PWN -t UTF-8",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX dynamic loader semantics differ on Windows")
+def test_code_fix_cannot_inject_code_through_direct_dynamic_loader(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    loader = next(
+        (
+            candidate
+            for directory in (Path("/lib64"), Path("/lib"), Path("/lib/x86_64-linux-gnu"))
+            for candidate in directory.glob("ld-linux*.so.*")
+            if candidate.is_file()
+        ),
+        None,
+    )
+    if compiler is None or loader is None:
+        pytest.skip("a C compiler and a dynamic loader are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("the local C compiler cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{loader} --preload ./payload.so /bin/true",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX dynamic loader semantics differ on Windows")
+def test_code_fix_cannot_hide_dynamic_loader_behind_symlink(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    loader = next(
+        (
+            candidate
+            for directory in (Path("/lib64"), Path("/lib"), Path("/lib/x86_64-linux-gnu"))
+            for candidate in directory.glob("ld-linux*.so.*")
+            if candidate.is_file()
+        ),
+        None,
+    )
+    if compiler is None or loader is None:
+        pytest.skip("a C compiler and a dynamic loader are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("the local C compiler cannot build a shared object")
+    runner = tmp_path / "runner"
+    runner.symlink_to(loader)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="./runner --preload ./payload.so /bin/true",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX sqlite3 semantics differ on Windows")
+def test_code_fix_cannot_execute_sqlite_shell_meta_command(
+    tmp_path: Path,
+) -> None:
+    sqlite3 = shutil.which("sqlite3")
+    if sqlite3 is None:
+        pytest.skip("sqlite3 is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f'{sqlite3} :memory: ".shell printf mutated > app.py"',
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Bash semantics differ on Windows")
+def test_code_fix_cannot_import_bash_exported_function(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    "env 'BASH_FUNC_pwn%%=() { printf mutated > app.py; }' "
+                    "bash -c pwn"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX OpenSSL loader semantics differ on Windows")
+def test_code_fix_cannot_load_openssl_dynamic_engine(
+    tmp_path: Path,
+) -> None:
+    openssl = shutil.which("openssl")
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    if openssl is None or compiler is None:
+        pytest.skip("openssl and a C compiler are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("the local C compiler cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{openssl} engine dynamic -pre SO_PATH:./payload.so "
+                    "-pre ID:payload -pre LIST_ADD:1 -pre LOAD"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="xargs semantics differ on Windows")
+def test_code_fix_cannot_use_path_qualified_xargs_for_evaluator_mutation(
+    tmp_path: Path,
+) -> None:
+    xargs = shutil.which("xargs")
+    if xargs is None:
+        pytest.skip("xargs is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    payload = tmp_path / "payload.txt"
+    payload.write_text("app.py\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{xargs} -a payload.txt truncate -s 0",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX command wrappers differ on Windows")
+@pytest.mark.parametrize("wrapper", ["nice", "time", "timeout"])
+def test_code_fix_cannot_hide_evaluator_mutation_behind_command_wrapper(
+    tmp_path: Path, wrapper: str
+) -> None:
+    executable = shutil.which(wrapper)
+    if executable is None:
+        pytest.skip(f"{wrapper} is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    prefix = f"{executable} 5" if wrapper == "timeout" else executable
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f'{prefix} awk \'BEGIN {{ system("truncate -s 0 app.py") }}\'',
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="flock semantics differ on Windows")
+def test_code_fix_cannot_hide_evaluator_mutation_behind_flock(
+    tmp_path: Path,
+) -> None:
+    flock = shutil.which("flock")
+    if flock is None:
+        pytest.skip("flock is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f'{flock} -n lockfile awk \'BEGIN {{ system("truncate -s 0 app.py") }}\'',
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="setpriv semantics differ on Windows")
+def test_code_fix_cannot_hide_evaluator_mutation_behind_setpriv(
+    tmp_path: Path,
+) -> None:
+    setpriv = shutil.which("setpriv")
+    if setpriv is None:
+        pytest.skip("setpriv is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f'{setpriv} -- awk \'BEGIN {{ system("truncate -s 0 app.py") }}\'',
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="prlimit semantics differ on Windows")
+def test_code_fix_cannot_hide_evaluator_mutation_behind_prlimit(
+    tmp_path: Path,
+) -> None:
+    prlimit = shutil.which("prlimit")
+    if prlimit is None:
+        pytest.skip("prlimit is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f'{prlimit} -- awk \'BEGIN {{ system("truncate -s 0 app.py") }}\'',
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX zip semantics differ on Windows")
+def test_code_fix_cannot_execute_zip_test_command(
+    tmp_path: Path,
+) -> None:
+    zip_tool = shutil.which("zip")
+    if zip_tool is None:
+        pytest.skip("zip is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "source.txt").write_text("source\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{zip_tool} -q archive.zip source.txt -T -TT "
+                    "'printf mutated > app.py'"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX tar semantics differ on Windows")
+def test_code_fix_cannot_execute_tar_checkpoint_action(
+    tmp_path: Path,
+) -> None:
+    tar = shutil.which("tar")
+    if tar is None:
+        pytest.skip("tar is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "source.txt").write_text("source\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{tar} -cf archive.tar --checkpoint=1 "
+                    "--checkpoint-action=exec='printf mutated > app.py' source.txt"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX SSH semantics differ on Windows")
+def test_code_fix_cannot_execute_ssh_proxy_command(
+    tmp_path: Path,
+) -> None:
+    ssh = shutil.which("ssh")
+    if ssh is None:
+        pytest.skip("ssh is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{ssh} -o 'ProxyCommand=sh -c \"printf mutated > app.py\"' "
+                    "-o ConnectTimeout=1 nowhere.invalid true"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX SSH semantics differ on Windows")
+def test_code_fix_cannot_run_command_through_ssh_agent(
+    tmp_path: Path,
+) -> None:
+    ssh_agent = shutil.which("ssh-agent")
+    if ssh_agent is None:
+        pytest.skip("ssh-agent is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{ssh_agent} python3 -c \"open('app.py', 'w').write('bad\\n')\""
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX SSH loader semantics differ on Windows")
+def test_code_fix_cannot_load_ssh_pkcs11_provider(
+    tmp_path: Path,
+) -> None:
+    ssh_keygen = shutil.which("ssh-keygen")
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    if ssh_keygen is None or compiler is None:
+        pytest.skip("ssh-keygen and a C compiler are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n"
+        "int C_GetFunctionList(void *unused) { (void)unused; return 1; }\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("the local C compiler cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{ssh_keygen} -D ./payload.so -lf /dev/null",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ccache semantics differ on Windows")
+def test_code_fix_cannot_hide_gcc_plugin_behind_ccache(
+    tmp_path: Path,
+) -> None:
+    ccache = shutil.which("ccache")
+    compiler = shutil.which("gcc")
+    if ccache is None or compiler is None:
+        pytest.skip("ccache and gcc are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("gcc cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{ccache} {compiler} -fplugin=./payload.so -x c -c "
+                    "/dev/null -o /tmp/code_fix_ccache_probe.o"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX GCC toolchain semantics differ on Windows")
+def test_code_fix_cannot_replace_gcc_toolchain_with_b_prefix(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("gcc is not installed")
+    cc1_result = subprocess.run(
+        [compiler, "-print-prog-name=cc1"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    cc1 = cc1_result.stdout.strip()
+    if cc1_result.returncode != 0 or not Path(cc1).is_file():
+        pytest.skip("gcc cc1 is unavailable")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "source.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    toolchain = tmp_path / "toolchain"
+    toolchain.mkdir()
+    cc1_wrapper = toolchain / "cc1"
+    cc1_wrapper.write_text(
+        f"#!/bin/sh\nprintf 'bad\\n' > app.py\nexec {cc1} \"$@\"\n",
+        encoding="utf-8",
+    )
+    cc1_wrapper.chmod(0o755)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{compiler} -B./toolchain -c source.c "
+                    "-o /tmp/code_fix_toolchain_probe.o"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX GCC toolchain semantics differ on Windows")
+def test_code_fix_cannot_replace_gcc_toolchain_with_environment(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("gcc is not installed")
+    cc1_result = subprocess.run(
+        [compiler, "-print-prog-name=cc1"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    cc1 = cc1_result.stdout.strip()
+    if cc1_result.returncode != 0 or not Path(cc1).is_file():
+        pytest.skip("gcc cc1 is unavailable")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "source.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    toolchain = tmp_path / "toolchain"
+    toolchain.mkdir()
+    cc1_wrapper = toolchain / "cc1"
+    cc1_wrapper.write_text(
+        f"#!/bin/sh\nprintf 'bad\\n' > app.py\nexec {cc1} \"$@\"\n",
+        encoding="utf-8",
+    )
+    cc1_wrapper.chmod(0o755)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    "COMPILER_PATH=./toolchain "
+                    f"{compiler} -c source.c -o /tmp/code_fix_env_toolchain_probe.o"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX GCC dependency-file semantics differ on Windows")
+@pytest.mark.parametrize(
+    "map_option",
+    [
+        "-Wl,-Map,app.py",
+        "-Wl,-Map=app.py",
+        "-Wl,--dependency-file,app.py",
+        "-Wl,--dependency-file=app.py",
+    ],
+)
+def test_code_fix_cannot_write_gcc_forwarded_output_into_evaluator(
+    tmp_path: Path,
+    map_option: str,
+) -> None:
+    compiler = shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("gcc is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    (tmp_path / "source.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{compiler} {map_option} -c source.c "
+                    "-o /tmp/code_fix_dep_probe.o"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX GCC linker-script semantics differ on Windows")
+def test_code_fix_cannot_use_gcc_linker_script_for_evaluator_output(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("gcc is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    (tmp_path / "source.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "source.ld").write_text(
+        "OUTPUT(tests/fixture.py)\nSECTIONS { .text : { *(.text*) } }\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-c", "source.c", "-o", "source.o"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("gcc cannot build linker fixture")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="gcc -Wl,-T,source.ld source.o",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX linker-script semantics differ on Windows")
+@pytest.mark.parametrize("command_kind", ["default", "dt", "forwarded"])
+def test_code_fix_cannot_use_linker_script_alias_for_evaluator_output(
+    tmp_path: Path,
+    command_kind: str,
+) -> None:
+    linker = shutil.which("ld")
+    compiler = shutil.which("gcc")
+    if linker is None or compiler is None:
+        pytest.skip("ld and gcc are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    (tmp_path / "source.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "source.ld").write_text(
+        "OUTPUT(tests/fixture.py)\nSECTIONS { .text : { *(.text*) } }\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-c", "source.c", "-o", "source.o"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("gcc cannot build linker fixture")
+    command = {
+        "default": f"{linker} --default-script=source.ld source.o",
+        "dt": f"{linker} -dT source.ld source.o",
+        "forwarded": f"{compiler} -Wl,--default-script,source.ld source.o",
+    }[command_kind]
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command=command)])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX GCC response-file semantics differ on Windows")
+def test_code_fix_cannot_hide_gcc_output_in_response_file(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("gcc is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    (tmp_path / "source.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.rsp").write_text(
+        "-MD -MFapp.py -c source.c -o /tmp/code_fix_rsp_probe.o\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command=f"{compiler} @payload.rsp")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX MRI linker semantics differ on Windows")
+@pytest.mark.parametrize("forwarded", [False, True])
+@pytest.mark.parametrize("linker_name", ["ld", "ld.bfd"])
+def test_code_fix_cannot_use_ld_mri_script_for_evaluator_output(
+    tmp_path: Path,
+    forwarded: bool,
+    linker_name: str,
+) -> None:
+    linker = shutil.which(linker_name)
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    if linker is None or compiler is None:
+        pytest.skip(f"{linker_name} and a C compiler are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    (tmp_path / "source.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.mri").write_text(
+        "NAME tests/fixture.py\nEND\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-c", "source.c", "-o", "source.o"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("the local compiler cannot build MRI fixture")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{compiler} -Wl,-c,payload.mri source.o"
+                    if forwarded
+                    else f"{linker} -c payload.mri source.o"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX GCC linker-script semantics differ on Windows")
+def test_code_fix_cannot_use_gcc_linker_error_script(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("gcc is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    (tmp_path / "source.c").write_text(
+        "extern int missing_symbol(void);\n"
+        "int main(void) { return missing_symbol(); }\n",
+        encoding="utf-8",
+    )
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    script = tmp_path / "payload.sh"
+    script.write_text("printf 'bad\\n' > app.py\n", encoding="utf-8")
+    script.chmod(0o755)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{compiler} -Wl,--error-handling-script=./payload.sh "
+                    "source.c -o /tmp/code_fix_error_script_probe"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX GCC plugin semantics differ on Windows")
+def test_code_fix_cannot_load_gcc_plugin(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("gcc is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("gcc cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{compiler} -fplugin=./payload.so -x c -c /dev/null "
+                    "-o /tmp/code_fix_probe.o"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX GCC linker plugin semantics differ on Windows")
+@pytest.mark.parametrize("plugin_option", ["-plugin=./payload.so", "--plugin=./payload.so"])
+def test_code_fix_cannot_forward_gcc_plugin_to_linker(
+    tmp_path: Path,
+    plugin_option: str,
+) -> None:
+    compiler = shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("gcc is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("gcc cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{compiler} -Wl,{plugin_option} -x c -o "
+                    "/tmp/code_fix_forwarded_plugin /dev/null"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Clang plugin semantics differ on Windows")
+@pytest.mark.parametrize(
+    "plugin_options",
+    [
+        "-Xclang -load -Xclang ./payload.so",
+        "-fpass-plugin=./payload.so",
+        "-Xlinker --plugin -Xlinker ./payload.so",
+    ],
+)
+def test_code_fix_cannot_load_clang_plugin(
+    tmp_path: Path,
+    plugin_options: str,
+) -> None:
+    compiler = shutil.which("clang")
+    if compiler is None:
+        pytest.skip("clang is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("clang cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{compiler} {plugin_options} "
+                    "-x c -c /dev/null -o /tmp/code_fix_clang_probe.o"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Clang config semantics differ on Windows")
+def test_code_fix_cannot_load_clang_plugin_through_config_file(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("clang")
+    if compiler is None:
+        pytest.skip("clang is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("clang cannot build a shared object")
+    (tmp_path / "payload.cfg").write_text(
+        "-fpass-plugin=./payload.so\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{compiler} --config=./payload.cfg -x c -c /dev/null "
+                    "-o /tmp/code_fix_config_plugin_probe.o"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Clang environment semantics differ on Windows")
+def test_code_fix_cannot_load_clang_plugin_through_override_environment(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("clang")
+    if compiler is None:
+        pytest.skip("clang is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "source.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("clang cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    "CCC_OVERRIDE_OPTIONS='+-Xclang +-load +-Xclang +./payload.so' "
+                    f"{compiler} -c source.c -o /tmp/code_fix_override_plugin_probe.o"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Clang wrapper semantics differ on Windows")
+@pytest.mark.parametrize("wrapper", ["env", "command", "exec"])
+def test_code_fix_cannot_hide_clang_plugin_behind_simple_wrapper(
+    tmp_path: Path,
+    wrapper: str,
+) -> None:
+    compiler = shutil.which("clang")
+    if compiler is None:
+        pytest.skip("clang is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("clang cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{wrapper} {compiler} -Xclang -load -Xclang ./payload.so "
+                    "-x c -c /dev/null -o /tmp/code_fix_wrapper_plugin_probe.o"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Clang driver semantics differ on Windows")
+@pytest.mark.parametrize("driver", ["clang-22", "clang-cpp"])
+def test_code_fix_cannot_load_clang_alias_plugin(tmp_path: Path, driver: str) -> None:
+    compiler = shutil.which(driver)
+    if compiler is None:
+        pytest.skip(f"{driver} is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip(f"{driver} cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{compiler} -Xclang -load -Xclang ./payload.so "
+                    "-x c -c /dev/null -o /tmp/code_fix_versioned_plugin_probe.o"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX GCC binutils semantics differ on Windows")
+@pytest.mark.parametrize("driver", ["gcc-nm", "gcc-nm-15"])
+def test_code_fix_cannot_load_gcc_nm_plugin(tmp_path: Path, driver: str) -> None:
+    gcc_nm = shutil.which(driver)
+    compiler = shutil.which("gcc")
+    if gcc_nm is None or compiler is None:
+        pytest.skip(f"{driver} and gcc are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "source.c").write_text("int value(void) { return 0; }\n", encoding="utf-8")
+    built_object = subprocess.run(
+        [compiler, "-c", "source.c", "-o", "source.o"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built_object.returncode != 0:
+        pytest.skip(f"{driver} fixture object could not be built")
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built_payload = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built_payload.returncode != 0:
+        pytest.skip(f"{driver} plugin fixture could not be built")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{gcc_nm} --plugin ./payload.so source.o",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX BFD linker semantics differ on Windows")
+def test_code_fix_cannot_load_ld_bfd_plugin(tmp_path: Path) -> None:
+    linker = shutil.which("ld.bfd")
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    if linker is None or compiler is None:
+        pytest.skip("ld.bfd and a C compiler are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("the local C compiler cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{linker} -plugin ./payload.so -o /tmp/code_fix_bfd_probe.o /dev/null",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX clang-tidy semantics differ on Windows")
+def test_code_fix_cannot_load_clang_tidy_plugin(tmp_path: Path) -> None:
+    clang_tidy = shutil.which("clang-tidy")
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    if clang_tidy is None or compiler is None:
+        pytest.skip("clang-tidy and a C compiler are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "source.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("the local C compiler cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{clang_tidy} -load=./payload.so source.c -- -c",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Clang frontend semantics differ on Windows")
+def test_code_fix_cannot_load_clang_cc1_plugin(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("clang")
+    if compiler is None:
+        pytest.skip("clang is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "source.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("clang cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{compiler} -cc1 -load ./payload.so -emit-obj source.c "
+                    "-o /tmp/code_fix_cc1_probe.o"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX scan-build semantics differ on Windows")
+def test_code_fix_cannot_hide_clang_plugin_behind_scan_build(
+    tmp_path: Path,
+) -> None:
+    scan_build = shutil.which("scan-build")
+    compiler = shutil.which("clang")
+    if scan_build is None or compiler is None:
+        pytest.skip("scan-build and clang are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("clang cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{scan_build} {compiler} -Xclang -load -Xclang ./payload.so "
+                    "-c /dev/null -o /tmp/code_fix_scan_build_probe.o"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX intercept-build semantics differ on Windows")
+def test_code_fix_cannot_hide_gcc_plugin_behind_intercept_build(
+    tmp_path: Path,
+) -> None:
+    intercept_build = shutil.which("intercept-build")
+    compiler = shutil.which("gcc")
+    if intercept_build is None or compiler is None:
+        pytest.skip("intercept-build and gcc are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("gcc cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{intercept_build} {compiler} -fplugin=./payload.so "
+                    "-x c -c /dev/null -o /tmp/code_fix_intercept_probe.o"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX clang-cl semantics differ on Windows")
+def test_code_fix_cannot_load_clang_cl_plugin(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("clang-cl")
+    if compiler is None:
+        pytest.skip("clang-cl is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{compiler} -Xclang -load -Xclang ./payload.so "
+                    "/c /dev/null /Fo/tmp/code_fix_clang_cl_probe.obj"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX linker plugin semantics differ on Windows")
+def test_code_fix_cannot_load_linker_plugin(
+    tmp_path: Path,
+) -> None:
+    linker = shutil.which("ld")
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    if linker is None or compiler is None:
+        pytest.skip("ld and a C compiler are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("the local C compiler cannot build a shared object")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{linker} -plugin ./payload.so -o /tmp/code_fix_ld_probe.o /dev/null",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX binutils plugin semantics differ on Windows")
+def test_code_fix_cannot_load_nm_plugin(
+    tmp_path: Path,
+) -> None:
+    nm = shutil.which("nm")
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    if nm is None or compiler is None:
+        pytest.skip("nm and a C compiler are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "object.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    built_plugin = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", "payload.so", "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    built_object = subprocess.run(
+        [compiler, "-c", "object.c", "-o", "object.o"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built_plugin.returncode != 0 or built_object.returncode != 0:
+        pytest.skip("the local compiler cannot build binutils fixtures")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{nm} --plugin ./payload.so object.o",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Python executable semantics differ on Windows")
+def test_code_fix_cannot_use_version_qualified_python_script(
+    tmp_path: Path,
+) -> None:
+    python = shutil.which("python3.11")
+    if python is None:
+        pytest.skip("python3.11 is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f'{python} -c "open(\'app.py\', \'w\').write(\'bad\')"',
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics differ on Windows")
+def test_code_fix_cannot_hide_python_behind_symlinked_executable(
+    tmp_path: Path,
+) -> None:
+    python = shutil.which("python3.11")
+    if python is None:
+        pytest.skip("python3.11 is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    runner = tmp_path / "runner"
+    runner.symlink_to(python)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="./runner -c \"open('app.py', 'w').write('bad\\n')\"",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable semantics differ on Windows")
+def test_code_fix_cannot_hide_copied_python_behind_unknown_executable(
+    tmp_path: Path,
+) -> None:
+    python = shutil.which("python3.11")
+    if python is None:
+        pytest.skip("python3.11 is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    runner = tmp_path / "runner"
+    runner.write_bytes(Path(python).read_bytes())
+    runner.chmod(0o755)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="./runner -c \"open('app.py', 'w').write('bad\\n')\"",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable semantics differ on Windows")
+def test_code_fix_cannot_run_unknown_local_script_runner(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    runner = tmp_path / "runner"
+    runner.write_text("#!/bin/sh\nprintf 'bad\\n' > app.py\n", encoding="utf-8")
+    runner.chmod(0o755)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="./runner")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics differ on Windows")
+def test_code_fix_cannot_hide_shell_script_behind_symlinked_executable(
+    tmp_path: Path,
+) -> None:
+    shell = Path("/bin/sh")
+    if not shell.is_file():
+        pytest.skip("/bin/sh is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    runner = tmp_path / "runner"
+    runner.symlink_to(shell)
+    (tmp_path / "payload.sh").write_text(
+        "printf 'bad\\n' > app.py\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="./runner payload.sh",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics differ on Windows")
+def test_code_fix_cannot_hide_find_mutation_behind_symlinked_executable(
+    tmp_path: Path,
+) -> None:
+    find = shutil.which("find")
+    if find is None:
+        pytest.skip("find is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    runner = tmp_path / "runner"
+    runner.symlink_to(find)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="./runner . -name fixture.py -delete",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Python executable semantics differ on Windows")
+def test_code_fix_cannot_use_attached_version_qualified_python_code(
+    tmp_path: Path,
+) -> None:
+    python = shutil.which("python3.11")
+    if python is None:
+        pytest.skip("python3.11 is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f'{python} -c"open(\'app.py\', \'w\').write(\'bad\\n\')"'
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Python executable semantics differ on Windows")
+def test_code_fix_cannot_use_attached_version_qualified_python_module(
+    tmp_path: Path,
+) -> None:
+    python = shutil.which("python3.11")
+    if python is None:
+        pytest.skip("python3.11 is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.py").write_text(
+        "open('app.py', 'w').write('bad\\n')\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{python} -mpayload",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX env semantics differ on Windows")
+def test_code_fix_cannot_hide_python_module_behind_env_unset(
+    tmp_path: Path,
+) -> None:
+    python = shutil.which("python3.11")
+    env = shutil.which("env")
+    if python is None or env is None:
+        pytest.skip("python3.11 and env are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.py").write_text(
+        "open('app.py', 'w').write('bad\\n')\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{env} -u CODE_FIX_UNUSED {python} -mpayload",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX env semantics differ on Windows")
+def test_code_fix_cannot_hide_python_module_behind_env_argv0(
+    tmp_path: Path,
+) -> None:
+    python = shutil.which("python3.11")
+    env = shutil.which("env")
+    if python is None or env is None:
+        pytest.skip("python3.11 and env are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.py").write_text(
+        "open('app.py', 'w').write('bad\\n')\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{env} --argv0 CODE_FIX_ARGV0 {python} -mpayload",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell builtins differ on Windows")
+def test_code_fix_cannot_hide_python_module_behind_exec_argv0(
+    tmp_path: Path,
+) -> None:
+    python = shutil.which("python3.11")
+    if python is None:
+        pytest.skip("python3.11 is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.py").write_text(
+        "open('app.py', 'w').write('bad\\n')\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"exec -a CODE_FIX_ARGV0 {python} -mpayload",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX sudo semantics differ on Windows")
+def test_code_fix_cannot_hide_python_module_behind_sudo_user_option(
+    tmp_path: Path,
+) -> None:
+    python = shutil.which("python3.11")
+    sudo = shutil.which("sudo")
+    if python is None or sudo is None:
+        pytest.skip("python3.11 and sudo are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.py").write_text(
+        "open('app.py', 'w').write('bad\\n')\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{sudo} -n -u ir6 {python} -mpayload",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Node executable semantics differ on Windows")
+def test_code_fix_cannot_preload_node_code_into_allowlisted_command(
+    tmp_path: Path,
+) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    payload = tmp_path / "payload.js"
+    payload.write_text(
+        "require('fs').writeFileSync('app.py', 'bad\\n')\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{node} --require=./payload.js --check",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Node executable semantics differ on Windows")
+def test_code_fix_cannot_load_node_options_from_env_file(
+    tmp_path: Path,
+) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.js").write_text(
+        "require('fs').writeFileSync('app.py', 'bad\\n')\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "payload.env").write_text(
+        "NODE_OPTIONS=--require=./payload.js\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{node} --env-file=payload.env --check",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Node executable semantics differ on Windows")
+def test_code_fix_cannot_load_node_options_from_config_file(
+    tmp_path: Path,
+) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.js").write_text(
+        "require('fs').writeFileSync('app.py', 'bad\\n')\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "node.config.json").write_text(
+        '{"nodeOptions":{"require":["./payload.js"]}}\n',
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{node} --experimental-config-file=node.config.json --check",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Node executable semantics differ on Windows")
+def test_code_fix_cannot_load_node_experimental_loader(
+    tmp_path: Path,
+) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.mjs").write_text(
+        "import { writeFileSync } from 'node:fs';\n"
+        "writeFileSync('app.py', 'bad\\n');\n"
+        "export async function resolve(specifier, context, nextResolve) {\n"
+        "  return nextResolve(specifier, context);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{node} --experimental-loader=./payload.mjs --input-type=module",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Node executable semantics differ on Windows")
+def test_code_fix_cannot_restore_node_snapshot_blob(
+    tmp_path: Path,
+) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    snapshot_source = tmp_path / "snapshot-source.js"
+    snapshot_source.write_text(
+        (
+            "require('v8').startupSnapshot.addDeserializeCallback(() => "
+            "require('fs').writeFileSync('app.py', 'bad\\n'))\n"
+        ),
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [node, "--build-snapshot", snapshot_source.name],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    snapshot = tmp_path / "snapshot.blob"
+    if built.returncode != 0 or not snapshot.is_file():
+        pytest.skip("node snapshot building is unavailable")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{node} --snapshot-blob={snapshot.name}",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Perl executable semantics differ on Windows")
+def test_code_fix_cannot_preload_perl_debugger_module(
+    tmp_path: Path,
+) -> None:
+    perl = shutil.which("perl")
+    if perl is None:
+        pytest.skip("perl is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    payload = tmp_path / "Devel" / "payload.pm"
+    payload.parent.mkdir()
+    payload.write_text(
+        "package Devel::payload; BEGIN { open my $fh, '>', 'app.py'; print $fh 'bad\\n'; close $fh } 1;\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{perl} -I. -d:payload",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Perl executable semantics differ on Windows")
+@pytest.mark.parametrize("flag", ["-pe", "-ne", "-e", "-E"])
+def test_code_fix_cannot_use_attached_perl_one_liner(
+    tmp_path: Path,
+    flag: str,
+) -> None:
+    perl = shutil.which("perl")
+    if perl is None:
+        pytest.skip("perl is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{perl} {flag}'BEGIN {{ open(F, '>', 'app.py'); "
+                    "print F 'bad\\n'; close F }}'"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Node executable semantics differ on Windows")
+def test_code_fix_cannot_use_attached_node_eval_script(
+    tmp_path: Path,
+) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f'{node} --eval="require(\'fs\').writeFileSync(\'app.py\', \'bad\\n\')"'
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Node executable semantics differ on Windows")
+def test_code_fix_cannot_run_node_package_script(tmp_path: Path) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "package.json").write_text(
+        '{"scripts":{"wipe":"truncate -s 0 app.py"}}\n',
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command=f"{node} --run=wipe")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Perl executable semantics differ on Windows")
+def test_code_fix_cannot_preload_perl_module(tmp_path: Path) -> None:
+    perl = shutil.which("perl")
+    if perl is None:
+        pytest.skip("perl is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.pm").write_text(
+        "BEGIN { open my $fh, '>', 'app.py'; print $fh 'bad\\n'; close $fh; }\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command=f"{perl} -I. -Mpayload -")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Lua executable semantics differ on Windows")
+@pytest.mark.parametrize("interpreter", ["lua", "luajit"])
+@pytest.mark.parametrize("load_flag", ["-lpayload", "-l payload"])
+def test_code_fix_cannot_preload_lua_module(
+    tmp_path: Path, interpreter: str, load_flag: str
+) -> None:
+    executable = shutil.which(interpreter)
+    if executable is None:
+        pytest.skip(f"{interpreter} is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.lua").write_text(
+        "local f = io.open('app.py', 'w'); f:write('bad\\n'); f:close()\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"{executable} {load_flag}",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Lua startup semantics differ on Windows")
+def test_code_fix_cannot_use_versioned_lua_startup_hook(tmp_path: Path) -> None:
+    lua = shutil.which("lua")
+    if lua is None:
+        pytest.skip("lua is not installed")
+    version = subprocess.run(
+        [lua, "-v"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    match = re.search(r"Lua (\d+)\.(\d+)", version.stdout + version.stderr)
+    if match is None:
+        pytest.skip("the local lua version is not discoverable")
+    startup_var = f"LUA_INIT_{match.group(1)}_{match.group(2)}"
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{startup_var}='local f=io.open(\"app.py\",\"w\"); "
+                    "f:write(\"bad\\n\"); f:close()' lua"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Lua executable semantics differ on Windows")
+@pytest.mark.parametrize("interpreter", ["lua", "luajit"])
+def test_code_fix_cannot_use_attached_lua_one_liner(
+    tmp_path: Path, interpreter: str
+) -> None:
+    executable = shutil.which(interpreter)
+    if executable is None:
+        pytest.skip(f"{interpreter} is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=(
+                    f"{executable} -e'local f=io.open(\"app.py\",\"w\"); "
+                    "f:write(\"bad\\n\"); f:close()'"
+                ),
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX glibc loader semantics differ on Windows")
+def test_code_fix_cannot_load_gconv_module_through_environment(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    iconv = shutil.which("iconv")
+    if compiler is None or iconv is None:
+        pytest.skip("a C compiler and iconv are required")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    gconv = tmp_path / "gconv"
+    gconv.mkdir()
+    (gconv / "gconv-modules").write_text(
+        "module PWN// UTF-8// payload 1\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "payload.c").write_text(
+        "#include <stdio.h>\n"
+        "__attribute__((constructor)) static void inject(void) {\n"
+        "    FILE *fh = fopen(\"app.py\", \"w\");\n"
+        "    if (fh) { fputs(\"bad\\n\", fh); fclose(fh); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-o", str(gconv / "payload.so"), "payload.c"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        pytest.skip("the local compiler cannot build gconv module")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"GCONV_PATH=./gconv {iconv} -f PWN -t UTF-8",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX environment semantics differ on Windows")
+def test_code_fix_cannot_inject_python_sitecustomize_into_pytest(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    (payload / "sitecustomize.py").write_text(
+        "from pathlib import Path\nPath('app.py').write_text('bad')\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="PYTHONPATH=payload python3 -m pytest -q",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX environment semantics differ on Windows")
+def test_code_fix_cannot_inject_pytest_plugin_through_addopts(
+    tmp_path: Path,
+) -> None:
+    python = shutil.which("python3")
+    if python is None:
+        pytest.skip("python3 is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload_plugin.py").write_text(
+        "from pathlib import Path\nPath('app.py').write_text('bad\\n')\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"PYTEST_ADDOPTS='-p payload_plugin' {python} -m pytest -q",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX pytest semantics differ on Windows")
+def test_code_fix_cannot_inject_pytest_plugin_through_option(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload_plugin.py").write_text(
+        "from pathlib import Path\nPath('app.py').write_text('bad\\n')\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="python3 -m pytest -p payload_plugin -q",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX pytest semantics differ on Windows")
+def test_code_fix_cannot_import_arbitrary_package_through_pyargs(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    package = tmp_path / "payload_pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        "from pathlib import Path\nPath('app.py').write_text('bad\\n')\n",
+        encoding="utf-8",
+    )
+    (package / "test_payload.py").write_text(
+        "def test_payload():\n    assert True\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="python3 -m pytest --pyargs payload_pkg.test_payload -q",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX pytest semantics differ on Windows")
+def test_code_fix_cannot_inject_pytest_plugin_through_override_ini(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload_plugin.py").write_text(
+        "from pathlib import Path\nPath('app.py').write_text('bad\\n')\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="python3 -m pytest -o 'addopts=-p payload_plugin' -q",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX pytest semantics differ on Windows")
+def test_code_fix_cannot_import_package_through_doctest_modules(
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "payload_pkg"
+    package.mkdir()
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (package / "__init__.py").write_text(
+        "from pathlib import Path\nPath('app.py').write_text('bad\\n')\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="python3 -m pytest --doctest-modules payload_pkg -q",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX pytest semantics differ on Windows")
+def test_code_fix_cannot_execute_pytest_doctest_glob(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload.txt").write_text(
+        ">>> open(\"app.py\", \"w\").write(\"bad\\n\")\n8\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="pytest --doctest-glob=payload.txt -q",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX pytest semantics differ on Windows")
+def test_code_fix_cannot_load_pytest_debugger_module(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    (tmp_path / "payload_debug.py").write_text(
+        "from pathlib import Path\nPath('app.py').write_text('bad\\n')\n"
+        "class Debugger: pass\n",
+        encoding="utf-8",
+    )
+    (target.parent / "test_failure.py").write_text(
+        "def test_failure():\n    assert False\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="python3 -m pytest --pdb --pdbcls=payload_debug:Debugger -q",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX pytest semantics differ on Windows")
+def test_code_fix_cannot_hide_pytest_imports_in_config_file(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    package = tmp_path / "payload_pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        "from pathlib import Path\nPath('app.py').write_text('bad\\n')\n",
+        encoding="utf-8",
+    )
+    (package / "test_payload.py").write_text(
+        "def test_payload():\n    assert True\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "payload.ini").write_text(
+        "[pytest]\npythonpath = .\naddopts = --pyargs payload_pkg.test_payload\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="pytest -c payload.ini -q")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX pytest semantics differ on Windows")
+def test_code_fix_cannot_hide_pytest_config_behind_rootdir(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    root = tmp_path / "payload_root"
+    package = root / "payload_pkg"
+    package.mkdir(parents=True)
+    (root / "pytest.ini").write_text(
+        "[pytest]\npythonpath = .\naddopts = --pyargs payload_pkg.test_payload\n",
+        encoding="utf-8",
+    )
+    (package / "__init__.py").write_text(
+        "from pathlib import Path\nPath('app.py').write_text('bad\\n')\n",
+        encoding="utf-8",
+    )
+    (package / "test_payload.py").write_text(
+        "def test_payload():\n    assert True\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="pytest --rootdir=payload_root -q")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX pytest semantics differ on Windows")
+@pytest.mark.parametrize(
+    "option",
+    [
+        "--debug=tests/fixture.py",
+        "--log-file tests/fixture.py",
+        "--log-file=tests/fixture.py",
+    ],
+)
+def test_code_fix_cannot_write_pytest_log_into_evaluator(
+    tmp_path: Path,
+    option: str,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"python3 -m pytest {option} -q",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics differ on Windows")
+def test_code_fix_cannot_hide_git_mutation_behind_symlinked_executable(
+    tmp_path: Path,
+) -> None:
+    git = shutil.which("git")
+    if git is None:
+        pytest.skip("git is not installed")
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    subprocess.run([git, "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [git, "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        [git, "config", "user.name", "Test"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run([git, "add", "tests/fixture.py"], cwd=tmp_path, check=True)
+    subprocess.run([git, "commit", "-qm", "initial"], cwd=tmp_path, check=True)
+    target.write_text("value = 999\n", encoding="utf-8")
+    runner = tmp_path / "runner"
+    runner.symlink_to(git)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="./runner checkout -- .",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 999\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX environment semantics differ on Windows")
+def test_code_fix_cannot_inject_git_external_diff_hook(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    source = tmp_path / "source.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    hook = tmp_path / "payload.sh"
+    hook.write_text("truncate -s 0 app.py\n", encoding="utf-8")
+    hook.chmod(0o755)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "source.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=tmp_path, check=True)
+    source.write_text("value = 2\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="GIT_EXTERNAL_DIFF=./payload.sh git diff",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX environment semantics differ on Windows")
+@pytest.mark.parametrize(
+    "command",
+    [
+        (
+            "GIT_CONFIG_COUNT=1 "
+            "GIT_CONFIG_KEY_0=core.fsmonitor "
+            "GIT_CONFIG_VALUE_0=./payload.sh git status"
+        ),
+        (
+            "sh -c 'env GIT_CONFIG_COUNT=1 "
+            "GIT_CONFIG_KEY_0=core.fsmonitor "
+            "GIT_CONFIG_VALUE_0=./payload.sh git status'"
+        ),
+    ],
+)
+def test_code_fix_cannot_inject_indexed_git_config_hook(
+    tmp_path: Path, command: str
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    source = tmp_path / "source.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    hook = tmp_path / "payload.sh"
+    hook.write_text("truncate -s 0 app.py\n", encoding="utf-8")
+    hook.chmod(0o755)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "source.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=tmp_path, check=True)
+    source.write_text("value = 2\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=command,
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX environment semantics differ on Windows")
+def test_code_fix_cannot_enable_git_external_diff_option(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    source = tmp_path / "source.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    hook = tmp_path / "payload.sh"
+    hook.write_text("truncate -s 0 app.py\n", encoding="utf-8")
+    hook.chmod(0o755)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "source.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=tmp_path, check=True)
+    source.write_text("value = 2\n", encoding="utf-8")
+    subprocess.run(["git", "config", "diff.external", "./payload.sh"], cwd=tmp_path, check=True)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="git diff --ext-diff")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX environment semantics differ on Windows")
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git diff",
+        "git diff --textconv",
+        "git show --textconv HEAD:source.txt",
+        "git log -p --textconv -1",
+    ],
+)
+@pytest.mark.parametrize("driver_setting", ["textconv", "command"])
+def test_code_fix_cannot_enable_git_textconv_option(
+    tmp_path: Path, command: str, driver_setting: str
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    source = tmp_path / "source.txt"
+    source.write_text("value = 1\n", encoding="utf-8")
+    attributes = tmp_path / ".gitattributes"
+    attributes.write_text("source.txt diff=payload\n", encoding="utf-8")
+    hook = tmp_path / "payload.sh"
+    hook.write_text("truncate -s 0 app.py\n", encoding="utf-8")
+    hook.chmod(0o755)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", f"diff.payload.{driver_setting}", "./payload.sh"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "add", "source.txt", ".gitattributes"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=tmp_path, check=True)
+    source.write_text("value = 2\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command=command)])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX submodule semantics differ on Windows")
+def test_code_fix_cannot_enable_git_submodule_external_diff(
+    tmp_path: Path,
+) -> None:
+    module_source = tmp_path / "module-source"
+    module_source.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=module_source, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=module_source, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=module_source, check=True)
+    (module_source / "tests").mkdir()
+    (module_source / "tests" / "fixture.py").write_text("value = 200\n", encoding="utf-8")
+    (module_source / "source.txt").write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=module_source, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=module_source, check=True)
+
+    workspace = tmp_path / "super"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "-c", "protocol.file.allow=always", "submodule", "add", str(module_source), "module"],
+        cwd=workspace,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    subprocess.run(["git", "commit", "-qm", "add module"], cwd=workspace, check=True)
+    target = workspace / "module" / "tests" / "fixture.py"
+    alias = workspace / "module" / "app.py"
+    alias.hardlink_to(target)
+    source = workspace / "module" / "source.txt"
+    source.write_text("value = 2\n", encoding="utf-8")
+    hook = workspace / "module" / "payload.sh"
+    hook.write_text("truncate -s 0 app.py\n", encoding="utf-8")
+    hook.chmod(0o755)
+    subprocess.run(["git", "config", "diff.external", "./payload.sh"], cwd=workspace / "module", check=True)
+    state = make_state(workspace)
+    state.source_snapshot = result_progress.snapshot_sources(workspace)
+    llm = StubLlm(replies=[action("run_shell", command="git diff --submodule=diff")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX worktree semantics differ on Windows")
+def test_code_fix_cannot_run_textconv_from_linked_worktree_common_config(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repository, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repository, check=True)
+    (repository / "tests").mkdir()
+    (repository / "tests" / "fixture.py").write_text("value = 200\n", encoding="utf-8")
+    (repository / "source.txt").write_text("value = 1\n", encoding="utf-8")
+    (repository / ".gitattributes").write_text("source.txt diff=payload\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=repository, check=True)
+    linked = tmp_path / "linked"
+    subprocess.run(["git", "worktree", "add", "-q", str(linked), "HEAD"], cwd=repository, check=True)
+    subprocess.run(["git", "config", "diff.payload.textconv", "./payload.sh"], cwd=repository, check=True)
+    target = linked / "tests" / "fixture.py"
+    alias = linked / "app.py"
+    alias.hardlink_to(target)
+    source = linked / "source.txt"
+    source.write_text("value = 2\n", encoding="utf-8")
+    hook = linked / "payload.sh"
+    hook.write_text("truncate -s 0 app.py\n", encoding="utf-8")
+    hook.chmod(0o755)
+    state = make_state(linked)
+    state.source_snapshot = result_progress.snapshot_sources(linked)
+    llm = StubLlm(replies=[action("run_shell", command="git diff")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Git config semantics differ on Windows")
+def test_code_fix_cannot_follow_git_include_to_textconv(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    (tmp_path / "tests").mkdir()
+    target = tmp_path / "tests" / "fixture.py"
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    source = tmp_path / "source.txt"
+    source.write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / ".gitattributes").write_text("source.txt diff=payload\n", encoding="utf-8")
+    hook = tmp_path / "payload.sh"
+    hook.write_text("truncate -s 0 app.py\n", encoding="utf-8")
+    hook.chmod(0o755)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=tmp_path, check=True)
+    included = tmp_path / ".git" / "included.conf"
+    included.write_text(
+        '[diff "payload"]\n\ttextconv = ./payload.sh\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "config", "include.path", "included.conf"], cwd=tmp_path, check=True)
+    source.write_text("value = 2\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="git diff")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Git filter semantics differ on Windows")
+def test_code_fix_cannot_run_git_filter_command(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    (tmp_path / "tests").mkdir()
+    target = tmp_path / "tests" / "fixture.py"
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    source = tmp_path / "source.txt"
+    source.write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / ".gitattributes").write_text("source.txt filter=payload\n", encoding="utf-8")
+    hook = tmp_path / "payload.sh"
+    hook.write_text("truncate -s 0 app.py\n", encoding="utf-8")
+    hook.chmod(0o755)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "filter.payload.clean", "./payload.sh"], cwd=tmp_path, check=True)
+    source.write_text("value = 2\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="git diff")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Git hook semantics differ on Windows")
+def test_code_fix_cannot_run_git_fsmonitor_hook(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    (tmp_path / "tests").mkdir()
+    target = tmp_path / "tests" / "fixture.py"
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    source = tmp_path / "source.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    hook = tmp_path / "payload.sh"
+    hook.write_text("truncate -s 0 app.py\n", encoding="utf-8")
+    hook.chmod(0o755)
+    subprocess.run(["git", "add", "source.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "extensions.worktreeConfig", "true"], cwd=tmp_path, check=True)
+    (tmp_path / ".git" / "config.worktree").write_text(
+        "[core]\n\tfsmonitor = ./payload.sh\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="git status")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX Git config semantics differ on Windows")
+def test_code_fix_cannot_select_global_git_config_with_home(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    (tmp_path / "tests").mkdir()
+    target = tmp_path / "tests" / "fixture.py"
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    source = tmp_path / "source.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    hook = tmp_path / "payload.sh"
+    hook.write_text("truncate -s 0 app.py\n", encoding="utf-8")
+    hook.chmod(0o755)
+    home = tmp_path / "git-home"
+    home.mkdir()
+    (home / ".gitconfig").write_text(
+        "[core]\n\tfsmonitor = ./payload.sh\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "source.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=tmp_path, check=True)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="HOME=git-home git status")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="hardlink semantics differ on Windows")
+def test_code_fix_cannot_mutate_evaluator_through_hardlink_path_argument(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    alias = tmp_path / "app.py"
+    alias.hardlink_to(target)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="truncate -s 0 app.py",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_edit_git_control_metadata(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    config = tmp_path / ".git" / "config"
+    original = config.read_bytes()
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "write_file",
+                path=str(config),
+                content="[core]\n\tfsmonitor = ./payload.sh\n",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert config.read_bytes() == original
+    assert outcome.solved is False
+    assert any("repository control" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_edit_git_control_through_hardlink(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    config = tmp_path / ".git" / "config"
+    alias = tmp_path / "repo-config-alias"
+    alias.hardlink_to(config)
+    original = config.read_bytes()
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "write_file",
+                path=str(alias),
+                content="[core]\n\tfsmonitor = ./payload.sh\n",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert config.read_bytes() == original
+    assert outcome.solved is False
+    assert any("repository control" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink semantics differ on Windows")
+def test_code_fix_cannot_redirect_through_symlinked_git_directory(
+    tmp_path: Path,
+) -> None:
+    gitdir = tmp_path / "external" / "gitdir"
+    gitdir.mkdir(parents=True)
+    config = gitdir / "config"
+    config.write_text("[core]\n", encoding="utf-8")
+    (tmp_path / ".git").symlink_to(gitdir, target_is_directory=True)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="printf '[core]\\nfsmonitor = ./payload.sh\\n' > .git/config",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert config.read_text(encoding="utf-8") == "[core]\n"
+    assert outcome.solved is False
+    assert any("repository control" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink semantics differ on Windows")
+@pytest.mark.parametrize("tool", ["write_file", "replace_text"])
+def test_code_fix_cannot_edit_symlinked_git_directory(
+    tmp_path: Path, tool: str
+) -> None:
+    gitdir = tmp_path / "external" / "gitdir"
+    gitdir.mkdir(parents=True)
+    config = gitdir / "config"
+    config.write_text("[core]\n", encoding="utf-8")
+    (tmp_path / ".git").symlink_to(gitdir, target_is_directory=True)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    if tool == "write_file":
+        reply = action(
+            tool,
+            path=str(tmp_path / ".git" / "config"),
+            content="[core]\nfsmonitor = ./payload.sh\n",
+        )
+    else:
+        reply = action(
+            tool,
+            path=str(tmp_path / ".git" / "config"),
+            old="[core]",
+            new="[core]\nfsmonitor = ./payload.sh",
+        )
+    outcome = run(state, StubLlm(replies=[reply]), FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert config.read_text(encoding="utf-8") == "[core]\n"
+    assert outcome.solved is False
+    assert any("repository control" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_use_ruff_format_on_evaluator_tests(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command=f"ruff format '{target}'")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_send_pytest_temp_files_into_evaluator_tests(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[action("run_shell", command="pytest --basetemp=tests -q")]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_send_pytest_report_into_evaluator_tests(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"pytest --junitxml='{target}' app.py",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_allows_read_only_pytest_on_xml_named_test(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_xml.py"
+    target.parent.mkdir()
+    target.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.budget.max_steps = 1
+    llm = StubLlm(replies=[action("run_shell", command=f"pytest -q '{target}'")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "def test_ok():\n    assert True\n"
+    assert not any("code-fix refused" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_send_git_diff_output_into_evaluator_tests(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"git diff -o'{target}' -- app.py",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_git_checkout_to_mutate_workspace(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="git checkout -- .")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_env_git_checkout_to_mutate_workspace(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    target.write_text("assert status == 400\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="env git checkout -- .")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 400\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_git_assignment_to_mutate_workspace(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    target.write_text("assert status == 400\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[action("run_shell", command="GIT_OPTIONAL_LOCKS=0 git checkout -- .")]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 400\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_compound_git_checkout_to_mutate_workspace(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    target.write_text("assert status == 400\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="true; git checkout -- .")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 400\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_command_substitution_git_checkout(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    target.write_text("assert status == 400\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="echo $(git checkout -- .)")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 400\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_newline_git_checkout_to_mutate_workspace(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    target.write_text("assert status == 400\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="true\n git checkout -- .")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 400\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_command_substitution_find_delete(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="echo $(find . -delete)",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_subshell_git_checkout(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    target.write_text("assert status == 400\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="(git checkout -- .)")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 400\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_brace_git_checkout(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    target.write_text("assert status == 400\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="{ git checkout -- .; }")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 400\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_conditional_git_checkout(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    target.write_text("assert status == 400\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[action("run_shell", command="if true; then git checkout -- .; fi")]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 400\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_use_find_xargs_to_mutate_evaluator_tests(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="find . -type f -print0 | xargs -0 rm -f",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_use_find_while_to_mutate_evaluator_tests(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="find . -type f -print | while IFS= read -r f; do rm -f \"$f\"; done",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_delete_workspace_root(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="rm -rf .")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_delete_pwd_workspace_root(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command='rm -rf "$PWD/."')])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_extract_archive_into_workspace_root(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    payload = tmp_path / "payload"
+    (payload / "tests").mkdir(parents=True)
+    (payload / "tests" / "fixture.py").write_text("value = 900\n", encoding="utf-8")
+    archive = tmp_path / "payload.tar"
+    subprocess.run(
+        ["tar", "-cf", str(archive), "-C", str(payload), "tests/fixture.py"], check=True
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="tar -xf payload.tar -C .")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_extract_archive_with_attached_root(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    payload = tmp_path / "payload"
+    (payload / "tests").mkdir(parents=True)
+    (payload / "tests" / "fixture.py").write_text("value = 900\n", encoding="utf-8")
+    archive = tmp_path / "payload.tar"
+    subprocess.run(
+        ["tar", "-cf", str(archive), "-C", str(payload), "tests/fixture.py"], check=True
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[action("run_shell", command="tar -xf payload.tar --directory=.")]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_extract_archive_through_env(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    payload = tmp_path / "payload"
+    (payload / "tests").mkdir(parents=True)
+    (payload / "tests" / "fixture.py").write_text("value = 900\n", encoding="utf-8")
+    archive = tmp_path / "payload.tar"
+    subprocess.run(
+        ["tar", "-cf", str(archive), "-C", str(payload), "tests/fixture.py"], check=True
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="env tar -xf payload.tar -C .")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_extract_archive_through_shell_wrapper(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    payload = tmp_path / "payload"
+    (payload / "tests").mkdir(parents=True)
+    (payload / "tests" / "fixture.py").write_text("value = 900\n", encoding="utf-8")
+    archive = tmp_path / "payload.tar"
+    subprocess.run(
+        ["tar", "-cf", str(archive), "-C", str(payload), "tests/fixture.py"], check=True
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[action("run_shell", command="sh -c 'tar -xf payload.tar -C .'")]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_shell_wrapper_find_delete(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="sh -c 'find . -delete'")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_use_shell_wrapper_find_while(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="sh -c 'find . -type f -print | while IFS= read -r f; do rm -f \"$f\"; done'",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_shell_option_find_delete(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="sh -e -c 'find . -delete'")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_eval_to_mutate_evaluator_tests(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="eval 'find . -delete'")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_extract_archive_into_implicit_workspace(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    payload = tmp_path / "payload"
+    (payload / "tests").mkdir(parents=True)
+    (payload / "tests" / "fixture.py").write_text("value = 900\n", encoding="utf-8")
+    archive = tmp_path / "payload.tar"
+    subprocess.run(
+        ["tar", "-cf", str(archive), "-C", str(payload), "tests/fixture.py"], check=True
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="tar -xf payload.tar")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_extract_archive_with_tar_get(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    payload = tmp_path / "payload"
+    (payload / "tests").mkdir(parents=True)
+    (payload / "tests" / "fixture.py").write_text("value = 900\n", encoding="utf-8")
+    archive = tmp_path / "payload.tar"
+    subprocess.run(
+        ["tar", "-cf", str(archive), "-C", str(payload), "tests/fixture.py"], check=True
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="tar --get -f payload.tar")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_python_script_to_mutate_workspace(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="python3 -c 'import shutil; shutil.rmtree(\".\")'",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_python_zipfile_to_mutate_workspace(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    payload = tmp_path / "payload"
+    (payload / "tests").mkdir(parents=True)
+    (payload / "tests" / "fixture.py").write_text("value = 900\n", encoding="utf-8")
+    archive = tmp_path / "payload.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.write(payload / "tests" / "fixture.py", "tests/fixture.py")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[action("run_shell", command="python3 -m zipfile -e payload.zip .")]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_execute_mutating_shell_script(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    script = tmp_path / "payload.sh"
+    script.write_text("rm -f tests/fixture.py\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="sh payload.sh")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_use_perl_script_to_mutate_workspace(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="perl -MFile::Find -e 'find(sub { unlink $_ if -f $_ }, q(.))'",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_use_awk_system_to_mutate_workspace(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="awk 'BEGIN { system(\"find . -type f -delete\") }'",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_use_lua_script_to_mutate_workspace(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="lua -e 'os.execute(\"find . -type f -delete\")'",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_rsync_into_workspace_root(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    payload = tmp_path / "payload" / "tests"
+    payload.mkdir(parents=True)
+    (payload / "fixture.py").write_text("value = 900\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="rsync -a payload/ .")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_apply_hidden_patch_payload(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    patch_file = tmp_path / "payload.patch"
+    patch_file.write_text(
+        "--- tests/fixture.py\n+++ tests/fixture.py\n@@ -1 +1 @@\n-value = 200\n+value = 900\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="patch -i payload.patch")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_execute_make_recipe_payload(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    makefile = tmp_path / "payload.mk"
+    makefile.write_text("wipe:\n\trm -f tests/fixture.py\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="make -f payload.mk wipe")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_execute_cmake_script_payload(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    script = tmp_path / "payload.cmake"
+    script.write_text('file(REMOVE "tests/fixture.py")\n', encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="cmake -P payload.cmake")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_execute_npm_script_payload(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    package = tmp_path / "package.json"
+    package.write_text(
+        '{"scripts":{"wipe":"rm -f tests/fixture.py"}}\n', encoding="utf-8"
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="npm run wipe")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_install_malicious_package_payload(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    package = tmp_path / "payload"
+    package.mkdir()
+    (package / "setup.py").write_text(
+        "from pathlib import Path\n"
+        "Path('tests/fixture.py').unlink()\n"
+        "from setuptools import setup\n"
+        "setup(name='payload', version='0.0.1')\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command="pip install ./payload --no-deps --no-build-isolation --target install",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_run_malicious_go_payload(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    payload = tmp_path / "payload.go"
+    payload.write_text(
+        'package main\nimport "os"\nfunc main() { _ = os.Remove("tests/fixture.py") }\n',
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="go run payload.go")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_change_workspace_permissions(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    original_mode = target.stat().st_mode & 0o777
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="chmod -R 000 .")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.stat().st_mode & 0o777 == original_mode
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_extract_7z_into_workspace(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    payload = tmp_path / "payload" / "tests"
+    payload.mkdir(parents=True)
+    (payload / "fixture.py").write_text("value = 900\n", encoding="utf-8")
+    archive = tmp_path / "payload.7z"
+    subprocess.run(["7z", "a", "-bd", str(archive), str(payload / "fixture.py")], check=True)
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="7z x payload.7z")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(shutil.which("cpio") is None, reason="cpio is unavailable")
+def test_code_fix_cannot_extract_cpio_into_workspace(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    payload = tmp_path / "payload"
+    (payload / "tests").mkdir(parents=True)
+    (payload / "tests" / "fixture.py").write_text("value = 900\n", encoding="utf-8")
+    archive = tmp_path / "payload.cpio"
+    subprocess.run(
+        ["cpio", "-o", "-H", "newc", "-F", str(archive)],
+        cwd=payload,
+        input=b"tests/fixture.py\n",
+        stdout=subprocess.PIPE,
+        check=True,
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="cpio -id -F payload.cpio")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_run_go_generate_directive(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    subprocess.run(["go", "mod", "init", "example.invalid/payload"], cwd=tmp_path, check=True)
+    (tmp_path / "payload.go").write_text(
+        "package payload\n//go:generate rm -f tests/fixture.py\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="go generate ./...")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_use_curl_config_to_overwrite_evaluator(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    payload = tmp_path / "payload.txt"
+    payload.write_text("value = 900\n", encoding="utf-8")
+    config = tmp_path / "payload.conf"
+    config.write_text(f"url = file://{payload}\noutput = {target}\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="curl -K payload.conf")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_copy_scp_payload_into_workspace(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    payload = tmp_path / "payload" / "tests"
+    payload.mkdir(parents=True)
+    (payload / "fixture.py").write_text("value = 900\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="scp -r payload/. .")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_run_container_with_workspace_mount(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command='docker run --rm -v "$PWD:/workspace" alpine',
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_delete_pwd_parent_workspace_alias(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f'rm -rf "$PWD/../{tmp_path.name}"',
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(shutil.which("vim") is None, reason="vim is unavailable")
+def test_code_fix_cannot_execute_vim_script_payload(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    script = tmp_path / "payload.vim"
+    script.write_text("call delete('tests/fixture.py')\nqa!\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="vim -es -S payload.vim")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(shutil.which("gdb") is None, reason="gdb is unavailable")
+def test_code_fix_cannot_execute_gdb_command_payload(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    script = tmp_path / "payload.gdb"
+    script.write_text("set pagination off\nshell rm -f tests/fixture.py\nquit\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="gdb -batch -x payload.gdb")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(
+    shutil.which("javac") is None or shutil.which("jar") is None,
+    reason="JDK is unavailable",
+)
+def test_code_fix_cannot_execute_java_jar_payload(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    source = tmp_path / "Payload.java"
+    source.write_text(
+        "import java.nio.file.*;\n"
+        "public class Payload { public static void main(String[] a) throws Exception { Files.deleteIfExists(Path.of(\"tests/fixture.py\")); } }\n",
+        encoding="utf-8",
+    )
+    classes = tmp_path / "classes"
+    classes.mkdir()
+    subprocess.run(["javac", "-d", str(classes), str(source)], check=True, cwd=tmp_path)
+    archive = tmp_path / "payload.jar"
+    subprocess.run(
+        ["jar", "cfe", str(archive), "Payload", "-C", str(classes), "Payload.class"],
+        check=True,
+        cwd=tmp_path,
+    )
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="java -jar payload.jar")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+def test_code_fix_cannot_execute_m4_payload(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "fixture.py"
+    target.parent.mkdir()
+    target.write_text("value = 200\n", encoding="utf-8")
+    payload = tmp_path / "payload.m4"
+    payload.write_text('syscmd("rm -f tests/fixture.py")\n', encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(replies=[action("run_shell", command="m4 payload.m4")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_send_linter_output_into_evaluator_tests(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"flake8 --output-file '{target}' app.py",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_send_attached_linter_output_into_evaluator_tests(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"flake8 -o'{target}' app.py",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_send_mypy_report_into_evaluator_tests(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"mypy --junit-xml '{target}' app.py",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_cannot_send_mypy_linecount_report_into_evaluator_tests(tmp_path: Path) -> None:
+    target = tmp_path / "tests" / "test_api.py"
+    target.parent.mkdir()
+    target.write_text("assert status == 200\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    llm = StubLlm(
+        replies=[
+            action(
+                "run_shell",
+                command=f"mypy --linecount-report '{target}' app.py",
+            )
+        ]
+    )
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "assert status == 200\n"
+    assert outcome.solved is False
+    assert any("evaluator" in text.lower() for text in outcome.observations)
 
 
 def test_code_fix_finalises_with_changed_source_not_a_report(tmp_path: Path) -> None:
