@@ -35,13 +35,38 @@ if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
   GPU_FLAGS="--gpus all"
 fi
 
-docker run -d --name "$NAME" --network "$NETWORK" $GPU_FLAGS \
-  -v "$STORE:/models:ro" \
-  -e OLLAMA_MODELS=/models \
-  -e OLLAMA_MAX_LOADED_MODELS=1 \
-  -e OLLAMA_KEEP_ALIVE=30m \
-  -e OLLAMA_CONTEXT_LENGTH="$CONTEXT" \
-  ollama/ollama:latest >/dev/null
+start_model() {
+  docker run -d --name "$NAME" --network "$NETWORK" $1 \
+    -v "$STORE:/models:ro" \
+    -e OLLAMA_MODELS=/models \
+    -e OLLAMA_MAX_LOADED_MODELS=1 \
+    -e OLLAMA_KEEP_ALIVE=30m \
+    -e OLLAMA_CONTEXT_LENGTH="$CONTEXT" \
+    ollama/ollama:latest >/dev/null
+}
+
+# `--gpus all` asks the toolkit for a CDI device, and the generated spec at
+# /etc/cdi/nvidia.yaml goes stale whenever the host's driver libraries are
+# upgraded without regenerating it: the container then dies at create time on a
+# mount for a file that no longer exists. That is a host problem needing root,
+# so instead of silently falling back to the CPU -- which is the difference
+# between a run that finishes and a run that is killed at its deadline -- ask
+# the same runtime the legacy way, which resolves libraries through ldcache.
+if ! start_model "$GPU_FLAGS" 2>/tmp/start_model.$$; then
+  if [ -n "$GPU_FLAGS" ]; then
+    sed 's/^/  /' /tmp/start_model.$$ >&2
+    printf 'CDI request failed; retrying through the legacy nvidia runtime\n' >&2
+    docker rm -f "$NAME" >/dev/null 2>&1 || true
+    GPU_FLAGS="--runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility"
+    start_model "$GPU_FLAGS" || { rm -f /tmp/start_model.$$; exit 1; }
+  else
+    cat /tmp/start_model.$$ >&2
+    rm -f /tmp/start_model.$$
+    exit 1
+  fi
+fi
+rm -f /tmp/start_model.$$
+printf 'gpu flags: %s\n' "${GPU_FLAGS:-none}"
 
 printf 'waiting for %s' "$NAME"
 i=0
