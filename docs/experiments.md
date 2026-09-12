@@ -2668,3 +2668,40 @@ task image не запускался, solved count не менялся.
   `local_task_extra/tasks/*/task.toml` присутствуют в плане (6 и 18),
   существующие CLI проверены `--help`, ссылки на code/test paths существуют,
   `git diff --check` чист. Unit suite не запускался: код/тесты не менялись.
+
+### P0-provenance-20260912 — происхождение forensic-fixture и rollback, без LLM-прогона
+
+- Контекст: стенд занят параллельной сессией (`public-20260912-E-BASE-r1`, архив
+  `133b81d09b0dc38be986ec85eceacb35809672da63828a31a4478e450decf53c`, worktree
+  `.worktrees/public-solves`, HEAD `d635cc7`). По правилу «один оператор endpoint»
+  новых прогонов и перезапусков контейнеров с этой стороны не было: endpoint-запросов 0,
+  LLM-токенов 0.
+- Ветки на момент проверки: `fix/public-solves` `d635cc7` (ahead 3 от origin,
+  новые `15720ca`, `0e22553`, `d635cc7`), `fix/sqli-login-solve` `31a8653`,
+  `agent/find-sqli-login` `2f98bf3`. Рабочие деревья чистые.
+- Rollback F-exact-v3 сохранён отдельно:
+  `build/rollback/F-exact-v3-fc11b072.zip`, SHA-256
+  `fc11b072c30666cf06d95ca4d4da772d1174327a783324f0ef905da37614466b` — совпадает с
+  ранее измеренным архивом 2/6 eligible.
+- Parity `local_task/incident-log-forensics/scripts/check_parity.py` → exit 0
+  (повтор, согласованность fixture).
+- Происхождение fixture проверено независимо от parity. Сохранённого upstream
+  snapshot в репозитории нет (известный долг G0 в `docs/tz-compliance-audit.md`),
+  поэтому сверка сделана с более ранними untracked-копиями импорта: в
+  `/home/ir6/my/Sber` и `.worktrees/e049-night` все восемь файлов
+  `local_task/incident-log-forensics/environment/` имеют mtime `2026-09-04 23:11:30`
+  и SHA-256, совпадающие байт в байт с закоммиченными в `15720ca`
+  (`auth.log` `fe6a68e5…`, `edge_decisions.log` `77a449c7…`,
+  `edge_decisions_fragment.log` `59d0ba38…`, `proxy_access.log` `f0820a8c…`,
+  `app.jsonl` `50c12ab0…`, `app_audit_recovered.jsonl` `9e81bdc5…`,
+  `collector_note.txt` `235946ca…`, `dns_ptr_hints.txt` `46f31def…`). Логи не
+  создавались из expected-ответа. Ограничение: это цепочка к локальному импорту
+  от 04.09, а не к upstream-архиву организаторов — G0 остаётся PARTIAL.
+- Чистый checkout: `git archive HEAD local_task/incident-log-forensics` даёт все
+  четыре `.log` с теми же хэшами, то есть правило `*.log` в `.gitignore` больше не
+  прячет fixture.
+- Образ задачи пересобран соседней сессией, ID `ccad631af151` (16:05:37 MSK), не
+  переиспользован старый. Внутри `/app/incident` восемь файлов с теми же SHA-256;
+  `expected_incident_report*` в образе отсутствует.
+- Не закрыто в P0 с этой стороны: позитивный/негативный eval-контроль шести checker
+  и новый полный baseline — они требуют стенда, занятого соседней сессией.
