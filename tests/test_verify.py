@@ -313,6 +313,64 @@ def test_an_empty_stale_file_is_diagnosed_as_empty(tmp_path: Path) -> None:
     assert result.stage == "non-empty"
 
 
+@POSIX_ONLY
+def test_a_failed_check_reports_why_it_failed(tmp_path: Path) -> None:
+    """A missing verifier binary must reach recovery as a fact, not bare `failed`."""
+    state = make_state(tmp_path)
+    target = tmp_path / "answer.txt"
+    target.write_text("candidate\n")
+    state.artifacts.append(target)
+
+    verdict = verify(state, deliverable=target, command="definitely-not-a-real-binary --check")
+
+    assert not verdict.ok
+    assert verdict.stage == "command"
+    assert "definitely-not-a-real-binary" in verdict.detail
+    assert "not found" in verdict.detail.lower()
+
+
+@POSIX_ONLY
+def test_a_failed_check_output_is_bounded_and_redacted(tmp_path: Path) -> None:
+    state = make_state(tmp_path, secrets=("sk-canary-value",))
+    target = tmp_path / "answer.txt"
+    target.write_text("candidate\n")
+    state.artifacts.append(target)
+
+    verdict = verify(
+        state,
+        deliverable=target,
+        command=(
+            "printf '\\141\\163\\163\\145\\162\\164\\151\\157\\156 "
+            "\\144\\145\\164\\141\\151\\154'; "
+            "printf 'sk-canary-%s' value >&2; yes Z | head -c 5000; exit 1"
+        ),
+    )
+
+    assert not verdict.ok
+    assert "assertion detail" in verdict.detail
+    assert "sk-canary-value" not in verdict.detail
+    assert len(verdict.detail) < 1800
+
+
+@POSIX_ONLY
+def test_failed_check_detail_is_one_line_for_telemetry(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+    target = tmp_path / "answer.txt"
+    target.write_text("candidate\n")
+    state.artifacts.append(target)
+
+    verdict = verify(
+        state,
+        deliverable=target,
+        command="printf 'first\\nsecond\\n'; exit 1",
+    )
+
+    assert not verdict.ok
+    assert "first\\nsecond" in verdict.detail
+    assert "\n" not in verdict.detail
+    assert "\r" not in verdict.detail
+
+
 def test_an_exact_file_requirement_rejects_wrong_bytes_without_a_model_check(
     tmp_path: Path,
 ) -> None:

@@ -176,6 +176,14 @@ TOOL_OUTPUT_TAIL_BYTES = 2000
 """How much of a tool's output reaches the model. Head and tail are kept because the
 command and its failure usually live at opposite ends. Truncation is always marked."""
 
+VERIFY_DETAIL_CHARS = 1200
+"""How much failed-check output is relayed in a verifier verdict.
+
+The command and exit code already occupy part of the recovery observation. This smaller
+bound carries a missing-binary error or the first useful assertion without replaying an
+entire test suite into the next model call.
+"""
+
 SHELL_EXECUTABLE = "/bin/sh"
 """What `run_shell` execs. `sh` and not `bash`: the pipelines and redirections a
 playbook needs are POSIX, and `sh` is present in every image we might be handed."""

@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from agent import result_contract
+from agent import limits, result_contract
 from agent.paths import digest, permits
 from agent.redact import redact
 from agent.state import AgentState
@@ -40,6 +40,25 @@ STAGE_NON_EMPTY = "non-empty"
 STAGE_COMMAND = "command"
 STAGE_UNVERIFIED = "unverified"
 STAGE_EXACT_FILE = "exact-file"
+
+
+def _single_line(value: str) -> str:
+    """Keep verifier details on one physical line before telemetry renders them."""
+    escaped: list[str] = []
+    for char in value:
+        code = ord(char)
+        if char == "\n":
+            escaped.append(r"\n")
+        elif char == "\r":
+            escaped.append(r"\r")
+        elif char == "\t":
+            escaped.append(r"\t")
+        elif code < 32 or code == 127:
+            escaped.append(f"\\x{code:02x}")
+        else:
+            escaped.append(char)
+    return "".join(escaped)
+
 
 def _untouched(state: AgentState, deliverable: Path) -> bool:
     """Is this exactly the file that was already there when the run began?
@@ -101,11 +120,11 @@ def verify(state: AgentState, *, deliverable: Path, command: str) -> VerifyResul
     default: a verify command is acting, and acting past the reserve is what
     `Budget.may_recover()` exists to prevent one step later.
 
-    Raw command output never reaches `detail` -- only its exit code and the tool's own
-    short failure label do. The command text itself is redacted before it is echoed
-    back, because the text came from the model and can embed a secret the same way
-    output can (`tests/test_verify.py` caught this by putting the canary in the
-    command, not the output).
+    Failed command output is relayed in a smaller bounded excerpt: an assertion or
+    missing binary is useful recovery evidence, while a whole test suite is not. The
+    output is already bounded by `run_shell` and is redacted again here before it is
+    appended. The command text itself is redacted before it is echoed back, because
+    the text came from the model and can embed a secret the same way output can.
     """
     resolved = _resolve_deliverable(deliverable, state.workspace, state.named_paths)
     if resolved is None:
@@ -201,13 +220,13 @@ def verify(state: AgentState, *, deliverable: Path, command: str) -> VerifyResul
         timeout_s=state.budget.tool_timeout_s(),
         secrets=state.secrets,
     )
-    safe_command = redact(stripped, state.secrets)
+    safe_command = _single_line(redact(stripped, state.secrets))
     if result.ok:
         return VerifyResult(ok=True, stage=STAGE_COMMAND, detail=f"verify command exited 0: {safe_command}")
 
-    reason = result.detail or f"exit {result.exit_code}"
-    return VerifyResult(
-        ok=False,
-        stage=STAGE_COMMAND,
-        detail=f"verify command failed ({reason}): {safe_command}",
-    )
+    reason = _single_line(result.detail or f"exit {result.exit_code}")
+    detail = f"verify command failed ({reason}): {safe_command}"
+    evidence = _single_line(redact(result.output.strip(), state.secrets))[: limits.VERIFY_DETAIL_CHARS]
+    if evidence:
+        detail = f"{detail}; output: {evidence}"
+    return VerifyResult(ok=False, stage=STAGE_COMMAND, detail=detail)
