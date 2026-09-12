@@ -3322,3 +3322,12 @@ timeout 5400 python3 scripts/eval/run_suite.py \
 - **Классификация нуля:** reasoning (**фабрикация**), не serialization/packaging/tool. Формат deliverable корректный (4 строки, верные ключи), но значения выдуманы: `10.0.0.1 / jdoe / 123456789 / …12:34:56.789Z` против эталона `203.0.113.50 / deploysvc / 2457600 / …14:03:44.900Z`. Шаги 27–30 — осцилляция между `unknown` и придуманными значениями; мультилог-корреляция (nested JSONL → malicious record → proxy XFF → exfil bytes) не выполнена.
 - **Вывод:** потолок рассуждения 7B на тяжёлой forensic-корреляции. В отличие от find-sqli (модель находит ответ, теряет в JSON), здесь модель **ответ не выводит**. Тулинг/prompt дёшево не чинят; кандидат — не серийный фактор, а вопрос достижимости на этой модели.
 - **Оговорка снята:** `verifier.log/pytest_output/app.log: unavailable` — ожидаемо: forensic использует shell `test.sh`, который пишет только `reward.txt` и не создаёт pytest-артефактов. reward=0 пришёл из `reward.txt` штатно (значения deliverable явно неверны против эталона). Дефекта захвата логов нет, false-zero нет.
+
+## P4-fix-construction-probe-20260912 — fix-sqli не потолок: модель строит правку целиком
+
+- **Тип:** offline-диагностика (build-the-fix), через прокси стенда, LLM 7b `dae161e27b0e`, temp 0, n=3.
+- **Команда:** `scripts/eval/probe_fix_construction.py` (читает функцию из `local_task/fix-sqli-login`).
+- **Результат:** 3/3 correct. Дав целиком уязвимую `login`, модель возвращает корректную связанную правку (`$1/$2` + `fetchrow(query, req.username, req.password)`), потребитель изменён вместе с запросом.
+- **Вывод:** fix-sqli — не потолок способностей, а артефакт петли: построчные anchored `replace_text` + playbook «minimal diff» → застревает на строке построения. Рычаг — направить code-fix на whole-function rewrite через `write_file`. Другой механизм, чем опровергнутая подсказка про replace_text.
+- **Ограничение:** проба даёт функцию на блюде; локализация в петле не проверена. Фактор мерить живым прогоном на fix-sqli-login/search.
+- **Разбор:** `docs/research/live-runs/2026-09-12-fix-construction-probe.md`.
