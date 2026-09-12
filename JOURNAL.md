@@ -18,6 +18,55 @@ POSIX (WSL2). Ждёт подключения к loop.py.
 - План ночи добавлен в конец `PLAN.md`. Первый шаг — exact-file timeout: трассы
   показывают правильный файл и `reward=1`, но kill на 120 с; до production-кода
   сначала воспроизведение и красный тест.
+- RED подтверждён: `python3 -m pytest
+  tests/test_loop.py::test_a_successful_exact_file_write_finishes_without_an_extra_model_turn -q`
+  дал `1 failed`; один `write_file` вызвал четыре LLM-turns до `transcript exhausted`.
+  Гипотеза: после успешной записи loop не вызывает exact-file verifier — он доступен
+  только в ветке model `finish`, поэтому модель повторяет запись до timeout.
+- Критик перед первым коммитом нашёл два P1: fast-path объявлял бы write-only
+  `code-fix`/`code-audit`/`forensics` решёнными, а parser принимал дополнительные
+  действия после exact-фразы и длинное отрицание `never ... create`. Не коммитить
+  первый вариант; добавить regression-тесты и ограничить фактор.
+- Второй RED: `python3 -m pytest tests/test_result_contract.py
+  tests/test_loop.py::test_exact_file_write_fast_path_is_reserved_for_general_tasks
+  tests/test_loop.py::test_exact_file_fast_path_records_one_empty_command_verification -q`
+  дал `6 failed, 9 passed`: четыре специализированных playbook’а обходили gate,
+  parser принимал `; run pytest` и длинное `never`.
+- Второй GREEN: тот же targeted command после минимальной правки дал `16 passed`.
+  Автоматический exact-file gate теперь доступен только `general`; parser требует
+  прямую одношаговую формулировку и отклоняет дополнительные действия/отрицания.
+- Третий RED: новые regression cases для `Read input. Create...`, `must/should not`,
+  `(parse/load/compare/use ...)` и `with ... content` сначала дали 4 parser failures;
+  во время grammar-правки был отдельно пойман и исправлен `PatternError` незакрытой
+  группировки regex.
+- Третий GREEN: после strict `_NOTE` grammar и расширения безопасных bridge forms
+  полный `python3 -m pytest -q` дал `506 passed in 24.11s`; compileall и `git diff
+  --check` зелёные. Критик: ACK, blockers не обнаружены. Архив v2 до коммита:
+  98,979 bytes, SHA-256 `f53ab09e50596ad5f49fd6d6eba429e0cc7821ae64aca31aea5022f3f42bc438`,
+  `check_submission.py` PASS.
+- После commit `c0e5ebd` и archive v3 (`99125` bytes, SHA-256
+  `fc11b072c30666cf06d95ca4d4da772d1174327a783324f0ef905da37614466b`) короткий
+  live gate `hello-file`/`bye-file` на том же GPU model/proxy/network дал **2/2
+  eligible**, `stop=verified`, `agent_exit=0`, `timed_out=False`, 2160 endpoint
+  tokens и 8.5 s wall; results SHA-256
+  `d27963dda4e6abe2908899954a5f2144229889b8cf8eb728f57ac0c257a830b`.
+- Full public control на том же commit/archive дал `2/6 eligible`, `complete=True`,
+  152347 endpoint tokens и 936 s wall: `bye-file`/`hello-file` — eligible; `find-sqli-login`
+  — verification zero (14 calls, 27940 tokens); `fix-sqli-login` — reasoning/step-cap
+  zero (30 steps, 75079 tokens); `fix-sqli-search` — reasoning/stuck zero (14 steps,
+  34692 tokens); `incident-log-forensics` — startup `local image unavailable`, не
+  reasoning zero. Results SHA-256 `6ed8c2104d1ca4acef14adaa6833ab0b64057b8ad22bc4e46beb0ba5b7caef58`,
+  suite SHA-256 `e8516118157015e8b2143570191b0869989c9295d7d4d904ffd98b7f19fcb202`,
+  manifest SHA-256 `18c157046508fd1abf90d6337cf07f6fbdc728383a8e36ff103317fb22083600`.
+  Traces: `find-sqli-login` wrote a semantically insufficient report; `fix-sqli-login`
+  produced `fetchrow`/500 and then repeated edits; `fix-sqli-search` bound `$1` but
+  forgot to pass `q`, yielding 500 and then repeated reads. Common controller fact:
+  red verifier exposed only exit code, not stdout/stderr.
+- H09 RED: targeted missing-binary/assertion tests failed because detail was only
+  `exit 127/1` plus command. H09 GREEN: `3 passed`; full offline suite `509 passed`
+  after relaying up to 1200 redacted output characters. Critic found and required a
+  one-line sanitizer before commit; telemetry regression then passed. This remains
+  offline until a fresh live archive is built.
 
 ## Лимиты
 
@@ -1413,3 +1462,21 @@ B2 (контроли по краям, потому что стенд за ноч
 - 17:15 — AFK свёрнут: автономность выключена, сторож снят.
 
 - 02:40 — сторож: работа поднята заново (сессия исчезла) в окне tmux «afk-public-solves»
+
+- 02:45 — сторож: сессия разбужена в своём окне после обрыва
+
+- 02:56 — сторож: работа поднята заново (оборвалась связь) в окне tmux «afk-public-solves»
+
+- 03:01 — сторож: сессия разбужена в своём окне после обрыва
+
+- 03:11 — сторож: работа поднята заново (оборвалась связь) в окне tmux «afk-public-solves»
+
+- 03:16 — сторож: сессия разбужена в своём окне после обрыва
+
+- 03:27 — сторож: работа поднята заново (оборвалась связь) в окне tmux «afk-public-solves»
+
+- 03:32 — сторож: сессия разбужена в своём окне после обрыва
+
+- 03:42 — сторож: работа поднята заново (оборвалась связь) в окне tmux «afk-public-solves»
+
+- 03:47 — сторож: сессия разбужена в своём окне после обрыва

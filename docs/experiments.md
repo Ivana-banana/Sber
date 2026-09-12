@@ -3231,3 +3231,74 @@ timeout 5400 python3 scripts/eval/run_suite.py \
   `manifest.json` `8bab88145a9c543ea0a0c8e1fca30d4622567067f21a611bb2d39badb7faf17d`.
 - Combined raw summary: `docs/research/live-runs/C-live-20260912-summary.txt`,
   SHA-256 `d97ca2527829dceb6bd3ef9cc40357976b75ff04f7a376f5802707c67ce01ff4`.
+
+### F-exact-write-post-C (2026-09-12) — автоматическая проверка exact-file после записи
+
+- Commit: `c0e5ebd` (`agent: bound exact-file write fast path`); один runtime-фактор
+  относительно C: после успешного `write_file` loop вызывает exact-file oracle только
+  для `general` и только при строгом одношаговом контракте. Audit/fix/forensics/ctf
+  fast-path не получают. Полный offline suite перед архивом: **506 passed**.
+- Archive: `build/candidate-20260912-night-exact-v3/submission.zip`, 99 125 байт,
+  SHA-256 `fc11b072c30666cf06d95ca4d4da772d1174327a783324f0ef905da37614466b`;
+  `scripts/check_submission.py` PASS. Model/stand: `qwen2.5-coder:7b-instruct-q4_K_M`,
+  Ollama GPU container, context 4096, default temperature, `timeout_scale=1.0`,
+  `reuse_images=true`, same proxy/network/contract as C-GPU.
+- Short gate command: `python3 scripts/eval/run_suite.py --tasks-root local_task
+  --only hello-file bye-file --model qwen2.5-coder:7b-instruct-q4_K_M
+  --base-url http://codex-c-proxy-night-exact-20260912:8000/v1 --api-key ollama
+  --network sber-eval --counter-container codex-c-proxy-night-exact-20260912
+  --timeout-scale 1.0 --reuse-images --archive
+  build/candidate-20260912-night-exact-v3/submission.zip --out
+  build/public-20260912-night-exact-short-r2 --label
+  public-20260912-night-exact-short-r2`.
+- Short result: **2/2 eligible**, both `stop=verified`, exit 0, no timeout;
+  2 160 endpoint tokens, 8.5 s wall. Raw `results.tsv` SHA-256
+  `d27963dda4e6abe2908899954a5f2144229889b8cf8eb728f57ac0c257a830b`.
+- Full command: same command without `--only`, output
+  `build/public-20260912-night-exact-full-r1`.
+- Full result: `complete=true`, **2/6 eligible**, 152 347 endpoint tokens, 936 s
+  wall. `bye-file` and `hello-file`: 1 each, eligible; `find-sqli-login`: 0,
+  verification failure after 14 calls/27 940 tokens; `fix-sqli-login`: 0,
+  reasoning/step cap after 30 steps/75 079 tokens; `fix-sqli-search`: 0,
+  reasoning/stuck after 14 steps/34 692 tokens; `incident-log-forensics`: N/A,
+  startup because local image was unavailable. No zero is attributed to startup as
+  reasoning. Raw hashes: `results.tsv`
+  `6ed8c2104d1ca4acef14adaa6833ab0b64057b8ad22bc4e46beb0ba5b7caef58`,
+  `suite.json` `e8516118157015e8b2143570191b0869989c9295d7d4d904ffd98b7f19fcb202`,
+  `manifest.json` `18c157046508fd1abf90d6337cf07f6fbdc728383a8e36ff103317fb22083600`.
+- Conclusion: exact-file timeout failure is fixed and the eligible score rises from
+  C-GPU `0/6` to `2/6`; this is a measured controller/archive result, not a claim that
+  SQLi behavior improved. The two exact tasks are a bounded control gate.
+
+### H09-live (2026-09-12) — bounded/redacted failed-verifier output
+
+- Commit: `5ade80b` (`agent: relay bounded verifier failures`); one runtime factor:
+  failed model-supplied verify now appends up to 1 200 redacted output characters to
+  its one-line detail. Exit code and success gate are unchanged. Offline suite before
+  archive: **509 passed**.
+- Archive: `build/candidate-20260912-h09-v1/submission.zip`, 99 533 байта,
+  SHA-256 `8c1f7748b7a26d3d73b4d28acf42abf4935e505aacca9e79c0f836de0b74e0ee`;
+  submission check PASS. Same GPU model, context 4096, sampling and network as
+  F-exact-write-post-C.
+- Focused command: `python3 scripts/eval/run_suite.py --tasks-root local_task --only
+  find-sqli-login fix-sqli-login fix-sqli-search --model
+  qwen2.5-coder:7b-instruct-q4_K_M --base-url
+  http://codex-c-proxy-night-exact-20260912:8000/v1 --api-key ollama
+  --network sber-eval --counter-container codex-c-proxy-night-exact-20260912
+  --timeout-scale 1.0 --reuse-images --archive
+  build/candidate-20260912-h09-v1/submission.zip --out
+  build/public-20260912-h09-sqli-r1 --label public-20260912-h09-sqli-r1`.
+- Result: `complete=true`, **0/3 eligible**, 153 786 endpoint tokens, 920 s wall.
+  `find-sqli-login`: 0, reasoning/step cap, 30 steps, 68 361 tokens; repeated
+  searches then repeated empty report writes, no finish. `fix-sqli-login`: 0,
+  reasoning/stuck, 16 steps, 38 053 tokens; red pytest output was visible, but the
+  model made unrelated edits and stopped. `fix-sqli-search`: 0,
+  reasoning/stuck, 14 steps, 34 692 tokens; no finish, repeated attempted edits and
+  reads. No endpoint failure and no timeout in these three rows. Raw hashes:
+  `results.tsv` `455acd5f6174284d5566e61884a71a9ccb56697b38acca4c522a36a1995f8b3a`,
+  `suite.json` `0098716ec2016d90d6bc1e75e95f2d2bc003e4906148629b5dca2c4bbbad8e27`,
+  `manifest.json` `d24306f4f250f6c92d8f4251b53fc0d80deed8bde562f5e27559b47f3ee35473`.
+- Conclusion: H09 improves diagnosis/limits one fix run (baseline full had 30/75 079
+  tokens; H09 focused had 16/38 053) but gives **no solved gain**. The common remaining
+  failure is action selection/recovery, not absence of verifier text. Next factor must
+  be separate and test-first.
