@@ -611,3 +611,30 @@ def test_replace_text_refuses_to_leave_the_workspace(tmp_path: Path) -> None:
 
     assert not result.ok
     assert outside.read_text(encoding="utf-8") == "secret"
+
+
+def test_write_file_reports_that_a_json_deliverable_does_not_parse(tmp_path: Path) -> None:
+    # E-BASE-r1 find-sqli-login: the model wrote a correct finding whose `evidence`
+    # string held an unescaped quote, `write_file` answered "wrote N bytes", and the
+    # model then replaced its own analysis with `{"findings": []}` twenty times.
+    broken = '{"findings": [{"evidence": "query = f"SELECT 1""}]}'
+    result = write_file(tmp_path / "security_report.json", broken, workspace=tmp_path)
+
+    assert result.ok is True, "the deliverable still has to exist before the deadline"
+    assert (tmp_path / "security_report.json").read_text(encoding="utf-8") == broken
+    assert "not valid JSON" in result.output
+    assert "delimiter" in result.output, "say what is wrong, not merely that something is"
+
+
+def test_write_file_stays_quiet_about_json_that_parses(tmp_path: Path) -> None:
+    result = write_file(tmp_path / "report.json", '{"findings": []}', workspace=tmp_path)
+
+    assert result.ok is True
+    assert "JSON" not in result.output
+
+
+def test_write_file_does_not_parse_files_that_are_not_json(tmp_path: Path) -> None:
+    result = write_file(tmp_path / "incident_report.txt", "attacker_ip=203.0.113.50", workspace=tmp_path)
+
+    assert result.ok is True
+    assert "JSON" not in result.output

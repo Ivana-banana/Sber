@@ -19,6 +19,7 @@ Standard library only, same as the rest of `agent/`.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import signal
@@ -293,10 +294,23 @@ def write_file(
             duration_s=time.monotonic() - started,
         )
 
+    written = f"wrote {len(content.encode('utf-8'))} bytes to {target}"
+    # A byte count is not evidence that a machine-readable deliverable is readable.
+    # In E-BASE-r1 the model wrote a finding that satisfied every assertion the
+    # verifier makes, lost it to one unescaped quote inside `evidence`, was told
+    # "wrote 481 bytes", and spent the rest of its budget replacing its own analysis
+    # with `{"findings": []}`. The file is still written -- the deadline checkpoint
+    # needs a deliverable on disk -- and nothing here judges what is in it.
+    if target.suffix.lower() == ".json":
+        try:
+            json.loads(content)
+        except ValueError as exc:
+            written += f"; the file is not valid JSON: {exc}"
+
     return ToolResult(
         name="write_file",
         ok=True,
-        output=f"wrote {len(content.encode('utf-8'))} bytes to {target}",
+        output=written,
         duration_s=time.monotonic() - started,
     )
 
