@@ -21,8 +21,15 @@ Claude, 12.09.2026 (день) — пакет E плана `2026-09-11-all-tasks-
 (`15720ca`); `--gpus all` падал на устаревшей CDI-спеке хоста, стенд уходил на CPU и
 задачи убивались по таймауту (`0e22553`, откат на `--runtime=nvidia`). Стенд поднят как
 `claude-e-model-20260912` / `claude-e-proxy-20260912`, first-call 91,2 с, warm 2,1 с,
-0 upstream errors. Идёт полный public baseline `build/public-20260912-E-BASE-r1`
-архивом `133b81d0…`. Намеренно не менялись: prompt, budgets, MAX_STEPS, модель,
+0 upstream errors. Полный public baseline `build/public-20260912-E-BASE-r1` закончен:
+solved 2/6, eligible 2/6, complete=true, 205 914 токенов, 1 605 с, шесть строк из
+шести. Карточка и разбор лимитов — `docs/research/live-runs/2026-09-12-E-BASE-r1-card.md`,
+механизм нуля audit-задачи — `2026-09-12-find-sqli-json-loss.md`. Добавлен фактор C1
+(`f6c10cb`, `agent/tools.py`): `write_file` сообщает ошибку разбора для `.json`-результата.
+Живым прогоном C1 не измерен — **experimental**, нужна человеческая проверка tool policy.
+**Стенд передан второй сессии (sber-9f) 12.09 ~17:05; контейнеры `claude-e-*` оставлены
+поднятыми, очередь endpoint у неё.** За собой оставляю только `agent/tools.py`;
+`agent/loop.py`, `agent/playbooks.py`, `agent/runtime.py` свободны. Намеренно не менялись: prompt, budgets, MAX_STEPS, модель,
 `run.sh`, сборщик submission, чужие worktree и `deep-research-report.md`.
 
 Claude, 10.09.2026 (вечер) — продолжение public-solves в том же worktree, ветка
