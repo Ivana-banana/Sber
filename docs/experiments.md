@@ -2640,3 +2640,31 @@ task image не запускался, solved count не менялся.
   не зависит (пара1 B=read/T=search, пара2 T2=read/B2=search); ускорение первого
   plan у json_schema устойчиво по порядку (11–12s против native 23–62s). Вывод:
   узкое место — навигация к уязвимому исходнику, не протокол. Следующий шаг — N3.
+
+### A20260912-plan — сверка текущих провалов для плана, без LLM-прогона
+
+- Исходный docs checkout: `9ab5603`; прочитанные runtime-ветки:
+  `fix/public-solves` `c0e2549` → соседний fixture-only `15720ca`,
+  `fix/sqli-login-solve` `31a8653`, `agent/find-sqli-login` `2f98bf3`.
+- Результат: `docs/superpowers/plans/2026-09-12-current-failures.md`.
+  План покрывает 6 public, 18 extra и security/release gaps; готовые O1/O2/O3/F/R
+  отделены от непроверенных гипотез. Изменений runtime нет.
+- Пересчёт исходных TSV через `csv.DictReader(..., delimiter="\t")` и
+  `hashlib.sha256(path.read_bytes())`: F-exact-full — **2/6 eligible**,
+  **152 347 endpoint-токенов**, **935,6 с**; H09 — **0/3**, **153 786**,
+  **919,8 с**. Это повторный анализ исторических запусков, не новые измерения.
+  Paths/hashes таблиц приведены в §4 плана; остальные карточки находятся в
+  журналах соответствующих worktree.
+- Причины нулей: audit — пустые findings; login R4 — несогласованная правка
+  query/вызова; search H09 — параметр не передан, 500 в обычном и security-тесте;
+  incident в последнем полном run — startup. Четыре incident-log fixture уже
+  восстановлены соседним `15720ca`; свежий автономный результат ещё не измерен.
+- Реальная локальная проверка:
+  `python3 local_task/incident-log-forensics/scripts/check_parity.py` из
+  `.worktrees/public-solves` → exit 0. Это проверка согласованности fixture,
+  не решение агента. Новых endpoint-запросов: 0; новых LLM-токенов: 0;
+  новый agent wall time: неприменим.
+- Документные проверки: все имена из `local_task/*/task.toml` и
+  `local_task_extra/tasks/*/task.toml` присутствуют в плане (6 и 18),
+  существующие CLI проверены `--help`, ссылки на code/test paths существуют,
+  `git diff --check` чист. Unit suite не запускался: код/тесты не менялись.

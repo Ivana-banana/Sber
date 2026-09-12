@@ -43,6 +43,18 @@ Codex, 07.09.2026, углубление organizer-first: проверить ко
 
 ## Завершено
 
+**Codex, 12.09.2026 — план по текущим провалам.**
+`docs/superpowers/plans/2026-09-12-current-failures.md` обновляет очередь по
+`fix/public-solves` (`15720ca`), `fix/sqli-login-solve` (`31a8653`) и
+`agent/find-sqli-login` (`2f98bf3`). Покрыты все 6 public, 18 extra,
+исторические injection-провалы и release gaps. Проверка: пересчёт сырых TSV,
+SHA, coverage-check плана, CLI `--help`, forensic parity exit 0, `git diff --check`.
+Последний полный измеренный public — 2/6 eligible на F-exact, не на последнем HEAD.
+Runtime и стенд не менялись, новых модельных прогонов нет. Карточка A20260912-plan
+в `docs/experiments.md`. Коммит документа искать через
+`git log -1 -- docs/superpowers/plans/2026-09-12-current-failures.md`;
+фиксация локальная, push не выполнялся.
+
 **Codex, 11.09.2026 — план по всем задачам и общим сбоям, без кода.**
 `docs/superpowers/plans/2026-09-11-all-tasks-recovery.md`: E, O1–O3, F, A, L, S,
 C, I, M, G, R; роли исполнителей, владение файлами, единая очередь endpoint,
