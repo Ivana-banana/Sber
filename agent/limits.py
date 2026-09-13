@@ -311,7 +311,13 @@ LLM_MAX_ATTEMPTS = 6
 """Total requests one logical call may cost, retries and protocol fallbacks included.
 
 Six because the worst legitimate path is one retry plus three rungs of fallback, and
-a cap that cuts the ladder short would look like an unsupported endpoint."""
+a cap that cuts the ladder short would look like an unsupported endpoint.
+
+That path now also includes the one context-overflow budget cut, which makes it exactly
+six requests -- the slack this cap used to carry is spent. Any further step added to a
+single logical call has to raise this number with it;
+`test_the_attempt_budget_still_covers_a_retry_a_cut_and_the_whole_ladder` is what will
+notice if it does not."""
 
 DEFAULT_CALL_STYLE = "native_tools"
 """Which request shape we start from.

@@ -136,13 +136,16 @@ CONTEXT_OVERFLOW_MARKERS = (
     "context length",
     "context size",
     "context window",
-    "max_tokens",
 )
 """Wording servers use when the request was refused because prompt + `max_tokens`
 exceeds the context: vLLM says "This model's maximum context length is 4096 tokens...",
 llama-server "the request exceeds the available context size". Ollama says nothing -- it
 silently truncates the *front* of the prompt instead, which is E055 and is not fixable
-from the status code."""
+from the status code.
+
+A bare mention of `max_tokens` is deliberately NOT a marker. Gateways reject the
+parameter itself ("Unrecognized request argument supplied: max_tokens") and that is a
+shape problem only the ladder can fix; every real overflow wording names the context."""
 
 
 def is_context_overflow(detail: str) -> bool:
@@ -340,6 +343,13 @@ class HttpLlm:
     on_event: Callable[[str, str], None] | None = field(default=None, repr=False)
     """Called as (kind, detail) for protocol downgrades and retries, so the loop can
     put them in the audit trail. Never receives secrets: text is redacted first."""
+
+    output_ceiling: int | None = field(default=None, repr=False)
+    """Answer budget the endpoint has already refused as too large, once one has been
+    found. Sticky for the same reason `style` is: a run whose history sits near the
+    context limit meets that 400 on every call, and re-discovering it per call spends a
+    wasted request per step -- the second ranking criterion. It caps, never raises, so a
+    caller asking for less still gets less."""
 
     def complete(
         self,
@@ -605,7 +615,9 @@ class HttpLlm:
 
         last = LlmError(reason="no attempt was made", retryable=False)
         retries_at_style = 0
-        budget_cut = False
+        if self.output_ceiling is not None:
+            max_output_tokens = min(max_output_tokens, self.output_ceiling)
+        budget_cut = self.output_ceiling is not None
 
         for attempt in range(limits.LLM_MAX_ATTEMPTS):
             remaining = budget_s if attempt == 0 else deadline - self.clock()
@@ -661,6 +673,7 @@ class HttpLlm:
                     # prompt alone is too long, which no budget can fix.
                     budget_cut = True
                     max_output_tokens = max(max_output_tokens // 2, limits.LLM_MIN_OUTPUT_TOKENS)
+                    self.output_ceiling = max_output_tokens
                     self._note("shrink", f"http {status} on context -> max_tokens {max_output_tokens}")
                     continue
 

@@ -801,3 +801,74 @@ def test_the_flat_tool_call_shape_is_accepted() -> None:
     assert isinstance(result, LlmReply)
     assert json.loads(result.text) == {"action": "ls"}
     assert client.style == llm.NATIVE_TOOLS, "a usable answer must not cost a rung"
+
+
+def test_an_unsupported_max_tokens_argument_is_a_shape_problem_not_a_budget_one() -> None:
+    # Some OpenAI-compatible gateways reject the parameter itself ("use
+    # max_completion_tokens"). The word `max_tokens` is in the body, but nothing is
+    # oversized: cutting the budget spends an attempt and halves the answer for the
+    # rest of the call for no reason. Only the ladder can fix this one.
+    client, endpoint, events = make_client(
+        [
+            (400, b'{"error":"Unrecognized request argument supplied: max_tokens"}'),
+            (200, chat_reply('{"action":"ls"}')),
+        ]
+    )
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=2048)
+
+    assert isinstance(result, LlmReply)
+    assert client.style == llm.JSON_SCHEMA
+    assert [kind for kind, _ in events] == ["degrade"]
+    assert endpoint.bodies[1]["max_tokens"] == 2048, "the budget was never the problem"
+
+
+def test_the_cut_budget_sticks_for_the_rest_of_the_run() -> None:
+    # The ladder pays for its discovery once (test_the_downgrade_sticks_for_the_rest_of
+    # _the_run). The budget must too: a run whose history sits near the context limit
+    # hits the same 400 on every single call, and a per-call cut pays for the same
+    # discovery again and again -- one wasted request per step, which is the second
+    # ranking criterion.
+    client, endpoint, _ = make_client(
+        [
+            (400, VLLM_OVERFLOW),
+            (200, tool_reply('{"action":"ls"}')),
+        ]
+    )
+    client.complete_structured([], schema=SCHEMA, max_output_tokens=2048)
+    client.complete_structured([], schema=SCHEMA, max_output_tokens=2048)
+
+    assert [body["max_tokens"] for body in endpoint.bodies] == [2048, 1024, 1024]
+
+
+def test_a_caller_asking_for_less_than_the_ceiling_still_gets_less() -> None:
+    client, endpoint, _ = make_client(
+        [
+            (400, VLLM_OVERFLOW),
+            (200, tool_reply('{"action":"ls"}')),
+        ]
+    )
+    client.complete_structured([], schema=SCHEMA, max_output_tokens=2048)
+    client.complete_structured([], schema=SCHEMA, max_output_tokens=512)
+
+    assert endpoint.bodies[2]["max_tokens"] == 512, "the ceiling caps, it does not raise"
+
+
+def test_the_attempt_budget_still_covers_a_retry_a_cut_and_the_whole_ladder() -> None:
+    # The worst legitimate path grew by one request. If the cap does not cover it, the
+    # very failure this change exists to fix ends as an error whenever the endpoint
+    # also hiccups once on the way.
+    client, _, events = make_client(
+        [
+            (503, b"transient"),
+            (400, VLLM_OVERFLOW),
+            (400, b"no tools"),
+            (400, b"no json_schema"),
+            (400, b"no json_object"),
+            (200, chat_reply('{"action":"ls"}')),
+        ]
+    )
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=2048)
+
+    assert isinstance(result, LlmReply), "the worst legitimate path must still arrive"
+    assert [kind for kind, _ in events] == ["retry", "shrink", "degrade", "degrade", "degrade"]
+    assert client.style == llm.TEXT
