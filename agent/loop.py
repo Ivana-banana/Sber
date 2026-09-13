@@ -413,6 +413,16 @@ def _deliverable(act: dict[str, Any], state: AgentState) -> tuple[Path | None, s
             f"finish refused: {candidate} is a directory, not a file. "
             f"Назови файл с результатом."
         )
+    if candidate.suffix.lower() == ".json":
+        # F5 (13.09 review): form, not content. `write_file` already reports a parse
+        # error (C1), but an empty `verify` used to carry the broken file to `solved`.
+        try:
+            json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError) as error:
+            return None, (
+                f"finish refused: {candidate} is not valid JSON ({error}). "
+                f"Исправь файл, чтобы он разбирался, и повтори finish."
+            )
     return candidate, ""
 
 

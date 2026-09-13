@@ -400,7 +400,7 @@ def test_a_verify_command_whose_failure_is_swallowed_is_refused(tmp_path: Path) 
         replies=[
             action("write_file", path=str(target), content="{}"),
             action("finish", path=str(target), verify=swallowed, summary="готово"),
-            action("write_file", path=str(target), content="secret"),
+            action("write_file", path=str(target), content='{"token": "secret"}'),
             action("finish", path=str(target), verify=honest, summary="готово"),
         ]
     )
@@ -453,7 +453,7 @@ def test_a_pipeline_that_compares_something_is_left_alone(tmp_path: Path) -> Non
     command = f"cat {target} | grep -q sql_injection"
     llm = StubLlm(
         replies=[
-            action("write_file", path=str(target), content="sql_injection"),
+            action("write_file", path=str(target), content='["sql_injection"]'),
             action("finish", path=str(target), verify=command, summary="готово"),
         ]
     )
@@ -474,7 +474,7 @@ def test_a_verify_command_that_can_fail_is_left_alone(tmp_path: Path) -> None:
     command = f"grep -q sql_injection {target} && grep -q authorize {target}"
     llm = StubLlm(
         replies=[
-            action("write_file", path=str(target), content="sql_injection authorize"),
+            action("write_file", path=str(target), content='["sql_injection", "authorize"]'),
             action("finish", path=str(target), verify=command, summary="готово"),
         ]
     )
@@ -6954,3 +6954,42 @@ def test_a_red_verify_near_the_reserve_still_gets_its_recovery_pass(tmp_path: Pa
     assert outcome.stop_reason == "verified"
     assert outcome.solved is True
     assert target.read_text(encoding="utf-8") == "right"
+
+
+# --- F5 (13.09 review): a `.json` deliverable must parse before finish is accepted ---
+
+
+def test_finish_on_a_json_deliverable_that_does_not_parse_is_refused(tmp_path: Path) -> None:
+    """Reviewer probe: `write_file('{"findings": [}')` + `finish(verify="")` was solved.
+
+    C1 already tells the model at write time that the file does not parse, and the
+    finish gate ignored it. This is a gate on form, not content: any JSON parses.
+    """
+    target = tmp_path / "report.json"
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(target), content='{"findings": [}'),
+            action("finish", path=str(target), verify="", summary="done"),
+        ]
+    )
+    state = make_state(tmp_path)
+    state.budget.max_steps = 2
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_AUDIT)
+
+    assert outcome.solved is False
+    assert any("finish refused" in text and "JSON" in text for text in outcome.observations)
+
+
+def test_finish_on_a_json_deliverable_that_parses_is_not_refused_for_form(tmp_path: Path) -> None:
+    target = tmp_path / "report.json"
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(target), content='{"findings": []}'),
+            action("finish", path=str(target), verify="", summary="done"),
+        ]
+    )
+
+    outcome = run(make_state(tmp_path), llm, FakeVerify(), playbook=playbooks.CODE_AUDIT)
+
+    assert outcome.stop_reason == "verified"
