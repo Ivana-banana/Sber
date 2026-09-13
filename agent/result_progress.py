@@ -56,8 +56,11 @@ SOURCE_FILENAMES = frozenset(
         "tsconfig.json",
         "go.mod",
         "Cargo.toml",
+        ".env",
     }
 )
+"""`.env` is here rather than in the suffixes: `Path(".env").suffix` is empty, because
+a leading dot names the file, it does not extend it."""
 
 SOURCE_SUFFIXES = frozenset(
     {
@@ -70,11 +73,17 @@ SOURCE_SUFFIXES = frozenset(
         ".cpp",
         ".cs",
         ".css",
+        ".env",
         ".go",
         ".h",
         ".hpp",
+        ".htm",
+        ".html",
         ".ini",
+        ".j2",
         ".java",
+        ".jinja",
+        ".jinja2",
         ".js",
         ".json",
         ".jsx",
@@ -92,13 +101,24 @@ SOURCE_SUFFIXES = frozenset(
         ".toml",
         ".ts",
         ".tsx",
+        ".txt",
         ".xml",
         ".yaml",
         ".yml",
     }
 )
+"""Templates and config carry fixes as often as `.py` does -- the reviewer's XSS probe
+put one in `templates/index.html` and the gate never saw it (F6).  `.md` stays out on
+purpose: a report is the thing this module exists to tell apart from a repair.  `.txt`
+is in because task data and seeds use it; a report written as `answer.txt` in the
+workspace root is the accepted cost, and the gate is a guard, not the verifier."""
 
-TEST_NAME_MARKERS = ("test_", "_test.", ".test.", ".spec.")
+TEST_NAME_PREFIX = "test_"
+TEST_NAME_MARKERS = ("_test.", ".test.", ".spec.")
+"""`test_` counts only where it starts the name.  As a substring it read `latest_events.py`
+as a test and left a production module permanently invisible to the gate."""
+
+SHEBANG = b"#!"
 
 
 @dataclass(frozen=True)
@@ -182,7 +202,7 @@ def _scan(workspace: Path) -> SourceSnapshot:
 
         for filename in sorted(filenames):
             path = current_dir / filename
-            if not _is_source_candidate(filename):
+            if not _is_source_candidate(path):
                 continue
             candidate_count += 1
             if candidate_count > MAX_SOURCE_FILES:
@@ -214,10 +234,30 @@ def _scan(workspace: Path) -> SourceSnapshot:
     return SourceSnapshot(files, not reasons, reason)
 
 
-def _is_source_candidate(filename: str) -> bool:
+def _is_source_candidate(path: Path) -> bool:
+    filename = path.name
     if filename in SOURCE_FILENAMES:
         return True
     lower = filename.lower()
-    if any(marker in lower for marker in TEST_NAME_MARKERS):
+    if lower.startswith(TEST_NAME_PREFIX) or any(marker in lower for marker in TEST_NAME_MARKERS):
         return False
-    return Path(lower).suffix in SOURCE_SUFFIXES
+    suffix = Path(lower).suffix
+    if suffix:
+        return suffix in SOURCE_SUFFIXES
+    return _has_shebang(path)
+
+
+def _has_shebang(path: Path) -> bool:
+    """An extensionless file is source only when it announces an interpreter.
+
+    Both guards are load-bearing: a symlink would be followed here, before the scan's
+    own symlink check runs, and `open` on a FIFO left in the workspace would block the
+    read -- and with it the whole run -- forever.
+    """
+    try:
+        if path.is_symlink() or not path.is_file():
+            return False
+        with path.open("rb") as handle:
+            return handle.read(len(SHEBANG)) == SHEBANG
+    except OSError:
+        return False
