@@ -6848,3 +6848,72 @@ def test_exact_file_fast_path_records_one_empty_command_verification(
     assert phase_names.count(("phase", "verify", "start")) == 1
     assert phase_names.count(("phase", "verify", "end")) == 1
     assert sum(event.kind == "verify" for event in state.audit) == 1
+
+
+# --- F3 (13.09 review): repeats of mutating actions across state epochs --------
+
+
+def _executed(state: AgentState, tool: str) -> int:
+    return sum(1 for event in state.audit if event.kind == "tool" and event.name == tool)
+
+
+def test_identical_writes_of_the_same_bytes_are_refused_across_epochs(tmp_path: Path) -> None:
+    """E-BASE-r1 `find-sqli-login`: twenty identical `{"findings": []}` writes.
+
+    Every write advances the state epoch, and the repeat detectors used to read only
+    the current epoch, so each write was the sole record of its window and none was
+    ever refused. Rewriting a file with the bytes it already holds changes nothing.
+    """
+    target = tmp_path / "report.json"
+    repeated = action("write_file", path=str(target), content='{"findings": []}')
+    state = make_state(tmp_path)
+    state.budget.max_steps = 8
+    llm = StubLlm(replies=[repeated for _ in range(8)])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_AUDIT)
+
+    assert _executed(state, "write_file") == limits.REPEAT_RESULT_BLOCK
+    assert any("returned the same output" in text for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_an_identical_failing_mutating_command_is_refused_across_epochs(tmp_path: Path) -> None:
+    """Probe (c): `python3 -c 'raise SystemExit(1)'` ran eight times, never blocked.
+
+    The command counts as possibly mutating, so it advanced the epoch after every run
+    and the repeat-failure detector never saw two of it in one window. The read-only
+    control (`cat /missing`) was blocked from the third step.
+    """
+    repeated = action("run_shell", command="python3 -c 'raise SystemExit(1)'")
+    state = make_state(tmp_path)
+    state.budget.max_steps = 8
+    llm = StubLlm(replies=[repeated for _ in range(8)])
+
+    outcome = run(state, llm, FakeVerify())
+
+    assert _executed(state, "run_shell") == limits.REPEAT_FAILURE_BLOCK
+    assert any("already failed" in text for text in outcome.observations)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_a_failing_test_command_rerun_after_each_edit_is_not_refused(tmp_path: Path) -> None:
+    """The legitimate shape F3 must keep: test, edit, test again, edit, test again.
+
+    The test command fails the same way each time, but an edit happened in between,
+    so the next run is a new question about a changed workspace, not a repeat.
+    """
+    source = tmp_path / "app.py"
+    source.write_text("x = 0\n", encoding="utf-8")
+    failing = action("run_shell", command="python3 -c 'raise SystemExit(1)'")
+    replies = []
+    for index in range(4):
+        replies.append(failing)
+        replies.append(action("write_file", path=str(source), content=f"x = {index + 1}\n"))
+    state = make_state(tmp_path)
+    state.budget.max_steps = len(replies)
+    llm = StubLlm(replies=replies)
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.GENERAL)
+
+    assert _executed(state, "run_shell") == 4
+    assert not any("already failed" in text for text in outcome.observations)

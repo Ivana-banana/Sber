@@ -65,6 +65,9 @@ class ActionRecord:
     novel: bool = True
     """Whether this action produced an observation the run had not already seen."""
 
+    mutating: bool = False
+    """Whether the action may have changed files or a service, i.e. advances the epoch."""
+
 
 def _reserve_for(total_s: float) -> float:
     """How much of the budget is withheld for verification and a clean exit."""
@@ -343,6 +346,7 @@ class AgentState:
         *,
         ok: bool = True,
         error_code: str = "",
+        mutating: bool = False,
     ) -> ActionRecord:
         """Record an executed action in the detector window.
 
@@ -365,6 +369,7 @@ class AgentState:
             state_epoch=self.state_epoch,
             error_code=error_code,
             novel=novel,
+            mutating=mutating,
         )
         self.actions.append(record)
         del self.actions[: -limits.ACTION_HISTORY]

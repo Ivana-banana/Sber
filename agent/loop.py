@@ -275,7 +275,8 @@ def run(
         act_started = state.start_phase("act")
         result = _execute(tool, args, state, playbook=playbook)
         state.finish_phase("act", act_started)
-        if _advances_state_epoch(tool, args) and (
+        mutating = _advances_state_epoch(tool, args)
+        if mutating and (
             result.ok or tool == prompt.RUN_SHELL
         ):
             state.advance_state_epoch()
@@ -293,6 +294,7 @@ def run(
             body,
             ok=result.ok,
             error_code="" if result.ok else _error_code(result),
+            mutating=mutating,
         )
         observations.append(
             f"[step {step}] {tool} -> {'ok' if result.ok else 'FAIL'}\n{body}".rstrip()
