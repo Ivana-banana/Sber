@@ -3302,3 +3302,15 @@ timeout 5400 python3 scripts/eval/run_suite.py \
   tokens; H09 focused had 16/38 053) but gives **no solved gain**. The common remaining
   failure is action selection/recovery, not absence of verifier text. Next factor must
   be separate and test-first.
+
+## 13.09.2026 — F1–F7 арифметика петли, ветка `eval/loop-f1f7` (офлайн, без стенда)
+
+Ветка от `origin/fix/public-solves` `4beda56`, worktree `.worktrees/loop-f1f7`. На этой
+машине нет GPU/модели: каждая строка ниже доказана только `python3 -m pytest -q` и
+`scripts/eval/probe_loop_guards.py`. **Прирост solved/токенов не измерен** — каждый фактор
+ждёт парного прогона по §2 очереди `docs/plans/2026-09-13-gpu-queue.md`. В `fix/public-solves`
+и `main` не влито.
+
+| Commit | Фактор | Что менял | Чем проверял | Намеренно не менял / риск для стенда |
+|---|---|---|---|---|
+| `4138898` | F3 | `detectors._identical_calls`: копии мутирующего вызова считаются поперёк эпох до первого *другого* мутирующего действия; чтения — по-прежнему в эпохе. `ActionRecord.mutating` | 2 красных теста (8 одинаковых `write_file`; 8 одинаковых падающих `python3 -c`) → зелёные; контроль «тест→правка→тест» не блокируется; pytest 745 passed, 1 skipped; проба (b) executed 8→2, (c) 8→2 | Пороги `REPEAT_*`, `stuck()`, отказы guard'а (F1) сдвигают эпоху как раньше. **Взаимодействие с F10:** при артефакте на диске два блока подряд теперь дают `stop=stuck` раньше (проба b: 4 вызова вместо 10) — на `find-sqli-login` смотреть, не теряется ли шанс исправить отчёт |
