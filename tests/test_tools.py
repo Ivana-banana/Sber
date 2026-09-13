@@ -195,6 +195,32 @@ def test_file_info_reports_size_and_text_lines(tmp_path: Path) -> None:
     assert "3 lines" in result.output
 
 
+@POSIX_ONLY
+def test_a_fifo_is_described_not_opened_and_never_hangs(tmp_path: Path) -> None:
+    # open() on a FIFO blocks until a writer appears; a CTF/forensic tree can hold one,
+    # and read_range/file_info/search opened it with no S_ISREG guard, freezing the
+    # agent until the runner's kill. These must return quickly and never open it.
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)
+
+    info = file_info(fifo)
+    read = read_range(fifo)
+
+    assert info.ok is True and "not a regular file" in info.output
+    assert read.ok is False and "not a regular file" in read.detail
+
+
+@POSIX_ONLY
+def test_search_skips_a_fifo_in_the_tree_and_still_finds_the_real_match(tmp_path: Path) -> None:
+    os.mkfifo(tmp_path / "pipe")
+    (tmp_path / "real.txt").write_text("the flag is here\n", encoding="utf-8")
+
+    result = search("flag", tmp_path)
+
+    assert result.ok is True
+    assert "real.txt" in result.output
+
+
 def test_file_info_calls_a_binary_a_binary(tmp_path: Path) -> None:
     target = tmp_path / "blob.bin"
     target.write_bytes(b"\x7fELF\x00\x01\x02\x00binary\x00content")
@@ -401,6 +427,21 @@ def test_write_file_replaces_content_rather_than_appending(tmp_path: Path) -> No
     write_file(target, "second", workspace=tmp_path)
 
     assert target.read_text(encoding="utf-8") == "second"
+
+
+def test_write_file_refusing_unencodable_content_does_not_truncate_the_file(tmp_path: Path) -> None:
+    # A small model that emits a lone surrogate (`\ud83d` from a split emoji escape) hit
+    # UnicodeEncodeError -- but only after open("w") had already truncated the file to
+    # zero bytes, and only OSError was caught. Encoding before opening means a refusal
+    # leaves the previous content intact rather than destroying the deliverable.
+    target = tmp_path / "report.json"
+    write_file(target, '{"findings": []}', workspace=tmp_path)
+
+    result = write_file(target, "\ud83d broken", workspace=tmp_path)
+
+    assert result.ok is False
+    assert "UTF-8" in result.detail
+    assert target.read_text(encoding="utf-8") == '{"findings": []}', "the old content survives"
 
 
 def test_write_file_refuses_to_leave_the_workspace(tmp_path: Path) -> None:

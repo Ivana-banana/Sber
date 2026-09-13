@@ -43,6 +43,10 @@ KILL_GRACE_S = 5.0
 # Short on purpose: this is slack over the budget, not a second timeout.
 READER_GRACE_S = 0.5
 SKIP_DIRECTORIES = frozenset({".git", "__pycache__", ".venv", "node_modules", ".mypy_cache", ".pytest_cache"})
+SYSTEM_DIRECTORIES = frozenset({"/proc", "/sys", "/dev"})
+"""Kernel pseudo-filesystems never walked. A `search("flag{", "/")` would otherwise
+descend into `/proc/<pid>/fd`, whose entries block or stream without end. Matched by
+absolute path, so a task's own subdirectory merely named `dev` is not skipped."""
 MATCH_LINE_CHARS = 200
 
 
@@ -341,10 +345,25 @@ def write_file(
         )
 
     started = time.monotonic()
+    # Encode before opening. A small model that emits a lone surrogate (`\ud83d` from a
+    # split emoji escape) made `handle.write` raise UnicodeEncodeError -- but only after
+    # open("w") had already truncated the file to zero bytes, and only OSError was
+    # caught, so the deliverable was destroyed and replaced with nothing. Encoding first
+    # means an unencodable string is refused with the file untouched. Bytes are written
+    # in binary mode, which keeps "exactly these bytes" without newline translation.
+    try:
+        data = content.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        return ToolResult(
+            name="write_file",
+            ok=False,
+            detail=redact(f"content is not encodable as UTF-8: {exc}", secrets),
+            duration_s=time.monotonic() - started,
+        )
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("w", encoding="utf-8", newline="") as handle:
-            handle.write(content)
+        with target.open("wb") as handle:
+            handle.write(data)
     except OSError as exc:
         return ToolResult(
             name="write_file",
@@ -531,6 +550,20 @@ def replace_text(
     )
 
 
+def _is_regular_file(path: Path) -> bool:
+    """True only for a real regular file.
+
+    A FIFO blocks `open()` until a writer appears, a character device or a `/proc` entry
+    can stream without end, and a socket cannot be opened for reading -- any of which
+    turns a read tool into a hang the runner has to kill. `stat` follows symlinks but
+    reads metadata without opening, so this is safe to call on the special file itself.
+    """
+    try:
+        return stat.S_ISREG(path.stat().st_mode)
+    except OSError:
+        return False
+
+
 def _looks_binary(path: Path) -> bool:
     with path.open("rb") as handle:
         return b"\x00" in handle.read(limits.BINARY_SNIFF_BYTES)
@@ -549,6 +582,11 @@ def file_info(path: Path) -> ToolResult:
 
     if path.is_dir():
         return ToolResult(name="file_info", ok=True, output=f"{path.name}: directory")
+
+    if not path.is_file():
+        # A FIFO, socket or device: real, but not something to open. Say so rather than
+        # block on it or call it binary.
+        return ToolResult(name="file_info", ok=True, output=f"{path.name}: not a regular file")
 
     try:
         if _looks_binary(path):
@@ -578,6 +616,9 @@ def read_range(
     """
     start_line = max(1, start_line)
     max_lines = max(1, min(max_lines, limits.READ_MAX_LINES))
+
+    if not _is_regular_file(path):
+        return ToolResult(name="read_range", ok=False, detail=f"not a regular file: {path}")
 
     collected: list[str] = []
     used = 0
@@ -676,11 +717,21 @@ def list_dir(
 
 
 def _files_under(root: Path) -> Iterable[Path]:
-    """Every text-candidate file `search` will open, in a stable order."""
+    """Every regular text-candidate file `search` will open, in a stable order.
+
+    Kernel pseudo-filesystems are pruned and non-regular files (FIFOs, sockets, devices)
+    are skipped, so a broad `search` cannot descend into `/proc` or block opening a pipe.
+    """
     for current, directories, files in os.walk(root):
-        directories[:] = sorted(name for name in directories if name not in SKIP_DIRECTORIES)
+        directories[:] = sorted(
+            name
+            for name in directories
+            if name not in SKIP_DIRECTORIES and os.path.join(current, name) not in SYSTEM_DIRECTORIES
+        )
         for filename in sorted(files):
-            yield Path(current) / filename
+            path = Path(current) / filename
+            if _is_regular_file(path):
+                yield path
 
 
 def search(
