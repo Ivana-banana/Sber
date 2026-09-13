@@ -200,6 +200,7 @@ def run(
                     f"{source_changes.reason}. Do not treat an artifact alone as a repair."
                 )
 
+            state.budget.recovering = False
             verify_started = state.start_phase("verify")
             last_verdict = verify(state, deliverable=deliverable, command=command)
             state.finish_phase("verify", verify_started)

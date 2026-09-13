@@ -70,6 +70,13 @@ VERIFY_RESERVE_MAX_S = 120.0
 """Clamp for the reserve. A short task still needs a verifier; a long one does not
 need to hand it a quarter of an hour."""
 
+EXIT_MARGIN_S = 10.0
+"""The part of the reserve nothing may spend: time for `_finalise` and a clean exit.
+
+Starting value, not a measurement. Verification and one recovery pass may use the
+rest of the reserve (F2, 13.09 review); exploration may use none of it.
+"""
+
 # --- Loop -------------------------------------------------------------------
 
 MAX_STEPS = 30

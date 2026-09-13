@@ -441,3 +441,26 @@ def test_an_exact_file_requirement_does_not_run_the_model_verify_command(
     assert result.ok is True
     assert result.stage == "exact-file"
     assert not marker.exists()
+
+
+@POSIX_ONLY
+def test_a_verify_command_inside_the_reserve_still_gets_time_to_run(tmp_path: Path) -> None:
+    """F2 (13.09 review): the reserve exists for verification, so verification may use it.
+
+    The verify command used to take `tool_timeout_s()`, which is bounded by the
+    spendable time outside the reserve: at 119 s left of 600 it got 0 s, and a finish
+    at t=470 gave the verifier 10 s. Both fix tasks of E-BASE-r1 stopped on `budget`
+    at 480.7 s.
+    """
+    (tmp_path / "deliverable.txt").write_text("OK", encoding="utf-8")
+    now = [0.0]
+    state = AgentState(
+        instruction="produce the deliverable",
+        workspace=tmp_path,
+        budget=Budget(total_s=600.0, clock=lambda: now[0]),
+    )
+    now[0] = 600.0 - state.budget.verify_reserve_s + 1.0
+
+    result = verify(state, deliverable=Path("deliverable.txt"), command="sleep 0.2 && test -s deliverable.txt")
+
+    assert result.ok is True, result.detail

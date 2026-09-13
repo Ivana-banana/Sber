@@ -116,9 +116,9 @@ def verify(state: AgentState, *, deliverable: Path, command: str) -> VerifyResul
     agree: a deliverable the run was allowed to write but not allowed to check would
     fail verification for existing in the place the task asked for.
 
-    The command's timeout comes from `state.budget.tool_timeout_s()`, never a tool
-    default: a verify command is acting, and acting past the reserve is what
-    `Budget.may_recover()` exists to prevent one step later.
+    The command's timeout comes from `state.budget.verify_timeout_s()`, never a tool
+    default: the verifier reserve exists for this command, so it may spend it, down to
+    the exit margin (F2, 13.09 review).
 
     Failed command output is relayed in a smaller bounded excerpt: an assertion or
     missing binary is useful recovery evidence, while a whole test suite is not. The
@@ -217,7 +217,7 @@ def verify(state: AgentState, *, deliverable: Path, command: str) -> VerifyResul
     result = run_shell(
         stripped,
         cwd=state.workspace,
-        timeout_s=state.budget.tool_timeout_s(),
+        timeout_s=state.budget.verify_timeout_s(),
         secrets=state.secrets,
     )
     safe_command = _single_line(redact(stripped, state.secrets))

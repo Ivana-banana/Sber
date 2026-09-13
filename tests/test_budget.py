@@ -76,18 +76,30 @@ def test_recovery_is_bounded_by_code() -> None:
     assert not budget.may_recover()
 
 
-def test_recovery_may_not_start_inside_the_verifier_reserve() -> None:
-    """A recovery pass edits things, so it is acting and obeys the acting rule.
+def test_recovery_may_use_the_reserve_but_not_the_exit_margin() -> None:
+    """F2 (13.09 review): the reserve was reachable by nothing, the verifier included.
 
-    Recovery that begins once only the reserve is left spends the very time the
-    final verification needs, and a run that cannot verify cannot finish. The guard
-    must therefore be no weaker than `may_act`.
+    Exploring still stops at the reserve. But a red verifier is exactly what the
+    reserve is kept for: one directed recovery pass -- its call, its edit and its
+    re-verification -- may spend it, down to `EXIT_MARGIN_S` kept for a clean exit.
+    Earlier this test pinned the opposite (`may_recover` bounded by `may_act`), and
+    with 119 s left of 600 no recovery and no verify could ever run.
     """
     budget, clock = make_budget(600.0)
     clock.advance(600.0 - budget.verify_reserve_s + 1.0)
     assert budget.remaining_s() > 0, "the run itself has not run out yet"
+    assert not budget.may_act(), "exploration never starts inside the reserve"
+    assert budget.may_recover()
+    assert budget.verify_timeout_s() >= 100.0
+
+    budget.start_recovery()
+    assert budget.may_act(), "the recovery pass may take its step inside the reserve"
+    assert budget.tool_timeout_s() > 100.0
+    assert budget.llm_timeout_s() > 100.0
+
+    clock.advance(budget.remaining_s() - limits.EXIT_MARGIN_S)
     assert not budget.may_act()
-    assert not budget.may_recover()
+    assert budget.verify_timeout_s() == 0.0
 
 
 def test_tool_timeout_shrinks_with_the_remaining_time() -> None:

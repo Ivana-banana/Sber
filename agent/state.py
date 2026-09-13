@@ -89,6 +89,8 @@ class Budget:
 
     steps_used: int = 0
     recovery_passes_used: int = 0
+    recovering: bool = False
+    """True between a red verifier and the next finish: that pass may spend the reserve."""
     input_tokens: int = 0
     output_tokens: int = 0
 
@@ -146,9 +148,15 @@ class Budget:
         """Time available for acting, i.e. everything outside the verifier reserve."""
         return self.remaining_s() - self.verify_reserve_s
 
+    def _acting_window_s(self) -> float:
+        """Spendable time; during a recovery pass, everything down to the exit margin."""
+        if self.recovering:
+            return self.remaining_s() - limits.EXIT_MARGIN_S
+        return self.spendable_s()
+
     def may_act(self) -> bool:
         """Whether another act/observe iteration may start."""
-        return self.steps_used < self.max_steps and self.spendable_s() > 0
+        return self.steps_used < self.max_steps and self._acting_window_s() > 0
 
     def past_early_deadline(self) -> bool:
         """Whether a best-effort answer should already exist on disk.
@@ -169,16 +177,23 @@ class Budget:
     def may_recover(self) -> bool:
         """Whether a directed retry after a red verifier is still allowed.
 
-        Recovery edits the workspace, so it is acting and obeys the acting rule. The
-        earlier `remaining_s() > 0` was weaker than `may_act`, which let a retry start
-        once only the reserve was left -- spending the very time the re-verification
-        needs. A run that cannot verify cannot finish.
+        The reserve is kept for verification, and a red verifier is what it is for:
+        one recovery pass may spend it down to `EXIT_MARGIN_S` (F2, 13.09 review).
+        Bounding this by `may_act`, as before, made the reserve reachable by nothing --
+        both E-BASE-r1 fix tasks stopped on `budget` at 480.7 s of 600.
         """
-        return self.recovery_passes_used < self.max_recovery_passes and self.spendable_s() > 0
+        return (
+            self.recovery_passes_used < self.max_recovery_passes
+            and self.remaining_s() > limits.EXIT_MARGIN_S
+        )
 
     def tool_timeout_s(self) -> float:
         """Timeout for one shell command: never long enough to eat the reserve."""
-        return max(0.0, min(limits.TOOL_TIMEOUT_MAX_S, self.spendable_s()))
+        return max(0.0, min(limits.TOOL_TIMEOUT_MAX_S, self._acting_window_s()))
+
+    def verify_timeout_s(self) -> float:
+        """Timeout for a verify command: the reserve is its to spend, the exit margin not."""
+        return max(0.0, min(limits.TOOL_TIMEOUT_MAX_S, self.remaining_s() - limits.EXIT_MARGIN_S))
 
     def llm_timeout_s(self) -> float:
         """Ceiling for one logical LLM call: never longer than `LLM_TIMEOUT_S` or the
@@ -188,7 +203,7 @@ class Budget:
         the run past the point a deliverable was due before a runner with an
         undeclared short timeout would have killed it.
         """
-        ceiling = min(limits.LLM_TIMEOUT_S, self.spendable_s())
+        ceiling = min(limits.LLM_TIMEOUT_S, self._acting_window_s())
         if not self.past_early_deadline():
             ceiling = min(ceiling, self.early_deadline_s - self.elapsed_s())
         return max(0.0, ceiling)
@@ -199,6 +214,7 @@ class Budget:
         return self.steps_used
 
     def start_recovery(self) -> int:
+        self.recovering = True
         self.recovery_passes_used += 1
         return self.recovery_passes_used
 

@@ -6917,3 +6917,40 @@ def test_a_failing_test_command_rerun_after_each_edit_is_not_refused(tmp_path: P
 
     assert _executed(state, "run_shell") == 4
     assert not any("already failed" in text for text in outcome.observations)
+
+
+# --- F2 (13.09 review): the verifier reserve is spendable by verify and recovery -----
+
+
+def test_a_red_verify_near_the_reserve_still_gets_its_recovery_pass(tmp_path: Path) -> None:
+    """Both fix tasks of E-BASE-r1 stopped on `budget` at 480.7 s with 120 s unused.
+
+    A finish whose check fails just before the reserve used to end as `verify-failed`
+    because `may_recover` and `may_act` were both bounded by the reserve. The reserve
+    is for verification; one recovery pass and its re-verification may spend it.
+    """
+    target = tmp_path / "answer.txt"
+    now = [0.0]
+    state = make_state(tmp_path, clock=lambda: now[0])
+    reserve = state.budget.verify_reserve_s
+    verdicts = [(False, "command", "exit 1"), (True, "command", "")]
+
+    def verify(state: AgentState, *, deliverable: Path, command: str) -> VerifyResult:
+        now[0] = state.budget.total_s - reserve + 1.0  # the check itself ran into the reserve
+        ok, stage, detail = verdicts.pop(0)
+        return VerifyResult(ok=ok, stage=stage, detail=detail)
+
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(target), content="wrong"),
+            action("finish", path=str(target), verify="test -s answer.txt", summary="try"),
+            action("write_file", path=str(target), content="right"),
+            action("finish", path=str(target), verify="test -s answer.txt", summary="fixed"),
+        ]
+    )
+
+    outcome = loop.run(state, llm, verify, brief=make_brief(tmp_path), playbook=playbooks.FORENSICS)
+
+    assert outcome.stop_reason == "verified"
+    assert outcome.solved is True
+    assert target.read_text(encoding="utf-8") == "right"
