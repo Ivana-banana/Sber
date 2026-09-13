@@ -34,11 +34,19 @@ from pathlib import Path
 
 from agent import limits
 from agent.paths import permits
-from agent.redact import redact
+from agent.redact import AGENT_CREDENTIAL_ENV_NAMES, redact
 
 CHUNK_BYTES = 65536
 KILL_GRACE_S = 5.0
+# How long past the command's own timeout to let the reader threads finish draining
+# before concluding a backgrounded child is holding the pipe and reaping the session.
+# Short on purpose: this is slack over the budget, not a second timeout.
+READER_GRACE_S = 0.5
 SKIP_DIRECTORIES = frozenset({".git", "__pycache__", ".venv", "node_modules", ".mypy_cache", ".pytest_cache"})
+SYSTEM_DIRECTORIES = frozenset({"/proc", "/sys", "/dev"})
+"""Kernel pseudo-filesystems never walked. A `search("flag{", "/")` would otherwise
+descend into `/proc/<pid>/fd`, whose entries block or stream without end. Matched by
+absolute path, so a task's own subdirectory merely named `dev` is not skipped."""
 MATCH_LINE_CHARS = 200
 
 
@@ -118,19 +126,31 @@ class _BoundedSink:
         return f"{head}\n… [truncated {self.total - kept} bytes] …\n{tail}", True
 
 
-def _kill_tree(process: subprocess.Popen[bytes]) -> None:
+def _kill_tree(process: subprocess.Popen[bytes], pgid: int | None = None) -> None:
     """Kill the child and everything it started.
 
     `sh -c "cmd &"` returns immediately and leaves the background job running; killing
     only the shell leaves that job holding the CPU for the rest of the run. On POSIX
     the child gets its own session, so one `killpg` reaches all of it.
+
+    `pgid` is captured at spawn time and passed in because the group must be reachable
+    even after the shell itself has been reaped: once `process.wait()` collects the
+    leader, `os.getpgid(process.pid)` raises `ESRCH`, but the group id (equal to the
+    leader's pid under `start_new_session`) still names the surviving background job.
     """
     if os.name == "posix":
-        try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-            return
-        except OSError:
-            pass
+        target = pgid
+        if target is None:
+            try:
+                target = os.getpgid(process.pid)
+            except OSError:
+                target = None
+        if target is not None:
+            try:
+                os.killpg(target, signal.SIGKILL)
+                return
+            except OSError:
+                pass
     process.kill()
 
 
@@ -146,10 +166,12 @@ def run_argv(
     """Run a command with no shell between us and it, bounded in time and size.
 
     `env` replaces the child's whole environment rather than extending it, which is
-    what makes it usable as a scrubber: the macro controller hands a generated program
-    an environment with the endpoint credentials removed, and an "extend" semantics
-    would have left them in place while looking like it had not. `None` keeps the
-    parent environment, which is what every existing caller wants.
+    what makes it usable as a scrubber: `run_shell` and the macro controller both hand
+    the child an environment with the endpoint credentials removed
+    (`endpoint_scrubbed_env`), and an "extend" semantics would have left them in place
+    while looking like it had not. `None` keeps the parent environment; callers that run
+    the model's own commands pass a scrubbed env instead, so a direct `run_argv` with a
+    real command and `env=None` would inherit the key -- there is no such caller today.
     """
     started = time.monotonic()
     spawn: dict[str, object] = {}
@@ -175,6 +197,15 @@ def run_argv(
             duration_s=time.monotonic() - started,
         )
 
+    # Captured now, while the leader is alive: after `process.wait()` reaps it,
+    # `os.getpgid` can no longer find the group that a backgrounded job still holds.
+    pgid: int | None = None
+    if os.name == "posix":
+        try:
+            pgid = os.getpgid(process.pid)
+        except OSError:
+            pgid = None
+
     out_sink, err_sink = _BoundedSink(), _BoundedSink()
     readers = [
         threading.Thread(target=out_sink.drain, args=(process.stdout,), daemon=True),
@@ -188,7 +219,7 @@ def run_argv(
         process.wait(timeout=max(0.0, timeout_s))
     except subprocess.TimeoutExpired:
         timed_out = True
-        _kill_tree(process)
+        _kill_tree(process, pgid)
         try:
             # Bounded on purpose: a process that survives SIGKILL is stuck in the
             # kernel, and waiting on it forever is the hang we came here to prevent.
@@ -196,11 +227,26 @@ def run_argv(
         except subprocess.TimeoutExpired:
             pass
 
+    # The shell can exit while a job it backgrounded (`cmd &`) still holds the write
+    # end of our pipes. The reader threads -- and the `close()` below, which contends
+    # for their buffer lock -- then block on that job until it ends, which is the
+    # freeze this timeout exists to prevent. Wait for the readers only within the
+    # command's own budget; if they are still blocked, a lingering child is why, so
+    # reap the whole session (start_new_session put the job in it) to release the pipe.
+    reader_deadline = started + max(0.0, timeout_s) + READER_GRACE_S
     for reader in readers:
-        reader.join(timeout=1.0)
+        reader.join(timeout=max(0.0, reader_deadline - time.monotonic()))
+    if any(reader.is_alive() for reader in readers):
+        timed_out = True
+        _kill_tree(process, pgid)
+        for reader in readers:
+            reader.join(timeout=KILL_GRACE_S)
     for stream in (process.stdout, process.stderr):
         if stream is not None:
-            stream.close()
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
 
     stdout, out_cut = out_sink.text()
     stderr, err_cut = err_sink.text()
@@ -221,6 +267,22 @@ def run_argv(
     )
 
 
+def endpoint_scrubbed_env() -> dict[str, str]:
+    """The process environment with the agent's endpoint credentials removed.
+
+    A shell the model runs can `env`, `env > file`, `echo $OPENAI_API_KEY | base64` or
+    `cat /proc/self/environ`. Removing the three variables before the child starts means
+    the child's own environment (and `/proc/self/environ`) never carries them, so none
+    of these reach the key -- including the encoded forms that substring redaction
+    cannot catch. It does not by itself scrub the *parent* process's environment; `main`
+    pops the same variables from `os.environ` so `/proc/$PPID/environ` is closed too.
+    Everything else -- PATH and the task's own environment the command legitimately
+    needs -- is kept.
+    """
+    hidden = set(AGENT_CREDENTIAL_ENV_NAMES)
+    return {name: value for name, value in os.environ.items() if name not in hidden}
+
+
 def run_shell(
     command: str,
     *,
@@ -235,6 +297,7 @@ def run_shell(
         timeout_s=timeout_s,
         secrets=secrets,
         name="shell",
+        env=endpoint_scrubbed_env(),
     )
 
 
@@ -282,10 +345,25 @@ def write_file(
         )
 
     started = time.monotonic()
+    # Encode before opening. A small model that emits a lone surrogate (`\ud83d` from a
+    # split emoji escape) made `handle.write` raise UnicodeEncodeError -- but only after
+    # open("w") had already truncated the file to zero bytes, and only OSError was
+    # caught, so the deliverable was destroyed and replaced with nothing. Encoding first
+    # means an unencodable string is refused with the file untouched. Bytes are written
+    # in binary mode, which keeps "exactly these bytes" without newline translation.
+    try:
+        data = content.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        return ToolResult(
+            name="write_file",
+            ok=False,
+            detail=redact(f"content is not encodable as UTF-8: {exc}", secrets),
+            duration_s=time.monotonic() - started,
+        )
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("w", encoding="utf-8", newline="") as handle:
-            handle.write(content)
+        with target.open("wb") as handle:
+            handle.write(data)
     except OSError as exc:
         return ToolResult(
             name="write_file",
@@ -294,7 +372,7 @@ def write_file(
             duration_s=time.monotonic() - started,
         )
 
-    written = f"wrote {len(content.encode('utf-8'))} bytes to {target}"
+    written = f"wrote {len(data)} bytes to {target}"
     # A byte count is not evidence that a machine-readable deliverable is readable.
     # In E-BASE-r1 the model wrote a finding that satisfied every assertion the
     # verifier makes, lost it to one unescaped quote inside `evidence`, was told
@@ -472,6 +550,20 @@ def replace_text(
     )
 
 
+def _is_regular_file(path: Path) -> bool:
+    """True only for a real regular file.
+
+    A FIFO blocks `open()` until a writer appears, a character device or a `/proc` entry
+    can stream without end, and a socket cannot be opened for reading -- any of which
+    turns a read tool into a hang the runner has to kill. `stat` follows symlinks but
+    reads metadata without opening, so this is safe to call on the special file itself.
+    """
+    try:
+        return stat.S_ISREG(path.stat().st_mode)
+    except OSError:
+        return False
+
+
 def _looks_binary(path: Path) -> bool:
     with path.open("rb") as handle:
         return b"\x00" in handle.read(limits.BINARY_SNIFF_BYTES)
@@ -490,6 +582,11 @@ def file_info(path: Path) -> ToolResult:
 
     if path.is_dir():
         return ToolResult(name="file_info", ok=True, output=f"{path.name}: directory")
+
+    if not path.is_file():
+        # A FIFO, socket or device: real, but not something to open. Say so rather than
+        # block on it or call it binary.
+        return ToolResult(name="file_info", ok=True, output=f"{path.name}: not a regular file")
 
     try:
         if _looks_binary(path):
@@ -519,6 +616,9 @@ def read_range(
     """
     start_line = max(1, start_line)
     max_lines = max(1, min(max_lines, limits.READ_MAX_LINES))
+
+    if not _is_regular_file(path):
+        return ToolResult(name="read_range", ok=False, detail=f"not a regular file: {path}")
 
     collected: list[str] = []
     used = 0
@@ -617,11 +717,21 @@ def list_dir(
 
 
 def _files_under(root: Path) -> Iterable[Path]:
-    """Every text-candidate file `search` will open, in a stable order."""
+    """Every regular text-candidate file `search` will open, in a stable order.
+
+    Kernel pseudo-filesystems are pruned and non-regular files (FIFOs, sockets, devices)
+    are skipped, so a broad `search` cannot descend into `/proc` or block opening a pipe.
+    """
     for current, directories, files in os.walk(root):
-        directories[:] = sorted(name for name in directories if name not in SKIP_DIRECTORIES)
+        directories[:] = sorted(
+            name
+            for name in directories
+            if name not in SKIP_DIRECTORIES and os.path.join(current, name) not in SYSTEM_DIRECTORIES
+        )
         for filename in sorted(files):
-            yield Path(current) / filename
+            path = Path(current) / filename
+            if _is_regular_file(path):
+                yield path
 
 
 def search(

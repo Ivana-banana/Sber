@@ -86,3 +86,22 @@ cgroups, seccomp и смонтированным `/proc` тот же резул�
 Ограничение ступени 2 формулируется явно: Ubuntu 22.04 с Python 3.10 — это Linux, но
 не `secureintelligent/acp`. Всё, что зависит от версии интерпретатора или состава
 утилит образа, ступень 2 не проверяет и проверять не может.
+
+## Обязательный шаг release-чеклиста: импорт всех модулей архива в целевом образе
+
+`scripts/check_submission.py` делает cold-start на **локальном** `python3` (на этом
+ноутбуке 3.14, в `.venv` бывает 3.13). Конструкция, доступная в 3.13+, но отсутствующая
+в 3.12, пройдёт эту проверку и уронит все 15 задач в образе `secureintelligent/acp`
+(Python 3.12). Поэтому перед каждой отправкой обязателен импорт всех модулей архива
+именно в целевом образе, офлайн:
+
+```sh
+# из распакованного архива, образ по digest sha256:1324d7bb…c8a3
+docker run --rm --network none -v "$PWD:/sub:ro" -w /sub \
+  secureintelligent/acp@sha256:1324d7bb140422a9929f5bc538f55ec0480d2731742effee02bf67604130c8a3 \
+  python3 -c "import importlib, pathlib; [importlib.import_module('agent.'+p.stem) for p in pathlib.Path('agent').glob('*.py') if p.stem!='__init__']; print('import OK on', __import__('sys').version.split()[0])"
+```
+
+Ожидаемо печатает `import OK on 3.12.x`. Это ступень M6: цель — поймать 3.13+-only
+синтаксис/импорт до того, как он станет нулём на всех задачах. Ступень 2 (Ubuntu/3.10)
+и cold-start на локальном `python3` её не заменяют.

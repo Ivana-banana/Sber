@@ -8,10 +8,15 @@ a filename in advance, or learning it by running the tree under inspection.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+import pytest
 
 from agent import limits
 from agent.sources import local_sources, source_excerpts
+
+POSIX_ONLY = pytest.mark.skipif(os.name != "posix", reason="mkfifo is POSIX-only")
 
 
 def make_app(root: Path, *, entry: str = "main.py", handler: str = "routers/auth.py") -> None:
@@ -79,6 +84,53 @@ def test_a_file_that_does_not_parse_costs_one_row_not_the_index(tmp_path: Path) 
     rows = local_sources(tmp_path)
 
     assert ("routers/auth.py", "main.py", "login") in rows
+
+
+def test_an_imported_module_that_does_not_parse_does_not_end_the_index(tmp_path: Path) -> None:
+    # The entry point imports a module the tree cannot parse (a Python-2 sample, a
+    # SyntaxError -- exactly the defect a fix task hands us). It is in the import index
+    # but not among the parsed trees, so a bare `parsed[target]` raises KeyError before
+    # the first LLM call. The module is skipped; the rest of the tree still indexes.
+    (tmp_path / "main.py").write_text("import broken\nimport helper\n", encoding="utf-8")
+    (tmp_path / "broken.py").write_text('print "python 2"\n', encoding="utf-8")
+    (tmp_path / "helper.py").write_text("def work():\n    return 1\n", encoding="utf-8")
+
+    rows = local_sources(tmp_path)
+
+    assert ("helper.py", "main.py", "work") in rows
+    assert all(row[0] != "broken.py" for row in rows), "an unparsed module has no row"
+
+
+def test_a_file_too_large_to_read_is_skipped_not_parsed(tmp_path: Path) -> None:
+    # A multi-hundred-KB generated module is data, not the application's structure.
+    # Parsing it cost seconds and hundreds of MB of RSS -- an OOM risk in a small
+    # microVM on a forensic tree -- and told the index nothing. It is skipped by size.
+    (tmp_path / "main.py").write_text("import data\nimport helper\n", encoding="utf-8")
+    (tmp_path / "helper.py").write_text("def work():\n    return 1\n", encoding="utf-8")
+    big = "x = [\n" + "    1,\n" * 40000 + "]\n"
+    (tmp_path / "data.py").write_text(big, encoding="utf-8")
+    assert (tmp_path / "data.py").stat().st_size > limits.SOURCE_READ_MAX_BYTES
+
+    rows = local_sources(tmp_path)
+
+    assert ("helper.py", "main.py", "work") in rows
+    assert all(row[0] != "data.py" for row in rows), "an oversized file is not indexed"
+
+
+@POSIX_ONLY
+def test_a_module_path_that_is_a_fifo_does_not_hang_the_index(tmp_path: Path) -> None:
+    # A `.py` path that is actually a FIFO passes stat() (size 0, so the size cap does
+    # not catch it) and lands in the file list; then read_text() blocks on open() of the
+    # FIFO forever. That hangs preflight before the first LLM call, and B2's try/except
+    # cannot catch a hang. The index must skip any non-regular file, like the read tools.
+    (tmp_path / "main.py").write_text("import handler\nimport real\n", encoding="utf-8")
+    os.mkfifo(tmp_path / "handler.py")
+    (tmp_path / "real.py").write_text("def work():\n    return 1\n", encoding="utf-8")
+
+    rows = local_sources(tmp_path)  # must return, not block
+
+    assert ("real.py", "main.py", "work") in rows
+    assert all(not row[0].endswith("handler.py") for row in rows), "a FIFO module is skipped"
 
 
 def test_a_standalone_script_nothing_imports_is_not_reported(tmp_path: Path) -> None:

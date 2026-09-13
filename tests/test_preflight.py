@@ -104,6 +104,23 @@ def test_a_workspace_that_does_not_exist_still_produces_a_brief(tmp_path: Path) 
     assert "missing" in brief.render()
 
 
+def test_a_failing_source_index_does_not_stop_the_brief(tmp_path: Path, monkeypatch) -> None:
+    # The import index is a convenience, not a precondition for starting. Whatever it
+    # does on an untrusted tree, preflight must still return a brief rather than let a
+    # traceback out before the first LLM call.
+    workspace = make_task(tmp_path)
+
+    def boom(*args: object, **kwargs: object) -> object:
+        raise KeyError("index blew up on a tree it did not expect")
+
+    monkeypatch.setattr("agent.preflight.local_sources", boom)
+    monkeypatch.setattr("agent.preflight.source_excerpts", boom)
+
+    brief = inspect_environment(workspace, ENV)
+
+    assert brief.render()
+
+
 def test_a_workspace_we_may_not_read_is_reported_not_raised(tmp_path: Path, monkeypatch) -> None:
     workspace = make_task(tmp_path)
 

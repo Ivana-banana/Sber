@@ -121,6 +121,16 @@ def test_the_key_travels_only_in_the_authorization_header() -> None:
     assert KEY not in json.dumps(endpoint.bodies[0])
 
 
+def test_the_settings_repr_never_carries_the_key_or_secrets() -> None:
+    # repr is what a stray f-string, a logging call or a traceback formatter prints.
+    # The key and the secret list must not be in it -- their only exit is the header.
+    settings = llm.LlmSettings.from_env({**ENV, "DB_PASSWORD": "hunter2sekret"})
+    rendered = repr(settings)
+    assert KEY not in rendered
+    assert "hunter2sekret" not in rendered
+    assert "small-local" in rendered, "the non-secret fields still describe the endpoint"
+
+
 def test_endpoint_error_bodies_are_redacted_before_they_reach_the_trace() -> None:
     leaky = json.dumps({"error": f"bad key {KEY}"}).encode()
     client, _, _ = make_client([(401, leaky)])
