@@ -574,6 +574,14 @@ class Runner:
                 base.stop_reason = done["stop"]
                 base.solved_claim = done["solved"]
                 deliverable = done["deliverable"]
+                if base.stop_reason == "crash":
+                    # The crash line carries zeroed counters so the done-line format
+                    # stays one shape, but the state that held the real ones died with
+                    # the exception. A `0` in the raw table cannot be told apart from a
+                    # run that truly spent nothing, so the unknown stays unknown here.
+                    # The totals are unaffected: they read `row.tokens or 0` either way.
+                    base.tokens = None
+                    base.steps = None
             elif killed:
                 base.stop_reason = "killed"
             ready = READY_LINE.search(output)

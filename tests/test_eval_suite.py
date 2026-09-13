@@ -651,3 +651,66 @@ def test_a_crash_is_not_filed_as_a_reasoning_zero() -> None:
     )
 
     assert classify_failure(crashed, killed=False) == "crash"
+
+
+def test_a_crash_row_keeps_its_token_count_unknown(tmp_path, monkeypatch):
+    """Zeroed counters on the crash line are unknown, not measured.
+
+    The line carries `tokens=0` so one done-line format can serve both endings. Copying
+    that 0 into the table would make a crash indistinguishable from a run that really
+    spent nothing, in the raw column an experiment record is grepped by.
+    """
+    import argparse
+    import subprocess
+    from scripts.eval import run_suite
+    from scripts.eval.run_suite import Runner, TaskSpec
+
+    args = argparse.Namespace(
+        out=str(tmp_path), counter_container='', timeout_scale=1, model='stub',
+        base_url='local', api_key='', controller='', tell_agent_budget=False,
+        network='none', reuse_images=True,
+    )
+    runner = Runner(args, tmp_path)
+    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 10, 1, 512)
+
+    monkeypatch.setattr(runner, 'build', lambda spec: None)
+    monkeypatch.setattr(runner, 'start_container', lambda spec: ('container', ''))
+    monkeypatch.setattr(runner, 'install', lambda container, spec: '')
+    done = ('agent done: solved=False stop=crash stage=none deliverable=none '
+            'steps=0/0 recovery=0 tokens=0 (ValueError)\n')
+    proc = subprocess.CompletedProcess([], 0, done, '')
+    monkeypatch.setattr(runner, 'exec_agent', lambda container, spec: (proc, 1.0, False))
+    monkeypatch.setattr(runner, 'counter_call', lambda path, method: None)
+    monkeypatch.setattr(runner, 'verify', lambda container, spec: (0, ''))
+    monkeypatch.setattr(
+        run_suite, 'run',
+        lambda cmd, *, timeout=run_suite.DOCKER_STEP_TIMEOUT_S, text=True:
+            subprocess.CompletedProcess(cmd, 0, '' if text else b'', '' if text else b''),
+    )
+
+    result = runner.one(spec, 1)
+
+    assert result.failure_mode == "crash"
+    assert result.tokens is None, "a zeroed counter must not read as a measured zero"
+    assert result.steps is None
+
+
+def test_a_crash_that_still_earned_the_reward_is_a_solve() -> None:
+    """Pinning an unspecified corner before it decides a headline number.
+
+    Our `stop` is not the authority on whether a task was solved -- the task's own
+    checker is, and CLAUDE.md's sixth principle says to finish on an external oracle.
+    So a run that wrote a deliverable the checker accepted and only then crashed on the
+    way out is a solve, and `classify_failure` owes it no bucket. This was already the
+    behaviour before `crash` became a named stop reason (an unparsed crash line left
+    `stop_reason` at its "-" default, which is equally not "killed"); the test exists so
+    the choice is recorded rather than rediscovered.
+    """
+    crashed_but_rewarded = TaskResult(
+        task="t1", repeat=1, reward=1, agent_exit=0, wall_s=3.2, tokens=None,
+        steps=None, stop_reason="crash", solved_claim="False", workspace="/app",
+        failure_mode="-",
+    )
+
+    assert crashed_but_rewarded.eligible_success is True
+    assert classify_failure(crashed_but_rewarded, killed=False) == "-"
