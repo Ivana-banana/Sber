@@ -96,6 +96,22 @@ def test_an_imported_module_that_does_not_parse_does_not_end_the_index(tmp_path:
     assert all(row[0] != "broken.py" for row in rows), "an unparsed module has no row"
 
 
+def test_a_file_too_large_to_read_is_skipped_not_parsed(tmp_path: Path) -> None:
+    # A multi-hundred-KB generated module is data, not the application's structure.
+    # Parsing it cost seconds and hundreds of MB of RSS -- an OOM risk in a small
+    # microVM on a forensic tree -- and told the index nothing. It is skipped by size.
+    (tmp_path / "main.py").write_text("import data\nimport helper\n", encoding="utf-8")
+    (tmp_path / "helper.py").write_text("def work():\n    return 1\n", encoding="utf-8")
+    big = "x = [\n" + "    1,\n" * 40000 + "]\n"
+    (tmp_path / "data.py").write_text(big, encoding="utf-8")
+    assert (tmp_path / "data.py").stat().st_size > limits.SOURCE_READ_MAX_BYTES
+
+    rows = local_sources(tmp_path)
+
+    assert ("helper.py", "main.py", "work") in rows
+    assert all(row[0] != "data.py" for row in rows), "an oversized file is not indexed"
+
+
 def test_a_standalone_script_nothing_imports_is_not_reported(tmp_path: Path) -> None:
     (tmp_path / "notes.py").write_text("VALUE = 1\n", encoding="utf-8")
 

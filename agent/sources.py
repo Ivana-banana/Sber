@@ -56,7 +56,18 @@ def _python_files(root: Path, budget: int) -> list[Path]:
         for name in sorted(names):
             if not name.endswith(".py"):
                 continue
-            found.append(Path(current) / name)
+            path = Path(current) / name
+            try:
+                if path.stat().st_size > limits.SOURCE_READ_MAX_BYTES:
+                    # A file larger than we would ever read into the brief is generated
+                    # data, not the application's structure. Parsing it cost seconds and
+                    # hundreds of MB of RSS -- an OOM in a small microVM -- and named no
+                    # handler. Skipping it here keeps it out of the index, the parse and
+                    # the excerpts in one pass.
+                    continue
+            except OSError:
+                continue
+            found.append(path)
             if len(found) >= budget:
                 return found
     return found
