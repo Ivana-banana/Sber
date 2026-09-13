@@ -132,6 +132,28 @@ FATAL = "fatal"
 RETRY = "retry"
 SHAPE = "shape"
 
+CONTEXT_OVERFLOW_MARKERS = (
+    "context length",
+    "context size",
+    "context window",
+    "max_tokens",
+)
+"""Wording servers use when the request was refused because prompt + `max_tokens`
+exceeds the context: vLLM says "This model's maximum context length is 4096 tokens...",
+llama-server "the request exceeds the available context size". Ollama says nothing -- it
+silently truncates the *front* of the prompt instead, which is E055 and is not fixable
+from the status code."""
+
+
+def is_context_overflow(detail: str) -> bool:
+    """True when a rejection blames the size of the request, not its shape.
+
+    The two look identical to `classify_status` -- both arrive as 400 -- but the ladder
+    is the wrong answer to the first: every rung resends the same oversized request and
+    the run ends at `llm-unusable` with nothing solved."""
+    lowered = detail.lower()
+    return any(marker in lowered for marker in CONTEXT_OVERFLOW_MARKERS)
+
 
 def classify_status(status: int) -> str:
     """Decide what an HTTP status means for the ladder.
@@ -583,6 +605,7 @@ class HttpLlm:
 
         last = LlmError(reason="no attempt was made", retryable=False)
         retries_at_style = 0
+        budget_cut = False
 
         for attempt in range(limits.LLM_MAX_ATTEMPTS):
             remaining = budget_s if attempt == 0 else deadline - self.clock()
@@ -624,6 +647,22 @@ class HttpLlm:
                         retries_at_style = 0
                         continue
                     return last
+
+                if (
+                    not budget_cut
+                    and max_output_tokens > limits.LLM_MIN_OUTPUT_TOKENS
+                    and is_context_overflow(detail)
+                ):
+                    # F7. The rung is not what the server refused -- the arithmetic is:
+                    # prompt + max_tokens > ctx. Stepping down resends the same oversized
+                    # request on every rung and ends the run at `llm-unusable`, a zero on
+                    # every task. Cutting the answer budget is the only move that can make
+                    # this request fit, and it is made once: a second overflow means the
+                    # prompt alone is too long, which no budget can fix.
+                    budget_cut = True
+                    max_output_tokens = max(max_output_tokens // 2, limits.LLM_MIN_OUTPUT_TOKENS)
+                    self._note("shrink", f"http {status} on context -> max_tokens {max_output_tokens}")
+                    continue
 
                 if schema is not None and self._demote(f"http {status}"):
                     retries_at_style = 0

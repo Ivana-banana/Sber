@@ -3302,3 +3302,28 @@ timeout 5400 python3 scripts/eval/run_suite.py \
   tokens; H09 focused had 16/38 053) but gives **no solved gain**. The common remaining
   failure is action selection/recovery, not absence of verifier text. Next factor must
   be separate and test-first.
+
+### F7-shrink (2026-09-13) — 400 по context length режет ответ, а не протокол
+
+- Offline only — solved/tokens не измерены, нужен GPU-стенд (блок 4, llama-server).
+- Что изменено: `agent/llm.py` — `is_context_overflow()` + одна срезка бюджета в
+  `_attempt_loop`: 400/422/501, чей текст упоминает context length/size/window или
+  `max_tokens`, повторяет **ту же** ступень с `max_tokens // 2` (пол —
+  `limits.LLM_MIN_OUTPUT_TOKENS = 256`) вместо понижения протокола. Срезка одна на
+  логический вызов: второй overflow означает, что длинен сам prompt, и бюджет его не
+  спасёт. Срезанный бюджет сохраняется на оставшиеся попытки вызова.
+- Почему: F7 из `docs/plans/2026-09-13-gpu-queue.md` §1.2. vLLM/llama-server отвечают
+  400 на `prompt + max_tokens > ctx`; лестница пересылала тот же превышающий запрос на
+  каждой ступени и заканчивала `llm-unusable` — ноль на всех задачах.
+- Как проверено: красные тесты до фикса, затем `python3 -m pytest -q` → 747 passed,
+  1 skipped. Тесты в `tests/test_llm.py`: срезка держит ступень (`native_tools`),
+  plain `complete()` тоже срезает (раньше отдавал ошибку сразу, ступени у него нет),
+  срезка одна и дальше работает лестница, бюджет на полу не режется, shape-400 не про
+  контекст по-прежнему идёт вниз по лестнице.
+- Что намеренно НЕ изменено: `LLM_MAX_OUTPUT_TOKENS = 2048` — это часть (1) пункта 3.2,
+  она требует p99 completion-токенов из трасс прокси за 12–13.09. **TBD**, отдельный
+  фактор. Ollama-путь (молчаливая обрезка начала prompt, E055) статусом не ловится и
+  здесь не чинится.
+- Ограничение: локальный тест доказывает только поведение клиента против фейкового
+  endpoint. Переносимость на закрытый набор и на реальный vLLM/llama-server не
+  доказана — нужен живой прогон блока 4.

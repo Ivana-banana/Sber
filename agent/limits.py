@@ -297,6 +297,12 @@ core dump contains any short string by accident."""
 
 LLM_TIMEOUT_S = 120.0
 LLM_MAX_OUTPUT_TOKENS = 2048
+LLM_MIN_OUTPUT_TOKENS = 256
+"""Floor for the one budget cut `llm.py` makes when a server rejects the request because
+prompt + `max_tokens` exceeds its context. Halving below this buys nothing: an action
+with a file edit does not fit in 128 tokens, so the retry would pay for a certain
+failure. Not a second knob -- only that retry reads it."""
+
 LLM_RETRY_BACKOFF_S: tuple[float, ...] = (1.0, 3.0)
 """Finite retry schedule for transport failures. A permanently broken endpoint must
 fail diagnosably rather than hang until the task times out."""

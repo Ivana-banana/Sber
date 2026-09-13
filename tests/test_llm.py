@@ -348,6 +348,97 @@ def test_a_rejected_key_is_not_laddered_away() -> None:
     assert len(endpoint.bodies) == 1, "a plain call has no fallback to burn attempts on"
 
 
+# --- the answer budget does not fit -----------------------------------------
+
+VLLM_OVERFLOW = (
+    b'{"object":"error","message":"This model\'s maximum context length is 4096 tokens. '
+    b"However, you requested 4200 tokens (2152 in the messages, 2048 in the completion). "
+    b'Please reduce the length of the messages or completion.","code":400}'
+)
+
+LLAMA_SERVER_OVERFLOW = (
+    b'{"error":{"code":400,"message":"the request exceeds the available context size. '
+    b'try increasing the context size or enable context shift","type":"invalid_request_error"}}'
+)
+
+
+def test_a_context_overflow_400_shrinks_the_answer_not_the_protocol() -> None:
+    # E055/F7: prompt + max_tokens > ctx is a 400 the ladder cannot fix. Walking down
+    # it resends the same oversized request three times and ends at `llm-unusable`.
+    client, endpoint, events = make_client(
+        [
+            (400, VLLM_OVERFLOW),
+            (200, tool_reply('{"action":"ls"}')),
+        ]
+    )
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=2048)
+
+    assert isinstance(result, LlmReply)
+    assert client.style == llm.NATIVE_TOOLS, "the rung was never the problem, the budget was"
+    assert "tools" in endpoint.bodies[1]
+    assert endpoint.bodies[1]["max_tokens"] == 1024
+    assert [kind for kind, _ in events] == ["shrink"]
+
+
+def test_a_plain_call_shrinks_too_although_it_has_no_ladder() -> None:
+    client, endpoint, _ = make_client(
+        [
+            (400, LLAMA_SERVER_OVERFLOW),
+            (200, chat_reply("done")),
+        ]
+    )
+    result = client.complete([], max_output_tokens=2048)
+
+    assert isinstance(result, LlmReply)
+    assert [body["max_tokens"] for body in endpoint.bodies] == [2048, 1024]
+
+
+def test_the_budget_is_cut_once_and_then_the_ladder_takes_over() -> None:
+    client, endpoint, events = make_client(
+        [
+            (400, VLLM_OVERFLOW),
+            (400, VLLM_OVERFLOW),
+            (200, chat_reply('{"action":"ls"}')),
+        ]
+    )
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=2048)
+
+    assert isinstance(result, LlmReply)
+    assert client.style == llm.JSON_SCHEMA
+    assert [kind for kind, _ in events] == ["shrink", "degrade"]
+    assert endpoint.bodies[2]["max_tokens"] == 1024, "the smaller budget survives the demotion"
+
+
+def test_a_budget_already_at_the_floor_is_not_halved_into_uselessness() -> None:
+    client, _, events = make_client(
+        [
+            (400, VLLM_OVERFLOW),
+            (200, chat_reply('{"action":"ls"}')),
+        ]
+    )
+    result = client.complete_structured(
+        [], schema=SCHEMA, max_output_tokens=limits.LLM_MIN_OUTPUT_TOKENS
+    )
+
+    assert isinstance(result, LlmReply)
+    assert client.style == llm.JSON_SCHEMA, "half of the floor could not hold an action anyway"
+    assert [kind for kind, _ in events] == ["degrade"]
+
+
+def test_a_shape_400_that_is_not_about_context_still_walks_the_ladder() -> None:
+    client, _, events = make_client(
+        [
+            (400, b'{"error":"tools are not supported"}'),
+            (200, chat_reply('{"action":"ls"}')),
+        ]
+    )
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=2048)
+
+    assert isinstance(result, LlmReply)
+    assert client.style == llm.JSON_SCHEMA
+    assert [kind for kind, _ in events] == ["degrade"]
+
+
 # --- retries and timeouts ---------------------------------------------------
 
 
