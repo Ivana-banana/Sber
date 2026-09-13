@@ -177,6 +177,28 @@ def main(
         print('usage: run.sh "<task instruction>"', file=sys.stderr)
         return EXIT_USAGE
 
+    try:
+        return _run(argv, env, cwd, llm=llm)
+    except Exception as exc:  # noqa: BLE001 - a crash is a zero; a traceback is worse
+        # An uncaught exception is a zero either way, but exit 1 with a traceback is the
+        # worst version: it can end the run before any partial artifact reaches disk and
+        # it dumps internal paths. `Path.resolve` alone raises ValueError on a NUL byte
+        # and OSError(ENAMETOOLONG) on an over-long path, and the tree is untrusted.
+        # Report the stop and leave exit 0 -- the entrypoint contract (started,
+        # understood its inputs) still held. Only the class name is printed, never the
+        # message, so nothing from the environment or the tree can leak through it.
+        print(f"agent done: solved=False stop=crash ({type(exc).__name__})", flush=True)
+        return EXIT_OK
+
+
+def _run(
+    argv: Sequence[str],
+    env: Mapping[str, str],
+    cwd: Path,
+    *,
+    llm: LlmPort | None = None,
+) -> int:
+    """The end-to-end run itself; `main` wraps it so no exception becomes exit 1."""
     state = build_state(argv, env, cwd)
     controller = select_controller(env)
     state.event_sink = emit_phase

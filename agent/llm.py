@@ -72,8 +72,10 @@ class LlmSettings:
 
     model: str
     base_url: str
-    api_key: str
-    secrets: tuple[str, ...] = ()
+    # repr=False so a stray f-string, a logging call or a traceback formatter cannot
+    # print the key or the secret list: their only exit is the Authorization header.
+    api_key: str = field(repr=False)
+    secrets: tuple[str, ...] = field(default=(), repr=False)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> LlmSettings:

@@ -321,6 +321,22 @@ def test_a_hostile_instruction_is_accepted_verbatim(tmp_path: Path) -> None:
     assert state.instruction == hostile
 
 
+def test_an_uncaught_exception_is_a_crash_not_a_traceback(tmp_path: Path, capsys, monkeypatch) -> None:
+    # An exception escaping the run (a NUL or over-long path out of `Path.resolve`, a
+    # bug anywhere in preflight or the controller) must not become exit 1 with a
+    # traceback: that is a hard zero and it dumps internal paths. It reports stop=crash
+    # and exits 0, and the printed line carries no exception message.
+    def boom(*args: object, **kwargs: object) -> object:
+        raise ValueError("secret-ish detail /opt/harbor/should-not-appear")
+
+    monkeypatch.setattr("agent.main.build_state", boom)
+
+    assert main(["run.sh", "task"], ENV, tmp_path) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "stop=crash" in out
+    assert "should-not-appear" not in out, "the exception message must not leak"
+
+
 # --- the status line --------------------------------------------------------
 
 
