@@ -157,3 +157,21 @@ def test_an_action_that_writes_nothing_keeps_its_own_text(tmp_path: Path) -> Non
 
     assert result["probe_success"] is False
     assert "list_dir" in (tmp_path / "out" / "candidate.json").read_text()
+
+
+def test_assertions_are_read_through_ansi_colour_codes() -> None:
+    # The checker subprocess must not depend on the parent's colour settings: under
+    # FORCE_COLOR pytest wraps PASSED in an SGR escape, and a naive parser then reads
+    # an empty outcome list on a run that actually passed. The parser strips SGR.
+    coloured = (
+        "t.py::test_ok \x1b[32mPASSED\x1b[0m\x1b[32m [ 50%]\x1b[0m\n"
+        "t.py::test_bad \x1b[31mFAILED\x1b[0m\x1b[31m [100%]\x1b[0m\n"
+    )
+    assert probe._assertions(coloured) == [
+        {"name": "test_ok", "outcome": "passed"},
+        {"name": "test_bad", "outcome": "failed"},
+    ]
+    # Plain output keeps parsing exactly as before.
+    assert probe._assertions("t.py::test_ok PASSED [100%]") == [
+        {"name": "test_ok", "outcome": "passed"}
+    ]

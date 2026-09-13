@@ -127,15 +127,29 @@ raise SystemExit(pytest.main(['-vv', '--tb=short', os.environ['PROBE_TESTS']], p
     env = os.environ.copy()
     env["REPORT_PATH"] = str(candidate)
     env["PROBE_TESTS"] = str(tests)
+    # Force colourless, deterministic output so `_assertions` reads the same outcomes
+    # no matter what the parent shell forces. Under FORCE_COLOR=3 pytest emits an SGR
+    # escape between the space and PASSED, which would hide every result from the
+    # regex and report an empty assertion list on a run that actually passed.
+    env["PY_COLORS"] = "0"
+    env["NO_COLOR"] = "1"
+    env.pop("FORCE_COLOR", None)
+    env.pop("CLICOLOR_FORCE", None)
     return subprocess.run(
         [sys.executable, "-c", runner], env=env, text=True, capture_output=True,
         timeout=180, check=False,
     )
 
 
+_SGR = re.compile(r"\x1b\[[0-9;]*m")
+
+
 def _assertions(output: str) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
-    for line in output.splitlines():
+    for raw in output.splitlines():
+        # `_run_checker` disables colour at the source, but strip any SGR escapes here
+        # too so a checker that emits its own colour cannot blind the outcome parser.
+        line = _SGR.sub("", raw)
         match = re.search(r"::(test_[^ ]+)\s+(PASSED|FAILED|ERROR|SKIPPED)(?:\s|$)", line)
         if match:
             rows.append({"name": match.group(1), "outcome": match.group(2).lower()})
