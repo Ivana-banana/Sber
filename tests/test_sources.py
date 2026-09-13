@@ -8,10 +8,15 @@ a filename in advance, or learning it by running the tree under inspection.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+import pytest
 
 from agent import limits
 from agent.sources import local_sources, source_excerpts
+
+POSIX_ONLY = pytest.mark.skipif(os.name != "posix", reason="mkfifo is POSIX-only")
 
 
 def make_app(root: Path, *, entry: str = "main.py", handler: str = "routers/auth.py") -> None:
@@ -110,6 +115,22 @@ def test_a_file_too_large_to_read_is_skipped_not_parsed(tmp_path: Path) -> None:
 
     assert ("helper.py", "main.py", "work") in rows
     assert all(row[0] != "data.py" for row in rows), "an oversized file is not indexed"
+
+
+@POSIX_ONLY
+def test_a_module_path_that_is_a_fifo_does_not_hang_the_index(tmp_path: Path) -> None:
+    # A `.py` path that is actually a FIFO passes stat() (size 0, so the size cap does
+    # not catch it) and lands in the file list; then read_text() blocks on open() of the
+    # FIFO forever. That hangs preflight before the first LLM call, and B2's try/except
+    # cannot catch a hang. The index must skip any non-regular file, like the read tools.
+    (tmp_path / "main.py").write_text("import handler\nimport real\n", encoding="utf-8")
+    os.mkfifo(tmp_path / "handler.py")
+    (tmp_path / "real.py").write_text("def work():\n    return 1\n", encoding="utf-8")
+
+    rows = local_sources(tmp_path)  # must return, not block
+
+    assert ("real.py", "main.py", "work") in rows
+    assert all(not row[0].endswith("handler.py") for row in rows), "a FIFO module is skipped"
 
 
 def test_a_standalone_script_nothing_imports_is_not_reported(tmp_path: Path) -> None:

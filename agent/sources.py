@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import os
+import stat
 from pathlib import Path
 
 from agent import limits
@@ -58,14 +59,22 @@ def _python_files(root: Path, budget: int) -> list[Path]:
                 continue
             path = Path(current) / name
             try:
-                if path.stat().st_size > limits.SOURCE_READ_MAX_BYTES:
-                    # A file larger than we would ever read into the brief is generated
-                    # data, not the application's structure. Parsing it cost seconds and
-                    # hundreds of MB of RSS -- an OOM in a small microVM -- and named no
-                    # handler. Skipping it here keeps it out of the index, the parse and
-                    # the excerpts in one pass.
-                    continue
+                info = path.stat()
             except OSError:
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                # A FIFO, socket or device named `foo.py` passes stat (a FIFO reports
+                # size 0, so the size cap does not catch it) but blocks read_text's
+                # open() forever -- the same hang the read tools guard against, and one
+                # preflight's try/except cannot catch because it is a hang, not an
+                # exception. Never let a non-regular file into the index.
+                continue
+            if info.st_size > limits.SOURCE_READ_MAX_BYTES:
+                # A file larger than we would ever read into the brief is generated
+                # data, not the application's structure. Parsing it cost seconds and
+                # hundreds of MB of RSS -- an OOM in a small microVM -- and named no
+                # handler. Skipping it here keeps it out of the index, the parse and
+                # the excerpts in one pass.
                 continue
             found.append(path)
             if len(found) >= budget:

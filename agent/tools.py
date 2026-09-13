@@ -372,7 +372,7 @@ def write_file(
             duration_s=time.monotonic() - started,
         )
 
-    written = f"wrote {len(content.encode('utf-8'))} bytes to {target}"
+    written = f"wrote {len(data)} bytes to {target}"
     # A byte count is not evidence that a machine-readable deliverable is readable.
     # In E-BASE-r1 the model wrote a finding that satisfied every assertion the
     # verifier makes, lost it to one unescaped quote inside `evidence`, was told
