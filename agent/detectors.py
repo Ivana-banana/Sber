@@ -74,6 +74,28 @@ def _current_actions(state: AgentState) -> list[ActionRecord]:
     return [record for record in state.actions if record.state_epoch == state.state_epoch]
 
 
+def _identical_calls(state: AgentState, tool: str, args: str) -> list[ActionRecord]:
+    """Earlier copies of this call that still describe the present workspace.
+
+    A read is evidence only inside its epoch: a mutation may have changed what it
+    would return. A mutating call is different -- it is what advances the epoch, so
+    filtering it by epoch left every write the sole record of its window and twenty
+    identical writes were never refused (F3, E-BASE-r1). Its copies count back until
+    a *different* mutating action, which is what makes a rerun a new question.
+    """
+    same = [record for record in state.actions if record.tool == tool and record.args_digest == args]
+    if not same or not same[-1].mutating:
+        return [record for record in same if record.state_epoch == state.state_epoch]
+    chain: list[ActionRecord] = []
+    for record in reversed(state.actions):
+        if record.tool == tool and record.args_digest == args:
+            chain.append(record)
+        elif record.mutating:
+            break
+    chain.reverse()
+    return chain
+
+
 def blocked(state: AgentState, tool: str, args: str) -> Signal | None:
     """Whether this exact call has already earned a refusal before it runs.
 
@@ -86,12 +108,7 @@ def blocked(state: AgentState, tool: str, args: str) -> Signal | None:
     A repeat whose output differs is still allowed. Re-reading a file that changed is
     work, and refusing it would be the detector inventing a rule nobody asked for.
     """
-    current = _current_actions(state)
-    identical = [
-        record
-        for record in current
-        if not record.ok and record.tool == tool and record.args_digest == args
-    ]
+    identical = [record for record in _identical_calls(state, tool, args) if not record.ok]
     if len(identical) < limits.REPEAT_FAILURE_BLOCK:
         return _repeated_result(state, tool, args)
 
@@ -109,12 +126,7 @@ def blocked(state: AgentState, tool: str, args: str) -> Signal | None:
 
 def _repeated_result(state: AgentState, tool: str, args: str) -> Signal | None:
     """Whether this exact call has already returned one and the same output."""
-    current = _current_actions(state)
-    identical = [
-        record
-        for record in current
-        if record.ok and record.tool == tool and record.args_digest == args
-    ]
+    identical = [record for record in _identical_calls(state, tool, args) if record.ok]
     if len(identical) < limits.REPEAT_RESULT_BLOCK:
         return None
     if len({record.result_fingerprint for record in identical}) != 1:
