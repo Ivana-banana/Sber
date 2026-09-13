@@ -3409,3 +3409,24 @@ timeout 5400 python3 scripts/eval/run_suite.py \
   (меня), независимого второго прохода по ним не было.
 - **Проверка:** `pytest -q` → 747 passed, 1 skipped. Архив пересобран, sha256 не
   изменился (`3a37c108…`) — правки измерителя в сабмишн не попадают.
+
+## L4-target-image-20260913 — уровень 4 закрыт на фактически собранном кандидате
+
+- **Тип:** офлайн-smoke внутри целевого образа. Не живой прогон, решаемость не мерит.
+- **Среда:** `secureintelligent/acp@sha256:1324d7bb…c8a3`, `docker run --network none`,
+  **Python 3.12.13** (локальный host-Python — 3.14, поэтому уровень 5 его не заменяет).
+- **Артефакт:** `build/kt6-candidate-20260913.zip`, sha256 `3a37c108…8cce`.
+- **Результат:** распаковка → `18/18` модулей `agent/*.py` импортируются офлайн
+  (`detectors limits llm loop macro main paths playbooks ports preflight prompt redact
+  result_contract result_progress sources state tools verify`); `./run.sh "<текст>"` при
+  мёртвом endpoint (`127.0.0.1:9`) даёт
+  `agent done: solved=False stop=llm-unusable stage=none deliverable=none steps=3/30
+  recovery=0 tokens=0` и **exit 0** за ~12 с. Недоступность LLM объявлена честно, а не
+  превращена в молчаливый успех.
+- **Команда воспроизведения:** `docker run --rm --network none -v
+  <zip>:/tmp/sub.zip:ro secureintelligent/acp:latest sh -c '<распаковать, импортировать,
+  ./run.sh>'`.
+- **Вместе с уровнем 5** (независимая распаковка + smoke, sber-b4, коммит `ecd8579`)
+  ступени 1–2 и 4–5 из CLAUDE.md по кандидату закрыты. Ступень 3 (прогон каждого
+  публичного задания) — идёт, карточка `KT6-CAND-r1`.
+- **Ограничение:** это доказывает старт и честный отказ, но **не** решаемость.
