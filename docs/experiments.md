@@ -3688,3 +3688,18 @@ timeout 5400 python3 scripts/eval/run_suite.py \
   прирост** — если ревьюер сочтёт иначе, откат — один `git revert`.
 - **Урок, общий с F2:** запретить плохой финал не значит научить хорошему. Гейт не даёт
   закрыться на битом JSON — модель не чинит экранирование, а докручивает до `steps`.
+
+## 13.09.2026 — F3-кандидат, ветка `eval/f3-candidate` (sber-fd, офлайн; живые замеры — sber-4a)
+
+- Ветка от `origin/fix/public-solves` `1ee5447`; cherry-pick F3 `4138898` → `2d90281`. Diff против базы —
+  только `agent/detectors.py`, `agent/loop.py` (+`mutating=`), `agent/state.py` (`ActionRecord.mutating`),
+  `tests/test_loop.py` (+3 теста). Проверено grep'ом: нет `_acting_window_s`, `verify_timeout_s`,
+  `EXIT_MARGIN_S`, `recovering`, F5-гейта, изменений `llm_timeout_s` — F2/F4/F5 не приехали.
+- `python3 -m pytest -q`: 750 passed, 1 skipped.
+- Архив: `python3 scripts/build_submission.py --out build/cand-f3.zip` → 114 025 байт, sha256
+  `182a2078b540d5220270cac19cbfe7bda148b664d0414ecc96054aaa8c6ce2ed`; `check_submission.py` — PASS, no blocking problems.
+- Уровень 4: `docker run --rm --network none` на `secureintelligent/acp@sha256:1324d7bb…c8a3`, распаковка
+  `unzip`, `run.sh` 0755, Python 3.12.13, импортированы все 19 модулей `agent/*.py`; `./run.sh` при мёртвом
+  endpoint (`127.0.0.1:9`) → `stop=llm-unusable`, exit 0, 13 с, tokens=0.
+- Не делал: `run_suite.py` и любые обращения к модели/GPU (стенд за sber-4a). Прирост F3 — по замеру sber-4a
+  (−25,3 % токенов при solved 2/6 ×4), здесь не перепроверялся.
