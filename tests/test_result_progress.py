@@ -161,7 +161,7 @@ def test_template_and_config_kinds_are_all_seen(tmp_path: Path) -> None:
         "page.j2": "{{ x }}\n",
         "layout.jinja": "{{ y }}\n",
         ".env": "DEBUG=1\n",
-        "seed.txt": "one\n",
+        "requirements-dev.txt": "pytest\n",
     }
     for name, text in written.items():
         (tmp_path / name).write_text(text, encoding="utf-8")
@@ -173,7 +173,24 @@ def test_template_and_config_kinds_are_all_seen(tmp_path: Path) -> None:
     changes = changed_sources(tmp_path, baseline)
 
     assert changes.known is True
-    assert changes.paths == (".env", "layout.jinja", "page.j2", "seed.txt")
+    assert changes.paths == (".env", "layout.jinja", "page.j2", "requirements-dev.txt")
+
+
+def test_prose_dot_txt_is_not_a_repair(tmp_path: Path) -> None:
+    # The gate exists so that writing notes instead of fixing code cannot pass as a
+    # repair, and on E-BASE the model did exactly that. A blanket `.txt` would undo it.
+    (tmp_path / "app.py").write_text("answer = 1\n", encoding="utf-8")
+    for name in ("notes.txt", "answer.txt", "requirements_test.txt"):
+        (tmp_path / name).write_text("before\n", encoding="utf-8")
+    baseline = snapshot_sources(tmp_path)
+
+    for name in ("notes.txt", "answer.txt", "requirements_test.txt"):
+        (tmp_path / name).write_text("after\n", encoding="utf-8")
+
+    changes = changed_sources(tmp_path, baseline)
+
+    assert changes.known is True
+    assert changes.paths == ()
 
 
 def test_an_extensionless_script_is_source_when_it_has_a_shebang(tmp_path: Path) -> None:

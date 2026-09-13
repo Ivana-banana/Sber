@@ -101,17 +101,24 @@ SOURCE_SUFFIXES = frozenset(
         ".toml",
         ".ts",
         ".tsx",
-        ".txt",
         ".xml",
         ".yaml",
         ".yml",
     }
 )
 """Templates and config carry fixes as often as `.py` does -- the reviewer's XSS probe
-put one in `templates/index.html` and the gate never saw it (F6).  `.md` stays out on
-purpose: a report is the thing this module exists to tell apart from a repair.  `.txt`
-is in because task data and seeds use it; a report written as `answer.txt` in the
-workspace root is the accepted cost, and the gate is a guard, not the verifier."""
+put one in `templates/index.html` and the gate never saw it (F6).  `.md` and `.txt` stay
+out on purpose: telling a repair apart from a report is the whole job of this module,
+and on E-BASE the model edited README-like files instead of fixing anything, so a
+blanket `.txt` would let `notes.txt` pass as a repair.  Dependency manifests are the one
+`.txt` that is not prose, and `REQUIREMENTS_TXT` readmits those by name."""
+
+REQUIREMENTS_TXT_PREFIX = "requirements"
+REQUIREMENTS_TXT_SUFFIX = ".txt"
+"""`requirements.txt`, `requirements-dev.txt`: a dependency pin is a production change.
+Matched by shape rather than listed, because the variants are open-ended, and
+deliberately not by any public task's own filenames.  Checked after the test markers, so
+a `requirements_test.txt` still reads as test scaffolding."""
 
 TEST_NAME_PREFIX = "test_"
 TEST_NAME_MARKERS = ("_test.", ".test.", ".spec.")
@@ -241,6 +248,8 @@ def _is_source_candidate(path: Path) -> bool:
     lower = filename.lower()
     if lower.startswith(TEST_NAME_PREFIX) or any(marker in lower for marker in TEST_NAME_MARKERS):
         return False
+    if lower.startswith(REQUIREMENTS_TXT_PREFIX) and lower.endswith(REQUIREMENTS_TXT_SUFFIX):
+        return True
     suffix = Path(lower).suffix
     if suffix:
         return suffix in SOURCE_SUFFIXES
