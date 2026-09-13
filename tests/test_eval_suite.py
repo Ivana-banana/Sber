@@ -8,6 +8,7 @@ from scripts.eval.run_suite import (
     PhaseBreakdown,
     SuiteResult,
     TaskResult,
+    classify_failure,
     phase_breakdown,
     task_names,
     write_report,
@@ -636,3 +637,17 @@ def test_the_expected_answers_are_absent_while_the_agent_runs(tmp_path, monkeypa
     runner.one(spec, 1)
 
     assert order.index('agent ran') < order.index('container:/tests')
+
+
+def test_a_crash_is_not_filed_as_a_reasoning_zero() -> None:
+    # A crashed run reports `stop=crash` and exits 0, so it clears every earlier guard
+    # in `classify_failure` and lands on the trailing `reasoning` default. That reports
+    # a defect in our own code as a failure of the model's thinking, and it is the one
+    # bucket we would never re-read looking for a crash.
+    crashed = TaskResult(
+        task="t1", repeat=1, reward=0, agent_exit=0, wall_s=3.2, tokens=0,
+        steps=0, stop_reason="crash", solved_claim="False", workspace="/app",
+        failure_mode="-",
+    )
+
+    assert classify_failure(crashed, killed=False) == "crash"

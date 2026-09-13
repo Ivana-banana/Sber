@@ -323,6 +323,11 @@ def classify_failure(result: TaskResult, *, killed: bool) -> str:
         return "startup"
     if result.stop_reason in {"llm-unusable", "no-endpoint"}:
         return "endpoint"
+    if result.stop_reason == "crash":
+        # Our own code raised. Left to the trailing default this reads as `reasoning`,
+        # which blames the model for our defect and buries it in the one bucket nobody
+        # re-reads looking for a crash. The row's counters are unknown, not measured.
+        return "crash"
     if result.stop_reason in {"steps", "budget", "stuck", "blocked"}:
         return "reasoning"
     if result.solved_claim == "True":

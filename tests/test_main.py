@@ -24,6 +24,7 @@ from agent.main import (
     select_controller,
 )
 from agent.ports import LlmReply
+from scripts.eval.run_suite import DONE_LINE
 from tests.stub_llm import StubLlm
 
 ENV = {
@@ -359,6 +360,27 @@ def test_an_uncaught_exception_is_a_crash_not_a_traceback(tmp_path: Path, capsys
     assert main(["run.sh", "task"], ENV, tmp_path) == EXIT_OK
     out = capsys.readouterr().out
     assert "stop=crash" in out
+    assert "should-not-appear" not in out, "the exception message must not leak"
+
+
+def test_the_evaluator_can_parse_the_crash_line(tmp_path: Path, capsys, monkeypatch) -> None:
+    # The crash line is the only record a crashed run leaves. `run_suite` reads a run
+    # through `DONE_LINE`; a line it cannot parse leaves `stop_reason` at its default,
+    # and the row is filed as an ordinary reasoning zero with tokens unknown. That hides
+    # a defect in our own code inside the one taxonomy we use to decide what to fix.
+    def boom(*args: object, **kwargs: object) -> object:
+        raise ValueError("secret-ish detail /opt/harbor/should-not-appear")
+
+    monkeypatch.setattr("agent.main.build_state", boom)
+
+    assert main(["run.sh", "task"], ENV, tmp_path) == EXIT_OK
+    out = capsys.readouterr().out
+
+    done = DONE_LINE.search(out)
+    assert done is not None, "run_suite cannot parse the crash line"
+    assert done.group("stop") == "crash"
+    assert done.group("solved") == "False"
+    assert "ValueError" in out, "the exception class is the only diagnostic left"
     assert "should-not-appear" not in out, "the exception message must not leak"
 
 

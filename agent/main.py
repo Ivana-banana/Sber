@@ -188,7 +188,17 @@ def main(
         # Report the stop and leave exit 0 -- the entrypoint contract (started,
         # understood its inputs) still held. Only the class name is printed, never the
         # message, so nothing from the environment or the tree can leak through it.
-        print(f"agent done: solved=False stop=crash ({type(exc).__name__})", flush=True)
+        #
+        # The line carries the full done-line field set because `run_suite.DONE_LINE` is
+        # what reads a run, and a line it cannot parse leaves `stop_reason` at its
+        # default -- filing our own crash as an ordinary reasoning zero. The counters are
+        # zero rather than measured: the state that held them died with the exception.
+        # `stop=crash` is what tells a reader they are unknown, not observed.
+        print(
+            "agent done: solved=False stop=crash stage=none deliverable=none "
+            f"steps=0/0 recovery=0 tokens=0 ({type(exc).__name__})",
+            flush=True,
+        )
         return EXIT_OK
 
 
