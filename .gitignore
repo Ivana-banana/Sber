@@ -24,9 +24,11 @@ workspaces/
 submission.zip
 *.log
 # Журналы публичных задач — это фикстуры окружения, а не артефакты прогона:
-# без них образ задачи не собирается в свежем checkout.
-!local_task/*/environment/*.log
-!local_task_extra/tasks/*/environment/*.log
+# без них образ задачи не собирается в свежем checkout. `**` покрывает и вложенные
+# каталоги (`environment/noise/diagnostic.log`): негация в один уровень оставляла их
+# под `*.log`, они держались в дереве только force-add и терялись при регенерации.
+!local_task/*/environment/**/*.log
+!local_task_extra/tasks/*/environment/**/*.log
 
 # Выгрузки внешних исследований: в Git идёт раскрытая копия из docs/research/,
 # сама выгрузка в корне остаётся локальной. Ни один рабочий .zip не лежит в корне.

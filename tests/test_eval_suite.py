@@ -412,7 +412,7 @@ def test_verifier_evidence_is_bounded_and_missing_logs_are_explicit(tmp_path, mo
     from scripts.eval.run_suite import Runner, TaskSpec
     args = argparse.Namespace(out=str(tmp_path))
     runner = Runner(args, tmp_path)
-    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 1, 512)
+    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 10, 1, 512)
     def fake_run(cmd, **kwargs):
         assert cmd[:3] == ['docker', 'exec', 'container']
         # Run the exact extraction command locally against a real temporary log tree.
@@ -432,6 +432,36 @@ def test_verifier_evidence_is_bounded_and_missing_logs_are_explicit(tmp_path, mo
     assert 'unavailable' in (tmp_path / 'logs' / 'sample.r1.app.log').read_text()
 
 
+def test_verify_uses_the_packages_verifier_timeout_and_parses_a_float_reward(tmp_path, monkeypatch):
+    import argparse
+    import subprocess
+    from scripts.eval import run_suite
+    from scripts.eval.run_suite import Runner, TaskSpec
+
+    args = argparse.Namespace(out=str(tmp_path))
+    runner = Runner(args, tmp_path)
+    # A verifier that brings up PostgreSQL is given 240 s by its task.toml; a hardcoded
+    # 180 s recorded the slow-but-correct verifier as reward=None. And test.sh may write
+    # `1.0`, which int() alone rejected -- a real reward lost to its formatting.
+    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 240.0, 10, 1, 512)
+    seen = {}
+
+    def fake_run(cmd, *, timeout=run_suite.DOCKER_STEP_TIMEOUT_S, text=True):
+        if cmd[-1].endswith('test.sh'):
+            seen['timeout'] = timeout
+            return subprocess.CompletedProcess(cmd, 0, '', '')
+        if cmd[-1] == run_suite.REWARD_PATH:
+            return subprocess.CompletedProcess(cmd, 0, '1.0\n', '')
+        return subprocess.CompletedProcess(cmd, 0, '', '')
+
+    monkeypatch.setattr(run_suite, 'run', fake_run)
+
+    reward, note = runner.verify('container', spec)
+
+    assert seen['timeout'] == 240.0, "the verifier gets its own budget, not a fixed 180 s"
+    assert reward == 1 and note == "", "a `1.0` reward is a solve, not an unreadable file"
+
+
 def test_binary_verifier_tail_is_preserved_and_does_not_discard_reward(tmp_path, monkeypatch):
     import argparse
     import subprocess
@@ -444,7 +474,7 @@ def test_binary_verifier_tail_is_preserved_and_does_not_discard_reward(tmp_path,
         network='none', reuse_images=True,
     )
     runner = Runner(args, tmp_path)
-    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 1, 512)
+    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 10, 1, 512)
     tail = b'\x82\xac' + b'a' * 65534
 
     monkeypatch.setattr(runner, 'build', lambda spec: None)
@@ -479,7 +509,7 @@ def test_verifier_log_extraction_timeout_is_saved_without_raising(tmp_path, monk
     from scripts.eval.run_suite import Runner, TaskSpec
 
     runner = Runner(argparse.Namespace(out=str(tmp_path)), tmp_path)
-    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 1, 512)
+    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 10, 1, 512)
 
     def timed_out(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd, 30)
@@ -528,7 +558,7 @@ def test_reusing_images_records_exact_image_without_build_or_network(tmp_path, m
     import subprocess
     from scripts.eval import run_suite
     runner = run_suite.Runner(argparse.Namespace(out=str(tmp_path), reuse_images=True), tmp_path)
-    spec = run_suite.TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 1, 512)
+    spec = run_suite.TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 10, 1, 512)
     (tmp_path / 'manifest.json').write_text('{"images": {}}')
     def local_inspect(cmd, **kwargs):
         assert cmd[:3] == ['docker', 'image', 'inspect']
@@ -551,7 +581,7 @@ def test_verifier_runs_where_the_package_scripts_expect_their_tests(tmp_path, mo
     from scripts.eval.run_suite import Runner, TaskSpec
 
     runner = Runner(argparse.Namespace(out=str(tmp_path)), tmp_path)
-    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 1, 512)
+    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 10, 1, 512)
     commands = []
 
     def record(cmd, **kwargs):
@@ -583,7 +613,7 @@ def test_the_expected_answers_are_absent_while_the_agent_runs(tmp_path, monkeypa
     (tmp_path / 'manifest.json').write_text(json.dumps({'images': {}}), encoding='utf-8')
     args = argparse.Namespace(out=str(tmp_path), counter_container='')
     runner = Runner(args, tmp_path)
-    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 1, 512)
+    spec = TaskSpec('sample', tmp_path, 'task', '/app', False, 10, 10, 10, 1, 512)
     order = []
 
     def record(cmd, **kwargs):

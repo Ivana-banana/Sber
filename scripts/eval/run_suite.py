@@ -186,6 +186,7 @@ class TaskSpec:
     workdir: str
     has_entrypoint: bool
     agent_timeout_s: float
+    verifier_timeout_s: float
     build_timeout_s: float
     cpus: float
     memory_mb: int
@@ -298,6 +299,10 @@ def read_spec(pkg: Path) -> TaskSpec:
         workdir=workdir,
         has_entrypoint=has_entrypoint,
         agent_timeout_s=float(config.get("agent", {}).get("timeout_sec", 180.0)),
+        # The verifier's own budget, not a fixed 180 s: the fix-sqli packages give
+        # theirs 240 s because test.sh brings up PostgreSQL and uvicorn and waits on
+        # them, so a hardcoded 180 s recorded a slow-but-correct verifier as reward=None.
+        verifier_timeout_s=float(config.get("verifier", {}).get("timeout_sec", 180.0)),
         build_timeout_s=float(environment.get("build_timeout_sec", 600.0)),
         cpus=float(environment.get("cpus", 1)),
         memory_mb=int(environment.get("memory_mb", 512)),
@@ -463,15 +468,18 @@ class Runner:
         run(["docker", "exec", container, "mkdir", "-p", "/logs/verifier"])
         checked = run(
             ["docker", "exec", container, "bash", f"{TESTS_DIR}/test.sh"],
-            timeout=180.0,
+            timeout=spec.verifier_timeout_s,
         )
         reward = run(["docker", "exec", container, "cat", REWARD_PATH])
         if reward.returncode != 0:
             return None, f"no reward file; test.sh said {checked.stderr.strip()[-200:]}"
+        raw = reward.stdout.strip()
         try:
-            return int(reward.stdout.strip()), ""
+            # `float` first so a verifier that writes `1.0` is not read as unparseable:
+            # int('1.0') raises, and losing a real reward to its formatting is a false 0.
+            return int(float(raw)), ""
         except ValueError:
-            return None, f"unreadable reward {reward.stdout.strip()!r}"
+            return None, f"unreadable reward {raw!r}"
 
     def save_verifier_logs(self, container: str, spec: TaskSpec, repeat: int) -> None:
         for name in ("verifier.log", "pytest_output.txt", "app.log"):
