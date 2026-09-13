@@ -394,8 +394,17 @@ def inspect_environment(
 
     entries, hidden, note = _walk(workspace, limits.BRIEF_MAX_ENTRIES)
     located = _locate(workspace, _quoted(instruction, workspace))
-    sources = local_sources(workspace)
-    excerpts = source_excerpts(workspace, max_chars=limits.SOURCE_EXCERPT_MAX_CHARS)
+    # The import index is a convenience, not a precondition for starting: an untrusted
+    # tree can hold anything, and no shape of it may turn preflight into a crash before
+    # the first LLM call. If indexing fails, the brief simply omits it.
+    try:
+        sources = local_sources(workspace)
+    except Exception:  # noqa: BLE001 - index is best-effort, never fatal
+        sources = ()
+    try:
+        excerpts = source_excerpts(workspace, max_chars=limits.SOURCE_EXCERPT_MAX_CHARS)
+    except Exception:  # noqa: BLE001 - excerpts are best-effort, never fatal
+        excerpts = ""
     return EnvironmentBrief(
         workspace=workspace,
         exists=True,

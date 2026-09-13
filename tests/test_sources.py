@@ -81,6 +81,21 @@ def test_a_file_that_does_not_parse_costs_one_row_not_the_index(tmp_path: Path) 
     assert ("routers/auth.py", "main.py", "login") in rows
 
 
+def test_an_imported_module_that_does_not_parse_does_not_end_the_index(tmp_path: Path) -> None:
+    # The entry point imports a module the tree cannot parse (a Python-2 sample, a
+    # SyntaxError -- exactly the defect a fix task hands us). It is in the import index
+    # but not among the parsed trees, so a bare `parsed[target]` raises KeyError before
+    # the first LLM call. The module is skipped; the rest of the tree still indexes.
+    (tmp_path / "main.py").write_text("import broken\nimport helper\n", encoding="utf-8")
+    (tmp_path / "broken.py").write_text('print "python 2"\n', encoding="utf-8")
+    (tmp_path / "helper.py").write_text("def work():\n    return 1\n", encoding="utf-8")
+
+    rows = local_sources(tmp_path)
+
+    assert ("helper.py", "main.py", "work") in rows
+    assert all(row[0] != "broken.py" for row in rows), "an unparsed module has no row"
+
+
 def test_a_standalone_script_nothing_imports_is_not_reported(tmp_path: Path) -> None:
     (tmp_path / "notes.py").write_text("VALUE = 1\n", encoding="utf-8")
 

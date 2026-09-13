@@ -172,8 +172,17 @@ def local_sources(root: Path) -> tuple[tuple[str, str, str], ...]:
             if target in seen:
                 continue
             seen.add(target)
+            tree = parsed.get(target)
+            if tree is None:
+                # An imported module that did not parse is in the import index but not
+                # among the parsed trees. It is a row we cannot describe and has no
+                # outgoing edges to follow, so it is skipped rather than looked up --
+                # a bare `parsed[target]` here raised KeyError and killed the run
+                # before the first LLM call whenever a fix task's defect was a
+                # SyntaxError or the tree held a Python-2 sample.
+                continue
             queue.append(target)
-            names = _defines(parsed[target])[: limits.SOURCE_INDEX_MAX_NAMES]
+            names = _defines(tree)[: limits.SOURCE_INDEX_MAX_NAMES]
             if not names and target.name == "__init__.py":
                 # A package marker that defines nothing is a hop, not a place to read.
                 continue
