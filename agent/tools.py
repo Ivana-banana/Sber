@@ -38,6 +38,10 @@ from agent.redact import redact
 
 CHUNK_BYTES = 65536
 KILL_GRACE_S = 5.0
+# How long past the command's own timeout to let the reader threads finish draining
+# before concluding a backgrounded child is holding the pipe and reaping the session.
+# Short on purpose: this is slack over the budget, not a second timeout.
+READER_GRACE_S = 0.5
 SKIP_DIRECTORIES = frozenset({".git", "__pycache__", ".venv", "node_modules", ".mypy_cache", ".pytest_cache"})
 MATCH_LINE_CHARS = 200
 
@@ -118,19 +122,31 @@ class _BoundedSink:
         return f"{head}\n… [truncated {self.total - kept} bytes] …\n{tail}", True
 
 
-def _kill_tree(process: subprocess.Popen[bytes]) -> None:
+def _kill_tree(process: subprocess.Popen[bytes], pgid: int | None = None) -> None:
     """Kill the child and everything it started.
 
     `sh -c "cmd &"` returns immediately and leaves the background job running; killing
     only the shell leaves that job holding the CPU for the rest of the run. On POSIX
     the child gets its own session, so one `killpg` reaches all of it.
+
+    `pgid` is captured at spawn time and passed in because the group must be reachable
+    even after the shell itself has been reaped: once `process.wait()` collects the
+    leader, `os.getpgid(process.pid)` raises `ESRCH`, but the group id (equal to the
+    leader's pid under `start_new_session`) still names the surviving background job.
     """
     if os.name == "posix":
-        try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-            return
-        except OSError:
-            pass
+        target = pgid
+        if target is None:
+            try:
+                target = os.getpgid(process.pid)
+            except OSError:
+                target = None
+        if target is not None:
+            try:
+                os.killpg(target, signal.SIGKILL)
+                return
+            except OSError:
+                pass
     process.kill()
 
 
@@ -175,6 +191,15 @@ def run_argv(
             duration_s=time.monotonic() - started,
         )
 
+    # Captured now, while the leader is alive: after `process.wait()` reaps it,
+    # `os.getpgid` can no longer find the group that a backgrounded job still holds.
+    pgid: int | None = None
+    if os.name == "posix":
+        try:
+            pgid = os.getpgid(process.pid)
+        except OSError:
+            pgid = None
+
     out_sink, err_sink = _BoundedSink(), _BoundedSink()
     readers = [
         threading.Thread(target=out_sink.drain, args=(process.stdout,), daemon=True),
@@ -188,7 +213,7 @@ def run_argv(
         process.wait(timeout=max(0.0, timeout_s))
     except subprocess.TimeoutExpired:
         timed_out = True
-        _kill_tree(process)
+        _kill_tree(process, pgid)
         try:
             # Bounded on purpose: a process that survives SIGKILL is stuck in the
             # kernel, and waiting on it forever is the hang we came here to prevent.
@@ -196,11 +221,26 @@ def run_argv(
         except subprocess.TimeoutExpired:
             pass
 
+    # The shell can exit while a job it backgrounded (`cmd &`) still holds the write
+    # end of our pipes. The reader threads -- and the `close()` below, which contends
+    # for their buffer lock -- then block on that job until it ends, which is the
+    # freeze this timeout exists to prevent. Wait for the readers only within the
+    # command's own budget; if they are still blocked, a lingering child is why, so
+    # reap the whole session (start_new_session put the job in it) to release the pipe.
+    reader_deadline = started + max(0.0, timeout_s) + READER_GRACE_S
     for reader in readers:
-        reader.join(timeout=1.0)
+        reader.join(timeout=max(0.0, reader_deadline - time.monotonic()))
+    if any(reader.is_alive() for reader in readers):
+        timed_out = True
+        _kill_tree(process, pgid)
+        for reader in readers:
+            reader.join(timeout=KILL_GRACE_S)
     for stream in (process.stdout, process.stderr):
         if stream is not None:
-            stream.close()
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
 
     stdout, out_cut = out_sink.text()
     stderr, err_cut = err_sink.text()

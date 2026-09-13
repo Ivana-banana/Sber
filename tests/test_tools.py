@@ -142,6 +142,23 @@ def test_a_killed_command_leaves_no_grandchild_behind(tmp_path: Path) -> None:
     assert not marker.exists(), "the process group outlived its timeout"
 
 
+@POSIX_ONLY
+def test_a_backgrounded_child_does_not_hold_the_call_past_its_timeout(tmp_path: Path) -> None:
+    # `cmd &` makes the shell exit at once while the job keeps the stdout pipe open.
+    # The reader threads -- and the pipe close that contends for their buffer lock --
+    # then block on that job until it ends, freezing the call well past its timeout
+    # unless the lingering session is reaped when the readers do not finish in time.
+    marker = tmp_path / "late.txt"
+    started = time.monotonic()
+    result = run_shell(f"(sleep 8; touch {marker}) &", cwd=tmp_path, timeout_s=1.0)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5, "a leaked background child must not freeze the call"
+    assert result.ok is False, "a reaped background job is not a success"
+    time.sleep(9.0)
+    assert not marker.exists(), "the backgrounded child was reaped, not left running"
+
+
 # --- looking at files -------------------------------------------------------
 
 
