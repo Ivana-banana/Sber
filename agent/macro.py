@@ -34,7 +34,6 @@ task by killing processes it did not start.
 from __future__ import annotations
 
 import json
-import os
 import py_compile
 import sys
 import tempfile
@@ -337,10 +336,11 @@ def _child_env() -> dict[str, str]:
 
     The generated program has no business reaching the model, and the contract says the
     key is never to be logged or persisted. A program that printed `os.environ` would
-    otherwise put it straight into an observation we send back to the endpoint.
+    otherwise put it straight into an observation we send back to the endpoint. Shares
+    one implementation with `run_shell` (`tools.endpoint_scrubbed_env`) so the shell and
+    the macro solver scrub exactly the same three variables.
     """
-    hidden = {limits.MODEL_ENV_NAME, limits.BASE_URL_ENV_NAME, limits.API_KEY_ENV_NAME}
-    return {name: value for name, value in os.environ.items() if name not in hidden}
+    return tools.endpoint_scrubbed_env()
 
 
 def _execute(state: AgentState, program: str, *, timeout_s: float) -> tools.ToolResult:

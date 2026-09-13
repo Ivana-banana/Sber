@@ -321,6 +321,31 @@ def test_a_hostile_instruction_is_accepted_verbatim(tmp_path: Path) -> None:
     assert state.instruction == hostile
 
 
+def test_the_endpoint_credentials_are_popped_from_the_process_environment(tmp_path: Path, monkeypatch) -> None:
+    # A child shell already gets a scrubbed environment, but its parent is this process;
+    # `cat /proc/$PPID/environ | base64` would read the key straight out of ours, past
+    # substring redaction. Once the settings and the redaction set are built, the three
+    # variables are popped from os.environ before the first shell can run. Guarded on
+    # identity, so a caller passing its own env mapping is never mutated.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-canary-0123456789")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9/v1")
+    monkeypatch.setenv("LOCAL_AGENT_MODEL", "small-local")
+
+    assert main(["run.sh", "task"], os.environ, tmp_path, llm=StubLlm(replies=[])) == EXIT_OK
+
+    assert "OPENAI_API_KEY" not in os.environ
+    assert "OPENAI_BASE_URL" not in os.environ
+    assert "LOCAL_AGENT_MODEL" not in os.environ
+
+
+def test_a_caller_supplied_env_mapping_is_not_mutated(tmp_path: Path) -> None:
+    # The pop is guarded on `env is os.environ`; a test or embedder passing its own dict
+    # keeps every key it started with.
+    env = dict(ENV)
+    main(["run.sh", "task"], env, tmp_path, llm=StubLlm(replies=[]))
+    assert env == dict(ENV)
+
+
 def test_an_uncaught_exception_is_a_crash_not_a_traceback(tmp_path: Path, capsys, monkeypatch) -> None:
     # An exception escaping the run (a NUL or over-long path out of `Path.resolve`, a
     # bug anywhere in preflight or the controller) must not become exit 1 with a

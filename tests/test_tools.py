@@ -131,6 +131,28 @@ def test_the_shell_form_runs_a_pipeline(tmp_path: Path) -> None:
 
 
 @POSIX_ONLY
+def test_the_shell_does_not_inherit_the_endpoint_credentials(tmp_path: Path, monkeypatch) -> None:
+    # A shell the model runs can `env`, `env > file` or `echo $OPENAI_API_KEY | base64`.
+    # Value redaction catches the plain dump but not the base64 pipe, and `env > file`
+    # writes the key to disk unredacted. Removing the three endpoint variables from the
+    # child's environment closes all of these at once, while the task's own environment
+    # and PATH are preserved. secrets=() here so the test proves scrubbing, not redaction.
+    monkeypatch.setenv(limits.API_KEY_ENV_NAME, "sk-canary-0123456789")
+    monkeypatch.setenv(limits.BASE_URL_ENV_NAME, "http://10.0.0.5:8000/v1")
+    monkeypatch.setenv(limits.MODEL_ENV_NAME, "canary-model-name")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "task-owned-secret")
+
+    dumped = run_shell("env", cwd=tmp_path, timeout_s=30, secrets=())
+    piped = run_shell("echo $OPENAI_API_KEY | tr -d '\\n' | wc -c", cwd=tmp_path, timeout_s=30, secrets=())
+
+    assert "sk-canary-0123456789" not in dumped.output
+    assert "http://10.0.0.5:8000/v1" not in dumped.output
+    assert "canary-model-name" not in dumped.output
+    assert "0" == piped.output.strip(), "the key expands to nothing in the child shell"
+    assert "task-owned-secret" in dumped.output, "the task's own environment survives"
+
+
+@POSIX_ONLY
 def test_a_killed_command_leaves_no_grandchild_behind(tmp_path: Path) -> None:
     marker = tmp_path / "orphan.txt"
     # The shell exits immediately; the background child outlives it unless the whole

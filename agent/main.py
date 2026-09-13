@@ -12,6 +12,7 @@ to report its own status, and must not raise on a malformed argument list.
 from __future__ import annotations
 
 import hashlib
+import os
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -247,6 +248,18 @@ def _run(
         settings=settings,
         on_event=lambda kind, detail: state.record(kind, "llm", detail),
     )
+
+    # The settings and the redaction set are built; the endpoint coordinates now live in
+    # the frozen LlmSettings and in state.secrets, so the copies in our own process
+    # environment are redundant -- and reachable. A child shell already gets a scrubbed
+    # environment, but its parent is this process, and `cat /proc/$PPID/environ | base64`
+    # would read the key straight out of ours, past substring redaction. Popping them
+    # here, before the first shell runs, closes that. Guarded on identity so tests that
+    # pass their own env mapping never mutate the real process environment.
+    if env is os.environ:
+        for name in redact.AGENT_CREDENTIAL_ENV_NAMES:
+            os.environ.pop(name, None)
+
     state.record("preflight", "controller", controller.__name__)
     outcome = controller.run(state, client, verify.verify, brief=brief, playbook=playbook)
 
@@ -267,6 +280,4 @@ def _run(
 
 
 if __name__ == "__main__":
-    import os
-
     raise SystemExit(main(sys.argv, os.environ, Path.cwd()))

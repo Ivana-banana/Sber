@@ -34,7 +34,7 @@ from pathlib import Path
 
 from agent import limits
 from agent.paths import permits
-from agent.redact import redact
+from agent.redact import AGENT_CREDENTIAL_ENV_NAMES, redact
 
 CHUNK_BYTES = 65536
 KILL_GRACE_S = 5.0
@@ -162,10 +162,12 @@ def run_argv(
     """Run a command with no shell between us and it, bounded in time and size.
 
     `env` replaces the child's whole environment rather than extending it, which is
-    what makes it usable as a scrubber: the macro controller hands a generated program
-    an environment with the endpoint credentials removed, and an "extend" semantics
-    would have left them in place while looking like it had not. `None` keeps the
-    parent environment, which is what every existing caller wants.
+    what makes it usable as a scrubber: `run_shell` and the macro controller both hand
+    the child an environment with the endpoint credentials removed
+    (`endpoint_scrubbed_env`), and an "extend" semantics would have left them in place
+    while looking like it had not. `None` keeps the parent environment; callers that run
+    the model's own commands pass a scrubbed env instead, so a direct `run_argv` with a
+    real command and `env=None` would inherit the key -- there is no such caller today.
     """
     started = time.monotonic()
     spawn: dict[str, object] = {}
@@ -261,6 +263,22 @@ def run_argv(
     )
 
 
+def endpoint_scrubbed_env() -> dict[str, str]:
+    """The process environment with the agent's endpoint credentials removed.
+
+    A shell the model runs can `env`, `env > file`, `echo $OPENAI_API_KEY | base64` or
+    `cat /proc/self/environ`. Removing the three variables before the child starts means
+    the child's own environment (and `/proc/self/environ`) never carries them, so none
+    of these reach the key -- including the encoded forms that substring redaction
+    cannot catch. It does not by itself scrub the *parent* process's environment; `main`
+    pops the same variables from `os.environ` so `/proc/$PPID/environ` is closed too.
+    Everything else -- PATH and the task's own environment the command legitimately
+    needs -- is kept.
+    """
+    hidden = set(AGENT_CREDENTIAL_ENV_NAMES)
+    return {name: value for name, value in os.environ.items() if name not in hidden}
+
+
 def run_shell(
     command: str,
     *,
@@ -275,6 +293,7 @@ def run_shell(
         timeout_s=timeout_s,
         secrets=secrets,
         name="shell",
+        env=endpoint_scrubbed_env(),
     )
 
 
