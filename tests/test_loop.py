@@ -103,6 +103,26 @@ def test_a_written_and_verified_deliverable_is_the_only_way_to_solve(tmp_path: P
     assert verify.calls == [(target, "test -s incident.txt")]
 
 
+def test_write_json_writes_a_structured_deliverable_the_model_never_escaped(tmp_path: Path) -> None:
+    # The loop must carry the model's structured value to write_json intact (a dict, not
+    # a stringified blob) so the finding's embedded quotes survive as valid JSON.
+    target = tmp_path / "security_report.json"
+    report = {"findings": [{"title": "SQL injection", "evidence": "username = '{req.username}'"}]}
+    llm = StubLlm(
+        replies=[
+            action("write_json", path=str(target), data=report),
+            action("finish", path=str(target), verify="test -s security_report.json", summary="done"),
+        ]
+    )
+    verify = FakeVerify((True, "command", ""))
+
+    outcome = run(make_state(tmp_path), llm, verify)
+
+    assert outcome.solved is True
+    assert outcome.deliverable == target
+    assert json.loads(target.read_text(encoding="utf-8")) == report
+
+
 def test_a_successful_file_edit_advances_the_state_epoch(tmp_path: Path) -> None:
     target = tmp_path / "source.py"
     target.write_text("before", encoding="utf-8")

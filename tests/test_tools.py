@@ -9,6 +9,7 @@ and marked when cut, and no failure escapes as an exception.
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import sys
@@ -28,6 +29,7 @@ from agent.tools import (
     run_shell,
     search,
     write_file,
+    write_json,
 )
 
 POSIX_ONLY = pytest.mark.skipif(os.name != "posix", reason="target image is Linux; /bin/sh absent on Windows")
@@ -427,6 +429,56 @@ def test_write_file_replaces_content_rather_than_appending(tmp_path: Path) -> No
     write_file(target, "second", workspace=tmp_path)
 
     assert target.read_text(encoding="utf-8") == "second"
+
+
+def test_write_json_serialises_a_structured_value_into_valid_json(tmp_path: Path) -> None:
+    # The failure it exists to prevent: the model's finding quotes the vulnerable code,
+    # so its JSON, escaped as a string inside the action's own JSON, breaks. Here the
+    # model passes the value structured and the agent serialises, so the quotes survive
+    # and the file always parses.
+    report = {
+        "findings": [
+            {
+                "title": "SQL injection in login",
+                "evidence": "query = f\"SELECT id FROM users WHERE username = '{req.username}'\"",
+                "recommendation": 'Use parameterized queries: "SELECT id FROM users WHERE username = $1"',
+            }
+        ]
+    }
+    target = tmp_path / "security_report.json"
+
+    result = write_json(target, report, workspace=tmp_path)
+
+    assert result.ok is True
+    parsed = json.loads(target.read_text(encoding="utf-8"))
+    assert parsed == report, "the value round-trips through valid JSON, quotes intact"
+
+
+def test_write_json_parses_a_value_the_model_still_sent_as_a_string(tmp_path: Path) -> None:
+    target = tmp_path / "r.json"
+    result = write_json(target, '{"findings": [{"title": "x"}]}', workspace=tmp_path)
+    assert result.ok is True
+    assert json.loads(target.read_text(encoding="utf-8")) == {"findings": [{"title": "x"}]}
+
+
+def test_write_json_refuses_a_string_that_is_not_json(tmp_path: Path) -> None:
+    result = write_json(tmp_path / "r.json", "not json at all", workspace=tmp_path)
+    assert result.ok is False
+    assert "not valid JSON" in result.detail
+
+
+def test_write_json_refuses_a_missing_value_rather_than_writing_null(tmp_path: Path) -> None:
+    result = write_json(tmp_path / "r.json", None, workspace=tmp_path)
+    assert result.ok is False
+    assert not (tmp_path / "r.json").exists()
+
+
+def test_write_json_stays_inside_the_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    result = write_json(workspace / ".." / "escape.json", {"x": 1}, workspace=workspace)
+    assert result.ok is False
+    assert "outside the workspace" in result.detail
 
 
 def test_write_file_refusing_unencodable_content_does_not_truncate_the_file(tmp_path: Path) -> None:

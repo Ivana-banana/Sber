@@ -108,12 +108,14 @@ def test_the_skeleton_carries_no_worked_example() -> None:
 
 
 def test_the_skeleton_stays_the_size_it_was_measured_at() -> None:
-    # Guards the recorded 271 Qwen2.5 tokens indirectly: no tokenizer is available in
-    # the target image, so what regresses locally is the text it was measured on. The
-    # character bound went up with the English translation and the token count went
-    # down -- English is longer in characters and shorter in tokens here.
-    assert len(prompt.SYSTEM_SKELETON) <= 1220
-    assert prompt.SYSTEM_SKELETON.count("\n") <= 30
+    # Guards the recorded skeleton size indirectly: no tokenizer is available in the
+    # target image, so what regresses locally is the text it was measured on. The bound
+    # went from 1220 to 1320 when the `write_json` tool line was added (~20 Qwen2.5
+    # tokens, the same order as `replace_text`); the token budget accepted in
+    # docs/research/verdict-system-prompt-evidence.md is 700, so ~291 tokens is well
+    # within it. Raise this only for a real new tool contract, never for prose.
+    assert len(prompt.SYSTEM_SKELETON) <= 1320
+    assert prompt.SYSTEM_SKELETON.count("\n") <= 31
 
 
 def test_the_system_message_carries_environment_playbook_and_task(tmp_path: Path) -> None:

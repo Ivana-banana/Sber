@@ -393,6 +393,86 @@ def write_file(
     )
 
 
+def write_json(
+    path: Path,
+    data: object,
+    *,
+    workspace: Path,
+    permitted: tuple[Path, ...] = (),
+    secrets: Iterable[str] = (),
+) -> ToolResult:
+    """Write `data` as a JSON deliverable, serialising it here so the bytes are valid.
+
+    The model hands over the deliverable as a JSON value, not as a string it has to
+    escape inside another string. That escaping is exactly where a small model breaks:
+    a bug-bounty report whose `evidence` quotes the vulnerable code
+    (`... WHERE username = '{req.username}'`) has to survive being a JSON string nested
+    inside the action's own JSON, and E-BASE-r1 measured the model getting the finding
+    right, losing it to one unescaped quote, being told the file was invalid, and
+    emptying its own analysis to `{"findings": []}` to make the parse error go away.
+    Serialising on our side removes the nested-escaping step: the value the model
+    already produces correctly is written verbatim as valid JSON.
+
+    Confinement is `write_file`'s: the workspace and the paths the task named.
+    """
+    try:
+        root = workspace.resolve()
+        target = Path(path)
+        if not target.is_absolute():
+            target = root / target
+        target = target.resolve()
+    except OSError as exc:
+        return ToolResult(name="write_json", ok=False, detail=f"bad path: {exc}")
+
+    if not permits(target, root, permitted):
+        return ToolResult(
+            name="write_json",
+            ok=False,
+            detail=f"refused: {target} is outside the workspace {root} and unnamed by the task",
+        )
+
+    # The value is normally already parsed (the action arrived as JSON). A model that
+    # still stringifies it is met halfway: a JSON string is parsed once and re-emitted,
+    # which is the very escaping burden this tool exists to remove.
+    value = data
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError as exc:
+            return ToolResult(
+                name="write_json", ok=False, detail=f"data is a string but not valid JSON: {exc}"
+            )
+    if value is None:
+        return ToolResult(
+            name="write_json", ok=False, detail="write_json needs a data value: the JSON to write"
+        )
+    try:
+        text = json.dumps(value, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError) as exc:
+        return ToolResult(name="write_json", ok=False, detail=f"data is not JSON-serialisable: {exc}")
+
+    payload = text.encode("utf-8")
+    started = time.monotonic()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("wb") as handle:
+            handle.write(payload)
+    except OSError as exc:
+        return ToolResult(
+            name="write_json",
+            ok=False,
+            detail=redact(f"{exc.__class__.__name__}: {exc}", secrets),
+            duration_s=time.monotonic() - started,
+        )
+
+    return ToolResult(
+        name="write_json",
+        ok=True,
+        output=f"wrote {len(payload)} bytes of JSON to {target}",
+        duration_s=time.monotonic() - started,
+    )
+
+
 def replace_text(
     path: Path,
     old: str,

@@ -275,6 +275,13 @@ def run(
         act_started = state.start_phase("act")
         result = _execute(tool, args, state, playbook=playbook)
         state.finish_phase("act", act_started)
+        if os.environ.get("AGENT_TRACE_TOOLS"):
+            # Diagnostic only, off unless explicitly enabled: the loop otherwise prints
+            # phases but never which tool ran with what result, so a live zero cannot be
+            # told from the outside. Output is already redacted by the tool. Never on in
+            # a submission -- the runner sets none of our variables.
+            summary = (result.output or result.detail or "").replace("\n", " ")[:160]
+            print(f"agent tool: step={step} {tool} ok={result.ok} {summary}", flush=True)
         if _advances_state_epoch(tool, args) and (
             result.ok or tool == prompt.RUN_SHELL
         ):
@@ -536,6 +543,7 @@ REQUIRED: dict[str, str] = {
     prompt.READ_RANGE: "path",
     prompt.SEARCH: "pattern",
     prompt.WRITE_FILE: "path",
+    prompt.WRITE_JSON: "path",
     prompt.REPLACE_TEXT: "path",
 }
 """The one argument each tool cannot be run without.
@@ -593,6 +601,11 @@ def _arguments(act: dict[str, Any], state: AgentState) -> tuple[dict[str, object
             "old": str(fields.get("old", "") or ""),
             "new": str(fields.get("new", "") or ""),
         }, ""
+    if tool == prompt.WRITE_JSON:
+        # `data` is kept as the value the model sent -- a dict or list, not str()'d --
+        # because serialising it ourselves is the whole point; the tool parses it if the
+        # model still sent a JSON string.
+        return {"path": path, "data": fields.get("data")}, ""
     return {"path": path, "content": str(fields.get("content", "") or "")}, ""
 
 
@@ -2181,11 +2194,19 @@ def _execute(
         return tools.search(str(args["pattern"]), Path(str(args["path"])), secrets=secrets)
 
     target = Path(str(args["path"]))
-    if playbook.name == "code-fix" and tool in {prompt.WRITE_FILE, prompt.REPLACE_TEXT}:
+    if playbook.name == "code-fix" and tool in {prompt.WRITE_FILE, prompt.WRITE_JSON, prompt.REPLACE_TEXT}:
         refusal = _evaluator_path_refusal(target, state)
         if refusal:
             return tools.ToolResult(name=tool, ok=False, detail=refusal)
-    if tool == prompt.REPLACE_TEXT:
+    if tool == prompt.WRITE_JSON:
+        result = tools.write_json(
+            target,
+            args.get("data"),
+            workspace=state.workspace,
+            permitted=state.named_paths,
+            secrets=secrets,
+        )
+    elif tool == prompt.REPLACE_TEXT:
         result = tools.replace_text(
             target,
             str(args["old"]),

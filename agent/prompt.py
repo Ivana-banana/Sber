@@ -41,10 +41,11 @@ READ_RANGE = "read_range"
 LIST_DIR = "list_dir"
 SEARCH = "search"
 WRITE_FILE = "write_file"
+WRITE_JSON = "write_json"
 REPLACE_TEXT = "replace_text"
 FINISH = "finish"
 
-TOOLS: tuple[str, ...] = (RUN_SHELL, READ_RANGE, LIST_DIR, SEARCH, WRITE_FILE, REPLACE_TEXT, FINISH)
+TOOLS: tuple[str, ...] = (RUN_SHELL, READ_RANGE, LIST_DIR, SEARCH, WRITE_FILE, WRITE_JSON, REPLACE_TEXT, FINISH)
 
 ACTION_SCHEMA: dict[str, object] = {
     "type": "object",
@@ -55,6 +56,11 @@ ACTION_SCHEMA: dict[str, object] = {
         "start_line": {"type": "integer", "description": f"{READ_RANGE}: first line, 1-based"},
         "pattern": {"type": "string", "description": f"{SEARCH}: regular expression"},
         "content": {"type": "string", "description": f"{WRITE_FILE}: exact bytes to write"},
+        "data": {
+            "type": "object",
+            "additionalProperties": True,
+            "description": f"{WRITE_JSON}: the JSON value to write, as JSON, not as a string",
+        },
         "old": {"type": "string", "description": f"{REPLACE_TEXT}: exact text to replace, unique in the file"},
         "new": {"type": "string", "description": f"{REPLACE_TEXT}: text to put in its place"},
         "verify": {"type": "string", "description": f"{FINISH}: command proving the result"},
@@ -82,6 +88,7 @@ read_range(path, start_line) - a window of a text file.
 list_dir(path) - the contents of a directory.
 search(pattern, path) - a regular expression over the tree.
 write_file(path, content) - write exactly these bytes, replacing the file.
+write_json(path, data) - write a JSON deliverable; pass the JSON value in data directly, never JSON inside a string.
 replace_text(path, old, new) - change one part of a file, keeping the rest.
 finish(path, verify, summary) - declare the result ready.
 

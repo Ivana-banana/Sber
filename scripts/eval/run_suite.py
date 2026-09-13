@@ -35,6 +35,7 @@ what a faster endpoint would change too.
 
 from __future__ import annotations
 
+import os
 import argparse
 import ast
 import json
@@ -448,6 +449,10 @@ class Runner:
             # into a second archive on purpose: both arms then run the same bytes with
             # the same sha256, and the controller is the only thing that differs.
             env += ["-e", f"AGENT_CONTROLLER={self.args.controller}"]
+        if os.environ.get("AGENT_TRACE_TOOLS"):
+            # Diagnostic passthrough: makes the agent print each tool call and result to
+            # its log. Off unless set on the host running the suite; never a submission.
+            env += ["-e", "AGENT_TRACE_TOOLS=1"]
         if self.args.tell_agent_budget:
             # Off by default, and off in every scaled run: Harbor tells the agent
             # nothing about the deadline, so telling it here would change two things at
