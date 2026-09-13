@@ -196,17 +196,14 @@ class Budget:
         return max(0.0, min(limits.TOOL_TIMEOUT_MAX_S, self.remaining_s() - limits.EXIT_MARGIN_S))
 
     def llm_timeout_s(self) -> float:
-        """Ceiling for one logical LLM call: never longer than `LLM_TIMEOUT_S` or the
-        spendable time, and -- before the early checkpoint -- never long enough on
-        its own to run past it. `LLM_TIMEOUT_S` (120s) is wider than
-        `early_deadline_s` (90s by default); left uncapped, a single call could carry
-        the run past the point a deliverable was due before a runner with an
-        undeclared short timeout would have killed it.
+        """Ceiling for one logical LLM call: `LLM_TIMEOUT_S`, bounded by acting time.
+
+        Not by the early checkpoint (F4, 13.09 review). Clamping to `90 - elapsed` cut a
+        cold first call measured at 91.2 s off at 89.5 s and gave a call started at
+        t=85 five seconds. The checkpoint stays a hint to produce a deliverable; it no
+        longer kills the call that would produce it.
         """
-        ceiling = min(limits.LLM_TIMEOUT_S, self._acting_window_s())
-        if not self.past_early_deadline():
-            ceiling = min(ceiling, self.early_deadline_s - self.elapsed_s())
-        return max(0.0, ceiling)
+        return max(0.0, min(limits.LLM_TIMEOUT_S, self._acting_window_s()))
 
     def start_step(self) -> int:
         """Consume one step and return its number, starting at 1."""

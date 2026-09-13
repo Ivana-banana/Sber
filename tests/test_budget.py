@@ -175,19 +175,19 @@ def test_a_budget_smaller_than_the_checkpoint_is_all_early_phase() -> None:
 # --- the per-call ceiling ----------------------------------------------------
 
 
-def test_llm_timeout_is_bounded_by_the_early_deadline_from_the_very_first_call() -> None:
-    # LLM_TIMEOUT_S (120) is wider than EARLY_DELIVERABLE_DEADLINE_S (90). A single
-    # call left free to run the full per-call ceiling could, on its own, carry the
-    # run past the point a deliverable was due -- before a runner with an
-    # undeclared short timeout would have killed it, deliverable-less.
-    budget, _ = make_budget(600.0)
-    assert budget.llm_timeout_s() == budget.early_deadline_s
+def test_a_cold_first_llm_call_is_not_cut_off_by_the_checkpoint() -> None:
+    """F4 (13.09 review): the checkpoint used to clamp the call ceiling to `90 - elapsed`.
 
-
-def test_llm_timeout_shrinks_as_the_early_deadline_approaches() -> None:
+    A cold first call measured at 91.2 s was cut at 89.5 s and lost; a call started at
+    t=85 got 5 s. The checkpoint is a hint to produce, not a reason to kill the call
+    that would produce: the ceiling is `LLM_TIMEOUT_S` bounded only by spendable time.
+    """
     budget, clock = make_budget(600.0)
-    clock.advance(budget.early_deadline_s - 10.0)
-    assert budget.llm_timeout_s() == 10.0
+    assert budget.llm_timeout_s() == limits.LLM_TIMEOUT_S
+
+    clock.advance(budget.early_deadline_s - 5.0)
+    assert not budget.past_early_deadline()
+    assert budget.llm_timeout_s() == limits.LLM_TIMEOUT_S
 
 
 def test_llm_timeout_reverts_to_the_full_ceiling_once_past_the_early_deadline() -> None:
