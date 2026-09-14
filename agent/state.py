@@ -97,6 +97,14 @@ class Budget:
     early_deadline_s: float = field(default=limits.EARLY_DELIVERABLE_DEADLINE_S)
     """When a checkable answer must exist, independent of the outer bound."""
 
+    allow_long_llm: bool = field(default=False)
+    """Set once, for the rest of the run, when a slow or thinking endpoint is observed (a
+    reply truncated by length, or a call that timed out with no payload). It lifts the
+    pre-checkpoint clamp on `llm_timeout_s`: on such an endpoint a single thinking call
+    needs more than `early_deadline_s - elapsed`, and clamping it truncates the reasoning
+    and loses the call (F4). One-way; the verifier reserve and the task deadline still
+    bound the call, and a fast endpoint never sets it, so a 7B run is unchanged."""
+
     def __post_init__(self) -> None:
         if self.started_at == 0.0:
             self.started_at = self.clock()
@@ -179,14 +187,19 @@ class Budget:
 
     def llm_timeout_s(self) -> float:
         """Ceiling for one logical LLM call: never longer than `LLM_TIMEOUT_S` or the
-        spendable time, and -- before the early checkpoint -- never long enough on
-        its own to run past it. `LLM_TIMEOUT_S` (120s) is wider than
-        `early_deadline_s` (90s by default); left uncapped, a single call could carry
-        the run past the point a deliverable was due before a runner with an
+        spendable time, and -- before the early checkpoint, on a fast endpoint -- never
+        long enough on its own to run past it. `LLM_TIMEOUT_S` (120s) is wider than
+        `early_deadline_s` (90s by default); left uncapped on a fast model, a single call
+        could carry the run past the point a deliverable was due before a runner with an
         undeclared short timeout would have killed it.
+
+        The pre-checkpoint clamp is lifted once `allow_long_llm` is set, i.e. once a slow
+        or thinking endpoint is observed: there a single call needs more than the clamp
+        allows, and clamping it truncates the reasoning and loses the call. The verifier
+        reserve and the task deadline still bound the call either way.
         """
         ceiling = min(limits.LLM_TIMEOUT_S, self.spendable_s())
-        if not self.past_early_deadline():
+        if not self.allow_long_llm and not self.past_early_deadline():
             ceiling = min(ceiling, self.early_deadline_s - self.elapsed_s())
         return max(0.0, ceiling)
 

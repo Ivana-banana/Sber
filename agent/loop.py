@@ -37,7 +37,7 @@ import time
 
 from agent import detectors, limits, prompt, result_contract, result_progress, sources, tools
 from agent.playbooks import Playbook
-from agent.ports import LlmError, LlmPort
+from agent.ports import LlmError, LlmPort, LlmReply
 from agent.preflight import EnvironmentBrief
 from agent.state import AgentState
 from agent.verify import VerifyResult
@@ -143,6 +143,14 @@ def run(
             timeout_s=max(1.0, state.budget.llm_timeout_s()),
         )
         state.finish_phase("plan", plan_started)
+
+        if not state.budget.allow_long_llm and _endpoint_is_slow_or_thinking(reply, llm):
+            # A thinking or slow endpoint: lift the 90s pre-checkpoint clamp so the next
+            # call gets the full budget instead of being truncated mid-reasoning. The
+            # call that just timed out or truncated is already lost -- this saves the
+            # rest of the run (F4).
+            state.budget.allow_long_llm = True
+            state.record("budget", "allow-long-llm", "slow/thinking endpoint; lifting the call clamp")
 
         if isinstance(reply, LlmError):
             llm_failures += 1
@@ -2439,6 +2447,22 @@ def _shell_can_change(command: str) -> bool:
     if any(word in {"-delete", "-exec", "-execdir"} for word in words):
         return True
     return PurePosixPath(words[0]).name not in READ_ONLY_SHELLS
+
+
+def _endpoint_is_slow_or_thinking(reply: LlmReply | LlmError, llm: LlmPort) -> bool:
+    """Whether an endpoint slow or thinking enough that the 90s call clamp hurts.
+
+    Three loop-observable signals, matching the F4 design: the client detected a thinking
+    endpoint (a reasoning field or a length cutoff, tracked inside `agent.llm`), the reply
+    is the truncated-by-length error, or a call timed out with no payload -- the last is
+    the only signal available on the very first call, which is where the 90s clamp bit.
+    """
+    if getattr(llm, "_thinking_endpoint", False):
+        return True
+    if isinstance(reply, LlmError):
+        reason = reply.reason.lower()
+        return "truncated by length" in reason or "timeout" in reason
+    return False
 
 
 def _advances_state_epoch(tool: str, args: dict[str, object]) -> bool:

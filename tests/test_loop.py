@@ -311,6 +311,32 @@ def test_code_fix_does_not_block_replace_text_on_an_unread_file(tmp_path: Path) 
     assert target.read_text(encoding="utf-8") == "value = 2\n", "replace_text is the targeted tool, never blocked"
 
 
+def test_a_truncation_error_lifts_the_long_llm_clamp(tmp_path: Path) -> None:
+    # F4: seeing a thinking/slow endpoint -- here the truncated-by-length error -- lifts
+    # the 90s pre-checkpoint call clamp for the rest of the run. Sticky, one-way.
+    target = tmp_path / "out.txt"
+    state = make_state(tmp_path)
+    assert state.budget.allow_long_llm is False
+    llm = StubLlm(replies=[
+        LlmError("reply truncated by length at style native_tools", retryable=False),
+        action("write_file", path=str(target), content="x"),
+        action("finish", path=str(target), verify="test -s out.txt", summary="done"),
+    ])
+
+    run(state, llm, FakeVerify((True, "c", "")))
+
+    assert state.budget.allow_long_llm is True
+
+
+def test_a_plain_endpoint_error_does_not_lift_the_clamp(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+    llm = StubLlm(replies=[LlmError("connection refused", retryable=True)] * 4)
+
+    run(state, llm, FakeVerify())
+
+    assert state.budget.allow_long_llm is False, "a non-timeout error is not a thinking signal"
+
+
 def test_a_non_code_fix_playbook_never_blocks_a_blind_write(tmp_path: Path) -> None:
     target = tmp_path / "notes.py"
     target.write_text("old = 1\n", encoding="utf-8")

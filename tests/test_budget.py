@@ -184,6 +184,27 @@ def test_llm_timeout_reverts_to_the_full_ceiling_once_past_the_early_deadline() 
     assert budget.llm_timeout_s() == limits.LLM_TIMEOUT_S
 
 
+def test_allow_long_llm_lifts_the_pre_checkpoint_clamp() -> None:
+    # F4: on a thinking endpoint the flag removes the 90s pre-checkpoint clamp, so a call
+    # at step 1 gets the full ceiling instead of ~90s and its reasoning is not truncated.
+    budget, _ = make_budget(600.0)
+    assert budget.llm_timeout_s() == budget.early_deadline_s, "clamped by default"
+
+    budget.allow_long_llm = True
+    assert budget.llm_timeout_s() == limits.LLM_TIMEOUT_S, "full ceiling once lifted"
+
+
+def test_allow_long_llm_still_respects_the_spendable_budget() -> None:
+    # The flag lifts only the checkpoint clamp; the verifier reserve and the deadline
+    # still bound the call, so it never runs into the reserve.
+    budget, clock = make_budget(120.0)
+    budget.allow_long_llm = True
+    clock.advance(60.0)
+
+    assert budget.llm_timeout_s() == budget.spendable_s()
+    assert budget.llm_timeout_s() < limits.LLM_TIMEOUT_S
+
+
 def test_llm_timeout_never_exceeds_the_spendable_time() -> None:
     budget, clock = make_budget(600.0)
     clock.advance(600.0 - budget.verify_reserve_s - 5.0)

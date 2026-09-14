@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent import limits, paths, tools
-from agent.loop import Outcome
+from agent.loop import Outcome, _endpoint_is_slow_or_thinking
 from agent.playbooks import Playbook
 from agent.ports import LlmError, LlmPort, Message
 from agent.preflight import EnvironmentBrief
@@ -233,6 +233,10 @@ def _ask(
         timeout_s=max(1.0, timeout_s),
     )
     state.finish_phase("plan", started)
+
+    if not state.budget.allow_long_llm and _endpoint_is_slow_or_thinking(reply, llm):
+        state.budget.allow_long_llm = True  # F4: lift the 90s call clamp on a thinking endpoint
+        state.record("budget", "allow-long-llm", "slow/thinking endpoint; lifting the call clamp")
 
     if isinstance(reply, LlmError):
         state.budget.add_usage(reply)  # a failed attempt was still generated and billed
