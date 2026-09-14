@@ -34,6 +34,10 @@ NETWORK=${NETWORK:-sber-eval}
 TASKS_ROOT=${TASKS_ROOT:-local_task}
 REPEATS=${REPEATS:-3}
 TAG=${TAG:-$(date +%Y%m%d-%H%M%S)}
+# REUSE=1 passes --reuse-images: skip rebuilding task images when the sber-eval/<task>
+# images already exist and match the packages. Verify the image IDs before trusting it.
+REUSE=${REUSE:-0}
+[ "$REUSE" = "1" ] && REUSE_FLAG=--reuse-images || REUSE_FLAG=
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$HERE"
@@ -50,7 +54,7 @@ run_one() {
     --model "$MODEL" \
     --base-url "$BASE_URL" --api-key "$API_KEY" \
     --network "$NETWORK" --counter-container "$PROXY" \
-    --timeout-scale 1.0 --repeats "$REPEATS" \
+    --timeout-scale 1.0 --repeats "$REPEATS" $REUSE_FLAG \
     --out "$out" --label "f4-paired-$TAG-$side"
   printf 'summary: %s/results.tsv\n' "$out" >&2
   sha256sum "$out/results.tsv" 2>/dev/null || true
