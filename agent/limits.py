@@ -297,6 +297,19 @@ core dump contains any short string by accident."""
 
 LLM_TIMEOUT_S = 120.0
 LLM_MAX_OUTPUT_TOKENS = 2048
+LLM_THINKING_MAX_OUTPUT_TOKENS = 8192
+"""Hard ceiling on the raised output budget once a thinking endpoint is detected. A
+reasoning model spends most of its completion inside the thinking span, so the default
+2048 truncates the answer mid-thought (finish_reason=length, empty content) and the run
+degrades to llm-unusable. Measured: qwen3:30b-a3b finishes a hard audit prompt at ~610
+completion tokens when given 8192, versus a wall at 2048. Reached only on a thinking
+endpoint, and capped down on a 400 that says the context cannot hold it."""
+
+LLM_THINKING_TOKEN_MULTIPLIER = 4
+"""Factor the caller's own output ceiling is raised by on a thinking endpoint, capped by
+LLM_THINKING_MAX_OUTPUT_TOKENS. A multiplier, not a flat 8192, so a deliberately low
+ceiling keeps its shape: the macro runaway guard's 1024 becomes 4096 (still bounded),
+not 8192, while the main loop's 2048 reaches the 8192 ceiling."""
 LLM_RETRY_BACKOFF_S: tuple[float, ...] = (1.0, 3.0)
 """Finite retry schedule for transport failures. A permanently broken endpoint must
 fail diagnosably rather than hang until the task times out."""

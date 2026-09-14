@@ -357,6 +357,76 @@ def test_a_transport_error_is_a_lower_bound_not_an_exact_zero() -> None:
     assert result.output_tokens == 0
 
 
+def _reply(content: str, *, reasoning: str = "", finish: str = "stop", completion: int = 10) -> bytes:
+    message: dict[str, object] = {"content": content}
+    if reasoning:
+        message["reasoning"] = reasoning
+    payload = {
+        "choices": [{"message": message, "finish_reason": finish}],
+        "usage": {"prompt_tokens": 5, "completion_tokens": completion},
+    }
+    return json.dumps(payload).encode()
+
+
+def test_a_reasoning_field_raises_the_ceiling_on_later_calls_without_disabling_thinking() -> None:
+    # The endpoint is a thinking model (first reply carries a reasoning field and still
+    # parses). Every later call raises max_tokens -- the caller's ceiling times the
+    # factor, capped -- but does NOT disable thinking: that is a last resort, not the
+    # first response, so a big reasoning model keeps its capability.
+    client, endpoint, _ = make_client(
+        [(200, _reply('{"tool": "list_dir"}', reasoning="thinking")), (200, _reply('{"tool": "list_dir"}'))]
+    )
+    client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+    client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert endpoint.bodies[0]["max_tokens"] == 2048, "the first call is not yet raised"
+    assert "chat_template_kwargs" not in endpoint.bodies[0]
+    assert endpoint.bodies[1]["max_tokens"] == 8192, "later calls get the raised ceiling (2048*4 capped)"
+    assert "chat_template_kwargs" not in endpoint.bodies[1], "thinking is not disabled on a mere raise"
+
+
+def test_a_length_cutoff_escalates_raise_then_thinking_off_then_gives_up() -> None:
+    truncated = _reply("partial reasoning, no json", finish="length", completion=2048)
+    client, endpoint, _ = make_client([(200, truncated)] * 3)
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(result, LlmError)
+    assert "truncated by length" in result.reason
+    assert endpoint.bodies[0]["max_tokens"] == 2048, "first attempt at the default ceiling"
+    assert endpoint.bodies[1]["max_tokens"] == 8192, "second attempt raised"
+    assert "chat_template_kwargs" not in endpoint.bodies[1], "raise before disabling thinking"
+    assert endpoint.bodies[2].get("chat_template_kwargs") == {"enable_thinking": False}, "third disables thinking"
+    assert result.output_tokens == 3 * 2048, "all three truncated attempts are counted"
+
+
+def test_a_context_overflow_400_lowers_the_ceiling_without_a_protocol_downgrade() -> None:
+    # Server rejects the raised budget as too big for its context: lower the ceiling and
+    # retry the same rung, do not step the protocol down.
+    truncate = _reply("x", finish="length", completion=2048)
+    overflow = (400, b"max_tokens is too large for the model's context length")
+    ok = _reply('{"tool": "list_dir"}')
+    client, endpoint, _ = make_client([(200, truncate), overflow, (200, ok)])
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(result, LlmReply)
+    # The 400 retried the same rung with a smaller ceiling rather than downgrading the
+    # protocol: three requests, the overflowed one at 8192, the retry halved to 4096.
+    assert len(endpoint.bodies) == 3
+    assert endpoint.bodies[1]["max_tokens"] == 8192, "the raised attempt that overflowed"
+    assert endpoint.bodies[2]["max_tokens"] == 4096, "the ceiling was halved on the retry"
+
+
+def test_a_plain_non_thinking_endpoint_is_untouched() -> None:
+    client, endpoint, _ = make_client([(200, _reply('{"tool": "list_dir"}'))])
+    client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert endpoint.bodies[0]["max_tokens"] == 2048
+    assert "chat_template_kwargs" not in endpoint.bodies[0]
+    assert client._thinking_endpoint is False
+
+
 def test_ladder_walks_all_the_way_down_to_salvaged_text() -> None:
     prose = 'Sure! Here you go:\n```json\n{"action": "ls"}\n```\nHope that helps.'
     client, endpoint, events = make_client(

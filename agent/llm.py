@@ -228,6 +228,42 @@ def _first_message(payload: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _finish_reason(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        reason = choices[0].get("finish_reason")
+        if isinstance(reason, str):
+            return reason
+    return ""
+
+
+def _looks_like_context_overflow(detail: str) -> str | None:
+    """The marker in a 400 body that says the raised output budget overran the context.
+
+    vLLM rejects `prompt + max_tokens > num_ctx` with a 400 naming the context length or
+    max_tokens; the fix is a smaller ceiling, not a protocol downgrade. Returns the
+    marker matched, or None.
+    """
+    lowered = detail.lower()
+    for marker in ("context length", "context window", "maximum context", "max_tokens", "max tokens", "reduce"):
+        if marker in lowered:
+            return marker
+    return None
+
+
+def _has_reasoning_field(message: dict[str, Any]) -> bool:
+    """Whether the endpoint returned reasoning in its own field (ollama, some vLLM).
+
+    A signal the endpoint is a thinking model even when this particular content parsed:
+    the reasoning was still generated and billed, and later calls will need the headroom.
+    """
+    for key in ("reasoning", "reasoning_content", "thinking"):
+        value = message.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
+
+
 def _unwrap_function_envelope(value: Any, schema: dict[str, Any]) -> dict[str, Any] | None:
     """A function call written as prose, mapped onto the action schema. None if it isn't one.
 
@@ -350,6 +386,24 @@ class HttpLlm:
     """Called as (kind, detail) for protocol downgrades and retries, so the loop can
     put them in the audit trail. Never receives secrets: text is redacted first."""
 
+    _thinking_endpoint: bool = field(default=False, repr=False)
+    """Set once, for the rest of the run, the first time a reply carries a reasoning
+    field or is truncated by length: the endpoint is a thinking model, so the output
+    ceiling is raised on every later call rather than paying a truncated 2048-token
+    attempt first. One-way, like the protocol ladder."""
+
+    _thinking_off: bool = field(default=False, repr=False)
+    """Set only after a raised request is STILL truncated: then, and only then, ask the
+    server to skip thinking (`enable_thinking=false`). Kept separate from raising the
+    budget because on a vLLM server that honours the flag, turning thinking off is the
+    part that can cut the model's capability -- the thing a big reasoning model is smart
+    for -- so it is the last resort, not the first response to seeing a reasoning field."""
+
+    _output_cap: int = field(default=limits.LLM_THINKING_MAX_OUTPUT_TOKENS, repr=False)
+    """Upper bound on the raised ceiling, lowered only when the server answers a raised
+    request with a 400 about context length: `prompt + max_tokens > num_ctx` on a strict
+    server (vLLM). Never raised."""
+
     def complete(
         self,
         messages: list[Message],
@@ -433,12 +487,23 @@ class HttpLlm:
         schema: dict[str, object] | None,
         max_output_tokens: int,
     ) -> dict[str, Any]:
+        tokens = max_output_tokens
         body: dict[str, Any] = {
             "model": self.settings.model,
             "messages": messages,
-            "max_tokens": max_output_tokens,
+            "max_tokens": tokens,
             "temperature": 0,
         }
+        if self._thinking_endpoint:
+            # Room for the thinking span plus the answer: the caller's ceiling times a
+            # factor, capped, so a deliberately low ceiling (macro's runaway guard) is
+            # raised in proportion rather than flattened to 8192.
+            raised = tokens * limits.LLM_THINKING_TOKEN_MULTIPLIER
+            body["max_tokens"] = min(self._output_cap, max(tokens, raised))
+        if self._thinking_off:
+            # Last resort, only after a raised request still truncated: ask the server to
+            # skip thinking. vLLM/llama.cpp honour it; ollama ignores the unknown key.
+            body["chat_template_kwargs"] = {"enable_thinking": False}
         if schema is None:
             return body
 
@@ -658,6 +723,19 @@ class HttpLlm:
                     retryable=verdict == RETRY,
                 )
 
+                # A strict server (vLLM) rejects the raised thinking budget with a 400
+                # naming the context length: lower the ceiling and retry the same rung
+                # rather than downgrade the protocol, which would not fix the size.
+                if (
+                    verdict == SHAPE
+                    and self._thinking_endpoint
+                    and self._output_cap > limits.LLM_MAX_OUTPUT_TOKENS
+                    and _looks_like_context_overflow(detail)
+                ):
+                    self._output_cap = max(limits.LLM_MAX_OUTPUT_TOKENS, self._output_cap // 2)
+                    self._note("thinking", f"context rejected the budget; capping output at {self._output_cap}")
+                    continue
+
                 if verdict == FATAL:
                     # A rejected key, an unknown model or an unknown route. The ladder
                     # cannot fix any of them and retrying only spends the deadline.
@@ -699,8 +777,33 @@ class HttpLlm:
             acc[1] += completion_tokens
             acc[2] = acc[2] and reported
 
+            # A reasoning field or a length cutoff marks a thinking endpoint. Set it
+            # stickily so every later call gets the raised ceiling; `was_raised` records
+            # whether the request that just came back already had it, to tell a first
+            # truncation from one that survived the raise.
+            message = _first_message(payload)
+            finish = _finish_reason(payload)
+            was_raised = self._thinking_endpoint
+            if not self._thinking_endpoint and (_has_reasoning_field(message) or finish == "length"):
+                self._thinking_endpoint = True
+                self._note("thinking", "reasoning endpoint; raising the output ceiling")
+
             text, reason = self._read_reply(payload, schema)
             if text is None:
+                if finish == "length":
+                    # Truncated, not a shape problem, so the ladder must not step down.
+                    # Retry the same rung: first with the raised ceiling, then with
+                    # thinking disabled, then give up as truncated -- each is one attempt,
+                    # bounded by LLM_MAX_ATTEMPTS.
+                    if not was_raised:
+                        continue
+                    if not self._thinking_off:
+                        self._thinking_off = True
+                        self._note("thinking", "still truncated; asking the endpoint to skip thinking")
+                        continue
+                    return stamped(
+                        LlmError(reason=f"reply truncated by length at style {self.style}", retryable=False)
+                    )
                 last = LlmError(reason=f"{reason} at style {self.style}", retryable=False)
                 if schema is not None and self._demote(reason):
                     retries_at_style = 0
