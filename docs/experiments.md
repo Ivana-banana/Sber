@@ -3532,3 +3532,39 @@ timeout 5400 python3 scripts/eval/run_suite.py \
 - Вывод: потолок solved зависит от (1) ёмкости eval-модели — на 14B-классе +1 (find-sqli);
   (2) фикса no-reload для fix-задач — потенциально +2 на любой модели. Путь к 5/6:
   capable eval-модель + фикс проверки code-fix. Модель оценки задаёт организатор.
+
+### F4-7b-regression (2026-09-14) — регресс-страж F4 на 7B, solved-паритет
+
+- Гейт #3 плана `2026-09-14-F4-paired-measurement-plan.md`: доказать, что F4 не роняет
+  solved на не-thinking модели. Причинный замер эффекта F4 — на 30B/4080, здесь только
+  регресс.
+- Стенд: этот ноутбук (RTX 3050, 4 ГБ), `codex-three-model/proxy` на `sber-eval`,
+  `qwen2.5-coder:7b-instruct-q4_K_M`, CONTEXT=4096, `--timeout-scale 1.0`, n=1.
+- Один фактор — F4 (`allow_long_llm`): control `64636f9` (`nof4.zip`,
+  `19cc77e162abb797…`), treatment `8b568ac` (`f4.zip`, `246ef93eba31aa58…`). Diff пары
+  затрагивает только loop/macro/state + тесты. Тесты обоих: 788 passed.
+- Команда: `REUSE=1 REPEATS=1 MODEL=qwen2.5-coder:7b-instruct-q4_K_M PROXY=codex-three-proxy-20260914 TAG=7b-reg-r1 scripts/eval/f4_paired_measurement.sh build/nof4.zip build/f4.zip`.
+- results.tsv: control `ae8d52ce41fa1646…`, treatment `214cb913d3dde6c9…`.
+
+| Задача | control reward/stop | treatment reward/stop |
+|---|---|---|
+| bye-file | 1 / verified | 1 / verified (ep_late=3, F4 сработал) |
+| find-sqli-login | 1 / budget | 1 / budget |
+| hello-file | 1 / verified | 1 / verified |
+| fix-sqli-login | 0 / budget (reasoning) | 0 / steps (reasoning) |
+| fix-sqli-search | 0 / budget (reasoning) | 0 / llm-unusable (endpoint) |
+| incident-log-forensics | 0 / llm-unusable (endpoint) | 0 / llm-unusable (endpoint) |
+| **Итого** | **3/6**, 136 917 tok, 1842 с | **3/6**, 172 263 tok, 1552 с |
+
+- **Результат: solved 3/6 = 3/6, те же три задачи — регресса нет (гейт #3 пройден).**
+- Токены treatment +26 %: на этом медленном стенде вызовы упирались в timeout даже на
+  тривиальных задачах → сигнал `_endpoint_is_slow_or_thinking` включал F4, и длинные
+  вызовы считались полнее. Это ожидаемый F4-путь «медленный эндпоинт», не регресс.
+- Оговорки (честно): n=1; стенд нестабилен — три ячейки `llm-unusable/endpoint`
+  (control incident; treatment fix-search + incident) — это отказы эндпоинта, не reasoning
+  агента, поэтому пара частично confounded (fix-search: reasoning-0 у control против
+  endpoint-0 у treatment). Чистый «быстрый 7B, F4 не активируется» тут невоспроизводим,
+  но он равен control по построению (кламп не снимается, пока флаг False).
+- Побочно: control-архив (уже с thinking-fixes/`write_json`) даёт 3/6 на 7B против
+  задокументированной базы 2/6 — `find-sqli-login` конвертируется и на 7B. n=1, не вывод.
+- Не сделано: причинный замер F4 (30B/4080) — стенда с 18 ГБ на этой машине нет.
