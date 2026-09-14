@@ -418,6 +418,30 @@ def test_a_context_overflow_400_lowers_the_ceiling_without_a_protocol_downgrade(
     assert endpoint.bodies[2]["max_tokens"] == 4096, "the ceiling was halved on the retry"
 
 
+def test_an_unclosed_think_with_length_escalates_like_an_empty_content() -> None:
+    # A reply cut off mid-thought is a leading unclosed <think> plus finish=length; it
+    # must escalate (raise, then thinking-off) exactly like empty content, not demote.
+    cut = _reply("<think>reasoning that never closed and ran out", finish="length", completion=2048)
+    client, endpoint, _ = make_client([(200, cut)] * 3)
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(result, LlmError)
+    assert "truncated by length" in result.reason
+    assert endpoint.bodies[1]["max_tokens"] == 8192
+
+
+def test_a_generic_400_still_downgrades_the_protocol_rather_than_capping() -> None:
+    # A 400 that is not about context (an unsupported response_format) must step the
+    # ladder down, not be mistaken for a context overflow.
+    client, endpoint, events = make_client([(400, b"response_format is not supported")] * len(llm.LADDER))
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmError)
+    # every rung was tried (a demotion per non-final rung), not a cap-down loop
+    assert len(endpoint.bodies) == len(llm.LADDER)
+
+
 def test_a_plain_non_thinking_endpoint_is_untouched() -> None:
     client, endpoint, _ = make_client([(200, _reply('{"tool": "list_dir"}'))])
     client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)

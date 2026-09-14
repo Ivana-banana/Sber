@@ -245,7 +245,9 @@ def _looks_like_context_overflow(detail: str) -> str | None:
     marker matched, or None.
     """
     lowered = detail.lower()
-    for marker in ("context length", "context window", "maximum context", "max_tokens", "max tokens", "reduce"):
+    # Context-specific markers only: a generic 400 (an unsupported response_format on a
+    # strict server, say) must still step the protocol down, not lower the ceiling.
+    for marker in ("context length", "context window", "maximum context", "context_length", "max_tokens", "max_new_tokens"):
         if marker in lowered:
             return marker
     return None

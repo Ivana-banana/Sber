@@ -49,6 +49,19 @@ def drive(state: AgentState, llm: StubLlm) -> macro.Outcome:
     return macro.run(state, llm, verify.verify, brief=brief, playbook=GENERAL)
 
 
+def test_the_macro_controller_counts_the_tokens_of_a_failed_call(tmp_path: Path) -> None:
+    # A failed macro call was still generated and billed; its tokens must reach the
+    # budget, the same way the main loop counts an LlmError. Regression for the
+    # early-return-before-add_usage bug on the macro error path.
+    target = tmp_path / "answer.txt"
+    state = make_state(tmp_path, f"write {target}", (target,))
+    llm = StubLlm(replies=[LlmError("endpoint down", retryable=False, input_tokens=100, output_tokens=2048)])
+
+    drive(state, llm)
+
+    assert state.budget.total_tokens == 2148
+
+
 def test_a_program_that_writes_the_deliverable_is_solved_in_one_call(tmp_path: Path) -> None:
     target = tmp_path / "answer.txt"
     llm = StubLlm(replies=[reply("open('answer.txt','w').write('42')", str(target))])
