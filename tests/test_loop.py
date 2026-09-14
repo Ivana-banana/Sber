@@ -210,6 +210,50 @@ def test_repeated_blind_writes_never_overwrite_the_source(tmp_path: Path) -> Non
 
     assert target.read_text(encoding="utf-8") == "router = 1\n", "the source is never overwritten"
     assert outcome.solved is False
+    # Honest about the cost: identical blind writes are refused every time and the run
+    # grinds to the step cap -- a block here is advice, not a stop -- so this is 20
+    # wasted calls, not a save. The guard's value is only that the file stays intact.
+    assert outcome.stop_reason == "steps"
+    assert sum("has not read it" in o for o in outcome.observations) >= 2
+
+
+def test_f10_blind_retries_after_an_honest_edit_end_in_stuck(tmp_path: Path) -> None:
+    # After one honest edit of A, blind writes to an unread B are refused; with the same
+    # refusal text they read as no progress and the run ends stuck rather than at the cap.
+    a = tmp_path / "a.py"
+    a.write_text("x = 1\n", encoding="utf-8")
+    b = tmp_path / "b.py"
+    b.write_text("y = 1\n", encoding="utf-8")
+    state = _codefix_state(tmp_path, a, max_steps=20)
+    setup = [
+        action("read_range", path=str(a), start_line=1),
+        action("write_file", path=str(a), content="x = 2\n"),
+    ]
+    blind = [action("write_file", path=str(b), content=f"stub{i}\n") for i in range(12)]
+    llm = StubLlm(replies=setup + blind)
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert b.read_text(encoding="utf-8") == "y = 1\n", "the unread second file is never overwritten"
+    assert outcome.stop_reason == "stuck", outcome.stop_reason
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_allows_a_write_after_a_shell_rename_created_the_file(tmp_path: Path) -> None:
+    # `mv`/`cp -p` preserve mtime but bump ctime; touched-since checks both, so a renamed
+    # module is known and a later write_file to it is not a false refusal.
+    src = tmp_path / "orig.py"
+    src.write_text("x = 1\n", encoding="utf-8")
+    dst = tmp_path / "renamed.py"
+    state = _codefix_state(tmp_path, dst, max_steps=2)
+    llm = StubLlm(replies=[
+        action("run_shell", command=f"mv {src} {dst}"),
+        action("write_file", path=str(dst), content="x = 2\n"),
+    ])
+
+    run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert dst.read_text(encoding="utf-8") == "x = 2\n"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")

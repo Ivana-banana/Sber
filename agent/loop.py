@@ -1024,7 +1024,11 @@ def _workspace_files_touched_since(workspace: Path, since: float) -> list[Path]:
     touched: list[Path] = []
     for path in _workspace_files(workspace):
         try:
-            if path.stat().st_mtime >= since:
+            info = path.stat()
+            # ctime as well as mtime: `mv a.py c.py` and `cp -p` preserve the content's
+            # mtime but not the entry's ctime, so a renamed or attribute-copied module
+            # would be missed by mtime alone -- a false refusal on a plausible edit.
+            if max(info.st_mtime, info.st_ctime) >= since:
                 touched.append(path.resolve())
         except OSError:
             continue
