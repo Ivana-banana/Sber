@@ -86,6 +86,23 @@ EOF
 - `local_task/` — публичные примеры с конфигурацией, окружением, инструкциями,
   тестами и иногда reference solution.
 
+Модель в примере организаторов (проверено 14.09.2026 на том же commit
+`b95c62f…`, README не менялся): команда локального запуска эталонного агента —
+
+```sh
+uv run harbor run -p local_task --agent-import-path agent.agent:MyInstalledAgent \
+  -m qwen/qwen3.6-35b-a3b \
+  --ae OPENAI_API_KEY=$OPENAI_API_KEY --ae OPENAI_BASE_URL=https://openrouter.ai/api/v1 -y
+```
+
+То есть организаторы отлаживают пример на `qwen3.6-35b-a3b` (MoE, ~3B активных
+параметров) через OpenRouter. Ни ТЗ, ни README не ограничивают размер модели и не
+называют модель закрытой оценки: она приходит через `LOCAL_AGENT_MODEL`, участник её
+не выбирает. Отсюда два следствия: локальные прогоны на 14B и 30B-A3B-классе —
+допустимая диагностика, а «рекомендованная 7B» в `TEAMMATE.md` и `HANDOFF.md` —
+наша внутренняя точка отсчёта из `docs/research/local-model-baseline.md`, не
+требование организаторов.
+
 Проверенный upstream commit:
 `b95c62fec81656e338af54045efa688fd4979615` от 26.08.2026. Предыдущая точка —
 `71f90810d7a608677bbcf44f409f0aefded38340` от 09.07.2026; между ними ровно один
