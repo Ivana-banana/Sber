@@ -431,6 +431,19 @@ def test_write_file_replaces_content_rather_than_appending(tmp_path: Path) -> No
     assert target.read_text(encoding="utf-8") == "second"
 
 
+def test_write_file_warns_when_a_python_source_no_longer_compiles(tmp_path: Path) -> None:
+    # The 14B fix-sqli trace overwrote a router with a stub that referenced an undefined
+    # name; the app failed to import and the verifier never ran, yet "wrote N bytes"
+    # read as success. A .py write now reports a syntax break the way a .json write
+    # reports an unparseable file, so "broke the file and did not notice" gets a signal.
+    target = tmp_path / "mod.py"
+    good = write_file(target, "def f():\n    return 1\n", workspace=tmp_path)
+    bad = write_file(target, "def f(:\n    return 1\n", workspace=tmp_path)
+
+    assert good.ok is True and "does not compile" not in good.output
+    assert bad.ok is True and "does not compile" in bad.output
+
+
 def test_write_json_serialises_a_structured_value_into_valid_json(tmp_path: Path) -> None:
     # The failure it exists to prevent: the model's finding quotes the vulnerable code,
     # so its JSON, escaped as a string inside the action's own JSON, breaks. Here the

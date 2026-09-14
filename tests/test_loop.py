@@ -103,6 +103,24 @@ def test_a_written_and_verified_deliverable_is_the_only_way_to_solve(tmp_path: P
     assert verify.calls == [(target, "test -s incident.txt")]
 
 
+def test_the_evaluator_inode_scan_skips_vendored_and_cache_trees(tmp_path: Path) -> None:
+    # The alias scan rglob'd all of /app including .venv on every code-fix write
+    # (~9.5 s each). Nothing an evaluator file can hide in lives in a skipped dir, so
+    # the walk prunes them -- large savings, same guard.
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / ".venv" / "lib").mkdir(parents=True)
+    (tmp_path / ".venv" / "lib" / "vendored.py").write_text("y = 2\n", encoding="utf-8")
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "__pycache__" / "app.pyc").write_bytes(b"\x00")
+
+    files = loop._workspace_files(tmp_path)
+    names = {p.name for p in files}
+
+    assert "app.py" in names
+    assert "vendored.py" not in names, ".venv is not walked"
+    assert "app.pyc" not in names, "__pycache__ is not walked"
+
+
 def test_write_json_writes_a_structured_deliverable_the_model_never_escaped(tmp_path: Path) -> None:
     # The loop must carry the model's structured value to write_json intact (a dict, not
     # a stringified blob) so the finding's embedded quotes survive as valid JSON.

@@ -385,6 +385,17 @@ def write_file(
         except ValueError as exc:
             written += f"; the file is not valid JSON: {exc}"
 
+    # A byte count reads as success even when the write broke the file. A .py source
+    # that no longer compiles is the shape that let a code-fix run overwrite a module
+    # with a stub, fail the app's import, and never learn why -- so say so, the way the
+    # JSON case above does. `compile` parses without executing, so it is safe on
+    # untrusted source.
+    if target.suffix.lower() == ".py":
+        try:
+            compile(content, str(target), "exec")
+        except SyntaxError as exc:
+            written += f"; the file does not compile as Python: {exc.msg} (line {exc.lineno})"
+
     return ToolResult(
         name="write_file",
         ok=True,

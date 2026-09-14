@@ -22,6 +22,7 @@ on every call.
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -269,6 +270,28 @@ def _unwrap_function_envelope(value: Any, schema: dict[str, Any]) -> dict[str, A
     return None
 
 
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove `<think>...</think>` reasoning a Qwen3-style model emits before its answer.
+
+    Two failures it prevents, both silent. A model that drafts JSON inside the block --
+    `<think>I'll return {"tool": "read_range"}</think>{"tool": "list_dir"}` -- would
+    otherwise have the draft salvaged as the action, because `_salvage_json` takes the
+    first `{` in the text; the real object after `</think>` must win. And a reply cut
+    off mid-thought (the completion hit its token cap inside the block) leaves an
+    unclosed `<think>` and no answer at all, which has to read as empty rather than be
+    parsed as prose. Nothing is removed when the model emits no such tags, so a plain
+    OpenAI endpoint is untouched.
+    """
+    text = _THINK_BLOCK.sub("", text)
+    opened = text.find("<think>")
+    if opened >= 0:
+        text = text[:opened]
+    return text.strip()
+
+
 def _salvage_json(text: str) -> str | None:
     """Pull the outermost JSON object out of prose.
 
@@ -514,6 +537,10 @@ class HttpLlm:
         message = _first_message(payload)
         content = message.get("content")
         content = content if isinstance(content, str) else ""
+        # Before anything reads the content: drop a thinking model's <think> reasoning,
+        # so a JSON draft inside it is never salvaged as the action. Harmless on a model
+        # that emits none. tool_calls, when present, are read below and not affected.
+        content = _strip_thinking(content)
 
         if schema is None:
             return (content, "") if content else ("", "empty content")

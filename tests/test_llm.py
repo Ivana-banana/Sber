@@ -294,6 +294,25 @@ def test_the_downgrade_sticks_for_the_rest_of_the_run() -> None:
     assert "tools" not in endpoint.bodies[2], "we pay for the discovery once, not per call"
 
 
+def test_strip_thinking_keeps_the_answer_after_the_reasoning() -> None:
+    assert llm._strip_thinking('<think>drafting {"x": 1}</think>{"tool": "list_dir"}') == '{"tool": "list_dir"}'
+    assert llm._strip_thinking('plain {"a": 1}') == 'plain {"a": 1}'
+    assert llm._strip_thinking('<think>cut off mid thought {') == ''
+    assert llm._strip_thinking('<think>a</think>x<think>b</think>y') == 'xy'
+
+
+def test_a_thinking_models_json_draft_is_not_taken_as_the_action() -> None:
+    # A Qwen3-style model reasons in <think>, sometimes drafting a different action
+    # there. The object after </think> is the real one; the draft must not be salvaged.
+    content = '<think>maybe {"tool": "read_range", "path": "/x"} first</think>{"tool": "list_dir", "path": "/app"}'
+    client, _, _ = make_client([(200, chat_reply(content))])
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert json.loads(result.text) == {"tool": "list_dir", "path": "/app"}
+
+
 def test_ladder_walks_all_the_way_down_to_salvaged_text() -> None:
     prose = 'Sure! Here you go:\n```json\n{"action": "ls"}\n```\nHope that helps.'
     client, endpoint, events = make_client(

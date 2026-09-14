@@ -854,6 +854,29 @@ def _is_evaluator_path(path: Path, state: AgentState) -> bool:
     )
 
 
+_INODE_SCAN_SKIP = tools.SKIP_DIRECTORIES - {".git"}
+"""Directories the hardlink-alias scan never walks. `.git` is deliberately NOT skipped:
+the repository-control guard finds an alias by matching a source file's inode against
+the `.git` file it shadows, so it has to see `.git`. The cost was `.venv` -- thousands
+of vendored files walked on every code-fix write (~9.5 s each, ~170 s of a 248 s fix
+run measured in the 14B fix-sqli trace) -- and no evaluator or repo-control file hides
+in a vendored or cache tree."""
+
+
+def _workspace_files(workspace: Path) -> list[Path]:
+    """Every regular file under the workspace, skipping vendored and cache trees.
+
+    Keeps `.git` (see `_INODE_SCAN_SKIP`) so the repository-control alias guard still
+    works, while pruning the `.venv`/cache trees that made the scan cost seconds a write.
+    """
+    found: list[Path] = []
+    for current, directories, names in os.walk(workspace):
+        directories[:] = [d for d in directories if d not in _INODE_SCAN_SKIP]
+        for name in names:
+            found.append(Path(current) / name)
+    return found
+
+
 def _shares_evaluator_inode(path: Path, state: AgentState) -> bool:
     """Catch a non-obvious hardlink alias for an evaluator file."""
     if _is_evaluator_path(path, state):
@@ -865,7 +888,7 @@ def _shares_evaluator_inode(path: Path, state: AgentState) -> bool:
         return False
     target_inode = (target_stat.st_dev, target_stat.st_ino)
     try:
-        candidates = list(state.workspace.rglob("*"))
+        candidates = _workspace_files(state.workspace)
     except OSError:
         candidates = []
     candidates.extend(state.named_paths)
@@ -915,7 +938,7 @@ def _shares_repository_control_inode(path: Path, state: AgentState) -> bool:
         return False
     target_inode = (target_stat.st_dev, target_stat.st_ino)
     try:
-        candidates = list(state.workspace.rglob("*"))
+        candidates = _workspace_files(state.workspace)
     except OSError:
         candidates = []
     candidates.extend(state.named_paths)
