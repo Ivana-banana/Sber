@@ -796,16 +796,17 @@ class HttpLlm:
                     # Truncated, not a shape problem, so the ladder must not step down.
                     # Retry the same rung: first with the raised ceiling, then with
                     # thinking disabled, then give up as truncated -- each is one attempt,
-                    # bounded by LLM_MAX_ATTEMPTS.
+                    # bounded by LLM_MAX_ATTEMPTS. `last` is set before the retry so that
+                    # if the deadline expires between attempts the returned error names
+                    # the truncation, not the placeholder "no attempt was made".
+                    last = LlmError(reason=f"reply truncated by length at style {self.style}", retryable=False)
                     if not was_raised:
                         continue
                     if not self._thinking_off:
                         self._thinking_off = True
                         self._note("thinking", "still truncated; asking the endpoint to skip thinking")
                         continue
-                    return stamped(
-                        LlmError(reason=f"reply truncated by length at style {self.style}", retryable=False)
-                    )
+                    return stamped(last)
                 last = LlmError(reason=f"{reason} at style {self.style}", retryable=False)
                 if schema is not None and self._demote(reason):
                     retries_at_style = 0

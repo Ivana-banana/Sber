@@ -314,11 +314,15 @@ LLM_RETRY_BACKOFF_S: tuple[float, ...] = (1.0, 3.0)
 """Finite retry schedule for transport failures. A permanently broken endpoint must
 fail diagnosably rather than hang until the task times out."""
 
-LLM_MAX_ATTEMPTS = 6
+LLM_MAX_ATTEMPTS = 8
 """Total requests one logical call may cost, retries and protocol fallbacks included.
 
-Six because the worst legitimate path is one retry plus three rungs of fallback, and
-a cap that cuts the ladder short would look like an unsupported endpoint."""
+Raised from six with the thinking-endpoint recovery: the worst legitimate path is now
+two length retries (raise, then thinking-off) plus up to two context cap-downs plus the
+three-rung protocol fallback, and a cap that cuts the ladder short would strand a
+recoverable call and look like an unsupported endpoint. Eight covers the measured chain
+(length, length-with-thinking-off, then a stop reply that walks the ladder to text) with
+one transport retry to spare; the hard deadline still bounds wall time underneath it."""
 
 DEFAULT_CALL_STYLE = "native_tools"
 """Which request shape we start from.
