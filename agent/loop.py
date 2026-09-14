@@ -146,6 +146,7 @@ def run(
 
         if isinstance(reply, LlmError):
             llm_failures += 1
+            state.budget.add_usage(reply)  # a failed attempt was still generated and billed
             state.record("llm", "error", reply.reason)
             observations.append(f"[step {step}] endpoint error: {reply.reason}")
             if llm_failures >= limits.MAX_CONSECUTIVE_LLM_FAILURES:

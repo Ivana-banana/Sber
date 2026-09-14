@@ -24,7 +24,7 @@ from pathlib import Path
 
 from agent import limits, result_progress
 from agent.detectors import args_digest, digest
-from agent.ports import LlmReply
+from agent.ports import LlmError, LlmReply
 from agent.redact import redact
 
 
@@ -199,7 +199,9 @@ class Budget:
         self.recovery_passes_used += 1
         return self.recovery_passes_used
 
-    def add_usage(self, reply: LlmReply) -> None:
+    def add_usage(self, reply: LlmReply | LlmError) -> None:
+        # Errors carry usage too: a demoted or truncated attempt was still billed, and
+        # the tie-break counts it. Both types expose the same three fields.
         self.input_tokens += reply.input_tokens
         self.output_tokens += reply.output_tokens
         if not reply.usage_reported:

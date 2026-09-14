@@ -46,10 +46,21 @@ class LlmReply:
 
 @dataclass(frozen=True)
 class LlmError:
-    """A call that produced nothing usable: transport, protocol or parse failure."""
+    """A call that produced nothing usable: transport, protocol or parse failure.
+
+    It still carries token usage: a reply that failed to parse (empty content, a schema
+    miss, a thinking model whose reasoning filled the completion) was generated and
+    billed. On the closed set the tie-break counts every input and output token of every
+    request, so tokens spent on demoted or truncated attempts have to be counted here or
+    our total is understated against the organizer's server-side counter.
+    """
 
     reason: str
     retryable: bool
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    usage_reported: bool = True
 
 
 @runtime_checkable

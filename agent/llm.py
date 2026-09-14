@@ -27,7 +27,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from agent import limits
@@ -618,11 +618,18 @@ class HttpLlm:
 
         last = LlmError(reason="no attempt was made", retryable=False)
         retries_at_style = 0
+        # Usage summed across every attempt, not just the one that finally parses: a
+        # demoted or truncated attempt was still generated and billed. `stamped` puts
+        # the running total on whatever object is returned, reply or error.
+        acc = [0, 0, True]  # input tokens, output tokens, usage_reported
+
+        def stamped(obj: LlmReply | LlmError) -> LlmReply | LlmError:
+            return replace(obj, input_tokens=acc[0], output_tokens=acc[1], usage_reported=acc[2])
 
         for attempt in range(limits.LLM_MAX_ATTEMPTS):
             remaining = budget_s if attempt == 0 else deadline - self.clock()
             if remaining <= 0:
-                return last
+                return stamped(last)
 
             body = self._build_body(messages, schema, max_output_tokens)
             try:
@@ -632,7 +639,7 @@ class HttpLlm:
             except Exception as exc:  # transport failure of any kind
                 last = LlmError(reason=f"transport failed: {type(exc).__name__}", retryable=True)
                 if not self._backoff(attempt, deadline):
-                    return last
+                    return stamped(last)
                 continue
 
             if status >= 400:
@@ -646,7 +653,7 @@ class HttpLlm:
                 if verdict == FATAL:
                     # A rejected key, an unknown model or an unknown route. The ladder
                     # cannot fix any of them and retrying only spends the deadline.
-                    return last
+                    return stamped(last)
 
                 if verdict == RETRY:
                     # One retry at the current rung. A server error that survives it is
@@ -658,20 +665,28 @@ class HttpLlm:
                     if schema is not None and self._demote(f"persistent http {status}"):
                         retries_at_style = 0
                         continue
-                    return last
+                    return stamped(last)
 
                 if schema is not None and self._demote(f"http {status}"):
                     retries_at_style = 0
                     continue
-                return last
+                return stamped(last)
 
             try:
                 payload = json.loads(raw.decode("utf-8", "replace"))
             except json.JSONDecodeError:
                 last = LlmError(reason="endpoint reply was not json", retryable=True)
                 if not self._backoff(attempt, deadline):
-                    return last
+                    return stamped(last)
                 continue
+
+            # Counted here, before the reply is judged: a response that fails to parse or
+            # gets demoted was generated and billed just the same, and on a thinking
+            # model that is every rung. `stamped` then carries the running total out.
+            prompt_tokens, completion_tokens, reported = _extract_usage(payload)
+            acc[0] += prompt_tokens
+            acc[1] += completion_tokens
+            acc[2] = acc[2] and reported
 
             text, reason = self._read_reply(payload, schema)
             if text is None:
@@ -682,17 +697,11 @@ class HttpLlm:
                 # Not retried on purpose. Sampling is at temperature 0 and the request
                 # would be byte-identical, so a repeat buys the same reply and pays
                 # for it in tokens, which is the second ranking criterion.
-                return last
+                return stamped(last)
 
-            prompt_tokens, completion_tokens, reported = _extract_usage(payload)
-            return LlmReply(
-                text=text,
-                input_tokens=prompt_tokens,
-                output_tokens=completion_tokens,
-                usage_reported=reported,
-            )
+            return stamped(LlmReply(text=text))
 
-        return last
+        return stamped(last)
 
     def _backoff(self, attempt: int, deadline: float) -> bool:
         """Wait before the next attempt. False when the schedule or the deadline is

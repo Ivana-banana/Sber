@@ -318,6 +318,24 @@ def test_a_thinking_models_json_draft_is_not_taken_as_the_action() -> None:
     assert json.loads(result.text) == {"tool": "list_dir", "path": "/app"}
 
 
+def test_usage_from_demoted_attempts_is_summed_into_the_error() -> None:
+    # The find-sqli case on a thinking model: reasoning fills the completion, content is
+    # unparseable on every rung, each 2048-token attempt is billed. The final LlmError
+    # must carry the sum, or our token total is understated against the server counter.
+    def unusable(completion: int) -> bytes:
+        payload = {
+            "choices": [{"message": {"content": "long reasoning, no json object here"}}],
+            "usage": {"prompt_tokens": 0, "completion_tokens": completion},
+        }
+        return json.dumps(payload).encode()
+
+    client, _, _ = make_client([(200, unusable(2048))] * len(llm.LADDER))
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmError)
+    assert result.output_tokens == 2048 * len(llm.LADDER)
+
+
 def test_ladder_walks_all_the_way_down_to_salvaged_text() -> None:
     prose = 'Sure! Here you go:\n```json\n{"action": "ls"}\n```\nHope that helps.'
     client, endpoint, events = make_client(
