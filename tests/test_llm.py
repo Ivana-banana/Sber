@@ -442,6 +442,22 @@ def test_a_generic_400_still_downgrades_the_protocol_rather_than_capping() -> No
     assert len(endpoint.bodies) == len(llm.LADDER)
 
 
+def test_a_non_context_400_on_a_thinking_client_does_not_lower_the_cap() -> None:
+    # Even after the client is in thinking mode (raised ceiling), a 400 that is not about
+    # context (an unsupported response_format) must step the protocol down, not be taken
+    # for an overflow and halve the ceiling.
+    truncate = _reply("x", finish="length", completion=2048)  # sets thinking, retries raised
+    generic = (400, b"response_format is not supported")
+    ok = _reply('{"tool": "list_dir"}')
+    client, endpoint, _ = make_client([(200, truncate), generic, (200, ok)])
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(result, LlmReply)
+    assert client._thinking_endpoint is True
+    assert client._output_cap == 8192, "a non-context 400 must not lower the ceiling"
+
+
 def test_a_plain_non_thinking_endpoint_is_untouched() -> None:
     client, endpoint, _ = make_client([(200, _reply('{"tool": "list_dir"}'))])
     client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)

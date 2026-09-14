@@ -320,9 +320,11 @@ LLM_MAX_ATTEMPTS = 8
 Raised from six with the thinking-endpoint recovery: the worst legitimate path is now
 two length retries (raise, then thinking-off) plus up to two context cap-downs plus the
 three-rung protocol fallback, and a cap that cuts the ladder short would strand a
-recoverable call and look like an unsupported endpoint. Eight covers the measured chain
-(length, length-with-thinking-off, then a stop reply that walks the ladder to text) with
-one transport retry to spare; the hard deadline still bounds wall time underneath it."""
+recoverable call and look like an unsupported endpoint. Eight covers the measured chains
+(length + length-with-thinking-off + ladder to text; length + two context cap-downs +
+ladder). The transport-retry backoff is indexed by the global attempt number against a
+two-long schedule, so it is spent by the first two attempts whatever they were; this cap
+is the ceiling on total requests, the deadline still bounds wall time underneath it."""
 
 DEFAULT_CALL_STYLE = "native_tools"
 """Which request shape we start from.
