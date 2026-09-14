@@ -33,6 +33,7 @@ import os
 import re
 import shlex
 import stat
+import time
 
 from agent import detectors, limits, prompt, result_contract, result_progress, sources, tools
 from agent.playbooks import Playbook
@@ -977,24 +978,30 @@ def _code_fix_shell_expand_workspace_alias(value: str, state: AgentState) -> tup
     return tuple(expanded)
 
 
-def _read_paths_from_shell(command: str, state: AgentState) -> list[Path]:
-    """Resolved files a read-only shell command opened, so a later write is not blind.
+_SHELL_READERS = frozenset({"cat", "head", "tail", "more", "nl", "grep", "rg"})
+"""Shell verbs that open a file to show its content -- the ones that count as reading it
+for the unread-source guard. Deliberately narrow: `ls`/`wc`/`stat`/`echo` name a file
+without showing enough of it to edit safely, so counting them would weaken the guard."""
 
-    Only for a command `_shell_can_change` says cannot mutate, whose verb is a known
-    reader. Each operand that resolves to an existing file counts as read: a model that
-    inspected a module with `cat`/`grep`/`head` has seen it, exactly like `read_range`.
+
+def _read_paths_from_shell(command: str, state: AgentState) -> list[Path]:
+    """Resolved files a reader command opened, so a later write is not blind.
+
+    Reads the first pipe segment -- `cat f | head` and `grep x f | head` read `f` -- and
+    only when that segment's verb (normalised, so `/bin/cat` counts) is a known reader.
+    Each operand that resolves to an existing file counts as read, exactly like
+    `read_range`. A model that inspected a module this way has seen it.
     """
-    if _shell_can_change(command):
-        return []
+    segment = command.split("|", 1)[0]
     try:
-        words = shlex.split(command)
+        words = shlex.split(segment)
     except ValueError:
         return []
-    if not words or words[0] not in READ_ONLY_SHELLS:
+    if not words or PurePosixPath(words[0]).name not in _SHELL_READERS:
         return []
     found: list[Path] = []
     for word in words[1:]:
-        if word.startswith("-"):
+        if word.startswith("-") or word in {">", ">>", "<"}:
             continue
         candidate = Path(word) if Path(word).is_absolute() else state.workspace / word
         try:
@@ -1003,6 +1010,25 @@ def _read_paths_from_shell(command: str, state: AgentState) -> list[Path]:
         except OSError:
             continue
     return found
+
+
+def _workspace_files_touched_since(workspace: Path, since: float) -> list[Path]:
+    """Resolved workspace files whose mtime is at or after `since`.
+
+    After a shell command that may change files, this is how a file the model *created*
+    (`echo > new.py`, `cp a.py b.py`, `tee`, `sed -i`) becomes known to the run without
+    parsing redirections: `artifacts` only tracks the file tools, so without this a
+    later `write_file` to a shell-created source would be refused as blind -- a false
+    refusal that can zero a task. Bounded by the pruned `_workspace_files` walk.
+    """
+    touched: list[Path] = []
+    for path in _workspace_files(workspace):
+        try:
+            if path.stat().st_mtime >= since:
+                touched.append(path.resolve())
+        except OSError:
+            continue
+    return touched
 
 
 def _unread_source_refusal(target: Path, state: AgentState) -> str:
@@ -1034,7 +1060,7 @@ def _unread_source_refusal(target: Path, state: AgentState) -> str:
         return ""
     return (
         f"code-fix refused: {resolved} exists and this run has not read it. "
-        "read_range it first, or change one part with replace_text(old, new)."
+        "read_range it first, or change one part with replace_text(path, old, new)."
     )
 
 
@@ -2265,6 +2291,10 @@ def _execute(
             refusal = _code_fix_shell_refusal(command, state)
             if refusal:
                 return tools.ToolResult(name=tool, ok=False, detail=refusal)
+        # A second of slack before the command so a file `cp` writes in the same coarse
+        # filesystem tick still counts as touched (mtime >= since), never missed into a
+        # false refusal.
+        since = time.time() - 1.0
         result = tools.run_shell(
             command,
             cwd=state.workspace,
@@ -2273,6 +2303,12 @@ def _execute(
         )
         if result.ok:
             state.read_paths.update(_read_paths_from_shell(command, state))
+            if _shell_can_change(command):
+                # A file the command created or modified (echo >, cp, tee, sed -i) is
+                # known to the run: overwriting it later is not blind. pytest or a launch
+                # is a mutating shell too and may mark a log or sqlite file touched --
+                # harmless to the guard, only surprising in a trace.
+                state.read_paths.update(_workspace_files_touched_since(state.workspace, since))
         return result
     if tool == prompt.READ_RANGE:
         target = Path(str(args["path"]))

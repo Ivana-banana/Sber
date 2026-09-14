@@ -212,6 +212,61 @@ def test_repeated_blind_writes_never_overwrite_the_source(tmp_path: Path) -> Non
     assert outcome.solved is False
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_allows_a_write_to_a_file_a_shell_command_created(tmp_path: Path) -> None:
+    # The zeroing scenario the review found: a file created via run_shell is in neither
+    # read_paths nor artifacts, so without touched-file tracking a later write_file to it
+    # is falsely refused. `echo > new.py` then write_file new.py must be allowed.
+    target = tmp_path / "new.py"
+    state = _codefix_state(tmp_path, target, max_steps=2)
+    llm = StubLlm(replies=[
+        action("run_shell", command=f"echo 'x = 1' > {target}"),
+        action("write_file", path=str(target), content="x = 2\n"),
+    ])
+
+    run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "x = 2\n"
+
+
+def test_read_paths_from_shell_counts_the_first_pipe_segment(tmp_path: Path) -> None:
+    # Unit-level: a piped read (`cat f | head`) resolves `f`. In code-fix the shell guard
+    # refuses pipes before they run, so this only fires if that policy is relaxed, but
+    # the resolution itself must be correct. `/bin/cat` (normalised) counts; `ls` does not.
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    assert loop._read_paths_from_shell(f"cat {tmp_path/'a.py'} | head -n 5", state) == [(tmp_path / "a.py").resolve()]
+    assert loop._read_paths_from_shell(f"/bin/cat {tmp_path/'a.py'}", state) == [(tmp_path / "a.py").resolve()]
+    assert loop._read_paths_from_shell(f"ls {tmp_path/'a.py'}", state) == [], "ls does not count as reading"
+
+
+def test_code_fix_refuses_write_file_to_an_unread_json_config_but_allows_write_json(tmp_path: Path) -> None:
+    # A .json config is a source candidate, so a blind write_file over an existing one is
+    # refused; write_json is the deliverable tool and is never blocked.
+    cfg = tmp_path / "config.json"
+    cfg.write_text('{"debug": true}\n', encoding="utf-8")
+    state = _codefix_state(tmp_path, cfg, max_steps=1)
+    blind = StubLlm(replies=[action("write_file", path=str(cfg), content='{"debug": false}\n')])
+    run(state, blind, FakeVerify(), playbook=playbooks.CODE_FIX)
+    assert cfg.read_text(encoding="utf-8") == '{"debug": true}\n', "write_file over unread config is refused"
+
+    state2 = _codefix_state(tmp_path, cfg, max_steps=1)
+    viajson = StubLlm(replies=[action("write_json", path=str(cfg), data={"debug": False})])
+    run(state2, viajson, FakeVerify(), playbook=playbooks.CODE_FIX)
+    assert json.loads(cfg.read_text(encoding="utf-8")) == {"debug": False}, "write_json is not blocked"
+
+
+def test_code_fix_does_not_block_replace_text_on_an_unread_file(tmp_path: Path) -> None:
+    target = tmp_path / "svc.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+    state = _codefix_state(tmp_path, target, max_steps=1)
+    llm = StubLlm(replies=[action("replace_text", path=str(target), old="value = 1", new="value = 2")])
+
+    run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "value = 2\n", "replace_text is the targeted tool, never blocked"
+
+
 def test_a_non_code_fix_playbook_never_blocks_a_blind_write(tmp_path: Path) -> None:
     target = tmp_path / "notes.py"
     target.write_text("old = 1\n", encoding="utf-8")
