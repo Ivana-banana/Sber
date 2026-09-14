@@ -276,19 +276,27 @@ _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 def _strip_thinking(text: str) -> str:
     """Remove `<think>...</think>` reasoning a Qwen3-style model emits before its answer.
 
-    Two failures it prevents, both silent. A model that drafts JSON inside the block --
-    `<think>I'll return {"tool": "read_range"}</think>{"tool": "list_dir"}` -- would
-    otherwise have the draft salvaged as the action, because `_salvage_json` takes the
-    first `{` in the text; the real object after `</think>` must win. And a reply cut
-    off mid-thought (the completion hit its token cap inside the block) leaves an
-    unclosed `<think>` and no answer at all, which has to read as empty rather than be
-    parsed as prose. Nothing is removed when the model emits no such tags, so a plain
-    OpenAI endpoint is untouched.
+    Three shapes, all of which would otherwise feed the reasoning to `_salvage_json`,
+    whose first-`{` rule then takes a JSON draft out of the thinking as the action:
+
+    * a closed `<think>...</think>` block before the answer -- removed;
+    * a reply cut off mid-thought, leaving a *leading* unclosed `<think>` and no answer
+      -- read as empty rather than parsed as prose. Only when leading, so a literal
+      `<think>` inside a JSON string value (e.g. a `write_file` content) is left intact;
+    * a `</think>` with no opener -- R1-style templates inject `<think>` into the prompt
+      as a generation prefix, so the content arrives as `reasoning</think>{answer}`. The
+      answer after the closer wins, unless the text already began as JSON (guarding a
+      `</think>` that appears inside a JSON string value).
+
+    The tag set is intentionally just `<think>`: Qwen3, QwQ and R1 all use it. Nothing
+    is removed when the model emits none, so a plain OpenAI endpoint is untouched.
     """
     text = _THINK_BLOCK.sub("", text)
-    opened = text.find("<think>")
-    if opened >= 0:
-        text = text[:opened]
+    if text.lstrip().startswith("<think>"):
+        return ""
+    closer = text.find("</think>")
+    if closer >= 0 and "<think>" not in text and text.lstrip()[:1] not in {"{", "["}:
+        text = text[closer + len("</think>") :]
     return text.strip()
 
 

@@ -444,6 +444,24 @@ def test_write_file_warns_when_a_python_source_no_longer_compiles(tmp_path: Path
     assert bad.ok is True and "does not compile" in bad.output
 
 
+def test_write_file_does_not_flag_a_bom_python_file(tmp_path: Path) -> None:
+    # Compiling from bytes (not the decoded str) lets the tokenizer accept a BOM the way
+    # `import` does; compiling the str would reject a file that imports fine.
+    result = write_file(tmp_path / "mod.py", "﻿x = 1\n", workspace=tmp_path)
+    assert result.ok is True
+    assert "does not compile" not in result.output
+
+
+def test_replace_text_reports_when_the_edit_breaks_compilation(tmp_path: Path) -> None:
+    # replace_text is the tool the model is steered toward; a bad indentation in `new`
+    # breaks the module the same way a bad write_file would, so it is reported too.
+    target = tmp_path / "mod.py"
+    target.write_text("def f():\n    return 1\n", encoding="utf-8")
+    result = replace_text(target, "    return 1", "  return 1\n  bad indent", workspace=tmp_path)
+    assert result.ok is True
+    assert "does not compile" in result.output
+
+
 def test_write_json_serialises_a_structured_value_into_valid_json(tmp_path: Path) -> None:
     # The failure it exists to prevent: the model's finding quotes the vulnerable code,
     # so its JSON, escaped as a string inside the action's own JSON, breaks. Here the

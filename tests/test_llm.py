@@ -299,6 +299,11 @@ def test_strip_thinking_keeps_the_answer_after_the_reasoning() -> None:
     assert llm._strip_thinking('plain {"a": 1}') == 'plain {"a": 1}'
     assert llm._strip_thinking('<think>cut off mid thought {') == ''
     assert llm._strip_thinking('<think>a</think>x<think>b</think>y') == 'xy'
+    # A </think> with no opener (R1-style prompt prefix): the answer follows the closer.
+    assert llm._strip_thinking('reasoning about {"draft": 1}</think>{"tool": "list_dir"}') == '{"tool": "list_dir"}'
+    # A literal <think>/`</think>` inside a JSON string value must not truncate the JSON.
+    assert llm._strip_thinking('{"tool": "write_file", "content": "see <think> here"}') == '{"tool": "write_file", "content": "see <think> here"}'
+    assert llm._strip_thinking('{"content": "a </think> b"}') == '{"content": "a </think> b"}'
 
 
 def test_a_thinking_models_json_draft_is_not_taken_as_the_action() -> None:

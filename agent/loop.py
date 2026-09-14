@@ -32,8 +32,9 @@ import json
 import os
 import re
 import shlex
+import stat
 
-from agent import detectors, limits, prompt, result_contract, result_progress, tools
+from agent import detectors, limits, prompt, result_contract, result_progress, sources, tools
 from agent.playbooks import Playbook
 from agent.ports import LlmError, LlmPort
 from agent.preflight import EnvironmentBrief
@@ -854,13 +855,14 @@ def _is_evaluator_path(path: Path, state: AgentState) -> bool:
     )
 
 
-_INODE_SCAN_SKIP = tools.SKIP_DIRECTORIES - {".git"}
-"""Directories the hardlink-alias scan never walks. `.git` is deliberately NOT skipped:
-the repository-control guard finds an alias by matching a source file's inode against
-the `.git` file it shadows, so it has to see `.git`. The cost was `.venv` -- thousands
-of vendored files walked on every code-fix write (~9.5 s each, ~170 s of a 248 s fix
-run measured in the 14B fix-sqli trace) -- and no evaluator or repo-control file hides
-in a vendored or cache tree."""
+_INODE_SCAN_SKIP = sources.SKIP_DIRECTORIES - {".git"}
+"""Directories the hardlink-alias scan never walks. Derived from the one broad skip set
+in `agent.sources` (`.venv`, `venv`, `site-packages`, `.tox`, `build`, `dist`, caches)
+rather than a third copy. `.git` is deliberately kept: the repository-control guard
+finds an alias by matching a source file's inode against the `.git` file it shadows, so
+it has to see `.git`. The cost was walking `.venv` on every code-fix write (~9.5 s each,
+~170 s of a 248 s fix run in the 14B trace); no evaluator or repo-control file hides in
+a vendored or cache tree."""
 
 
 def _workspace_files(workspace: Path) -> list[Path]:
@@ -973,6 +975,67 @@ def _code_fix_shell_expand_workspace_alias(value: str, state: AgentState) -> tup
         if value == alias or value.startswith(f"{alias}/"):
             expanded.append(str(workspace / value[len(alias) :].lstrip("/")))
     return tuple(expanded)
+
+
+def _read_paths_from_shell(command: str, state: AgentState) -> list[Path]:
+    """Resolved files a read-only shell command opened, so a later write is not blind.
+
+    Only for a command `_shell_can_change` says cannot mutate, whose verb is a known
+    reader. Each operand that resolves to an existing file counts as read: a model that
+    inspected a module with `cat`/`grep`/`head` has seen it, exactly like `read_range`.
+    """
+    if _shell_can_change(command):
+        return []
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return []
+    if not words or words[0] not in READ_ONLY_SHELLS:
+        return []
+    found: list[Path] = []
+    for word in words[1:]:
+        if word.startswith("-"):
+            continue
+        candidate = Path(word) if Path(word).is_absolute() else state.workspace / word
+        try:
+            if candidate.is_file():
+                found.append(candidate.resolve())
+        except OSError:
+            continue
+    return found
+
+
+def _unread_source_refusal(target: Path, state: AgentState) -> str:
+    """Refuse a code-fix `write_file` that overwrites a source file this run never read.
+
+    The 14B fix-sqli trace overwrote a router it had not opened with a stub, broke the
+    application's import, and the verifier never ran -- while "wrote N bytes" read as
+    success. Narrow on purpose: only `write_file` (replace_text is the right tool for a
+    targeted change and write_json is for JSON deliverables), only an existing non-empty
+    source file (report templates like .txt/.md are not source candidates and pass), and
+    only when the run has neither read nor produced it. The hint names the safe path.
+    """
+    try:
+        resolved = target.resolve()
+        info = resolved.stat()
+    except OSError:
+        return ""
+    if not stat.S_ISREG(info.st_mode) or info.st_size == 0:
+        return ""
+    if not result_progress._is_source_candidate(resolved.name):
+        return ""
+    known = set(state.read_paths)
+    for artifact in state.artifacts:
+        try:
+            known.add(artifact.resolve())
+        except OSError:
+            continue
+    if resolved in known:
+        return ""
+    return (
+        f"code-fix refused: {resolved} exists and this run has not read it. "
+        "read_range it first, or change one part with replace_text(old, new)."
+    )
 
 
 def _evaluator_path_refusal(path: Path, state: AgentState) -> str:
@@ -2197,20 +2260,29 @@ def _execute(
     secrets = state.secrets
 
     if tool == prompt.RUN_SHELL:
+        command = str(args["command"])
         if playbook.name == "code-fix":
-            refusal = _code_fix_shell_refusal(str(args["command"]), state)
+            refusal = _code_fix_shell_refusal(command, state)
             if refusal:
                 return tools.ToolResult(name=tool, ok=False, detail=refusal)
-        return tools.run_shell(
-            str(args["command"]),
+        result = tools.run_shell(
+            command,
             cwd=state.workspace,
             timeout_s=state.budget.tool_timeout_s(),
             secrets=secrets,
         )
+        if result.ok:
+            state.read_paths.update(_read_paths_from_shell(command, state))
+        return result
     if tool == prompt.READ_RANGE:
-        return tools.read_range(
-            Path(str(args["path"])), start_line=int(args["start_line"]), secrets=secrets
-        )
+        target = Path(str(args["path"]))
+        result = tools.read_range(target, start_line=int(args["start_line"]), secrets=secrets)
+        if result.ok:
+            try:
+                state.read_paths.add(target.resolve())
+            except OSError:
+                pass
+        return result
     if tool == prompt.LIST_DIR:
         return tools.list_dir(Path(str(args["path"])), secrets=secrets)
     if tool == prompt.SEARCH:
@@ -2219,6 +2291,10 @@ def _execute(
     target = Path(str(args["path"]))
     if playbook.name == "code-fix" and tool in {prompt.WRITE_FILE, prompt.WRITE_JSON, prompt.REPLACE_TEXT}:
         refusal = _evaluator_path_refusal(target, state)
+        if refusal:
+            return tools.ToolResult(name=tool, ok=False, detail=refusal)
+    if playbook.name == "code-fix" and tool == prompt.WRITE_FILE:
+        refusal = _unread_source_refusal(target, state)
         if refusal:
             return tools.ToolResult(name=tool, ok=False, detail=refusal)
     if tool == prompt.WRITE_JSON:

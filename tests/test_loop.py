@@ -103,6 +103,126 @@ def test_a_written_and_verified_deliverable_is_the_only_way_to_solve(tmp_path: P
     assert verify.calls == [(target, "test -s incident.txt")]
 
 
+def _codefix_state(tmp_path: Path, target: Path, *, max_steps: int = 2):
+    state = make_state(tmp_path)
+    state.source_snapshot = result_progress.snapshot_sources(tmp_path)
+    state.budget.max_steps = max_steps
+    return state
+
+
+def test_code_fix_refuses_a_blind_write_over_an_unread_source(tmp_path: Path) -> None:
+    # The 14B fix-sqli failure: the run overwrote a router it never opened with a stub,
+    # broke the import, and the verifier never ran. A write_file to an existing source
+    # this run has not read is refused, with a hint, and the file is left intact.
+    target = tmp_path / "routers" / "auth.py"
+    target.parent.mkdir()
+    target.write_text("router = APIRouter()\n\ndef login():\n    return 1\n", encoding="utf-8")
+    state = _codefix_state(tmp_path, target, max_steps=1)
+    llm = StubLlm(replies=[action("write_file", path=str(target), content="stub\n")])
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8").startswith("router ="), "the source is untouched"
+    assert any("has not read it" in o for o in outcome.observations)
+
+
+def test_code_fix_allows_the_write_after_the_file_was_read(tmp_path: Path) -> None:
+    target = tmp_path / "routers" / "auth.py"
+    target.parent.mkdir()
+    target.write_text("router = 1\n", encoding="utf-8")
+    state = _codefix_state(tmp_path, target, max_steps=2)
+    llm = StubLlm(replies=[
+        action("read_range", path=str(target), start_line=1),
+        action("write_file", path=str(target), content="router = 2\n"),
+    ])
+
+    run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "router = 2\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the agent shell is POSIX-only")
+def test_code_fix_allows_the_write_after_a_read_only_shell_opened_the_file(tmp_path: Path) -> None:
+    target = tmp_path / "app.py"
+    target.write_text("v = 1\n", encoding="utf-8")
+    state = _codefix_state(tmp_path, target, max_steps=2)
+    llm = StubLlm(replies=[
+        action("run_shell", command=f"cat {target}"),
+        action("write_file", path=str(target), content="v = 2\n"),
+    ])
+
+    run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "v = 2\n"
+
+
+def test_code_fix_allows_a_write_to_a_new_file(tmp_path: Path) -> None:
+    target = tmp_path / "new_module.py"
+    state = _codefix_state(tmp_path, target, max_steps=1)
+    llm = StubLlm(replies=[action("write_file", path=str(target), content="x = 1\n")])
+
+    run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.exists()
+
+
+def test_code_fix_allows_rewriting_a_file_the_run_created(tmp_path: Path) -> None:
+    target = tmp_path / "gen.py"
+    state = _codefix_state(tmp_path, target, max_steps=2)
+    llm = StubLlm(replies=[
+        action("write_file", path=str(target), content="a = 1\n"),
+        action("write_file", path=str(target), content="a = 2\n"),
+    ])
+
+    run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "a = 2\n"
+
+
+def test_code_fix_does_not_block_a_report_template_or_empty_file(tmp_path: Path) -> None:
+    # .txt is not a source candidate; an empty existing file is not a broken overwrite.
+    report = tmp_path / "report.txt"
+    report.write_text("draft\n", encoding="utf-8")
+    empty = tmp_path / "empty.py"
+    empty.write_text("", encoding="utf-8")
+    state = _codefix_state(tmp_path, report, max_steps=2)
+    llm = StubLlm(replies=[
+        action("write_file", path=str(report), content="final\n"),
+        action("write_file", path=str(empty), content="x = 1\n"),
+    ])
+
+    run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert report.read_text(encoding="utf-8") == "final\n"
+    assert empty.read_text(encoding="utf-8") == "x = 1\n"
+
+
+def test_repeated_blind_writes_never_overwrite_the_source(tmp_path: Path) -> None:
+    # However many times the model blindly retries, the unread source is never written
+    # -- the catastrophic "stub broke the import" outcome cannot happen -- and the run
+    # ends (repeat/no-progress detectors), not by silently succeeding.
+    target = tmp_path / "svc.py"
+    target.write_text("router = 1\n", encoding="utf-8")
+    state = _codefix_state(tmp_path, target, max_steps=20)
+    llm = StubLlm(replies=[action("write_file", path=str(target), content="stub\n")] * 20)
+
+    outcome = run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
+
+    assert target.read_text(encoding="utf-8") == "router = 1\n", "the source is never overwritten"
+    assert outcome.solved is False
+
+
+def test_a_non_code_fix_playbook_never_blocks_a_blind_write(tmp_path: Path) -> None:
+    target = tmp_path / "notes.py"
+    target.write_text("old = 1\n", encoding="utf-8")
+    state = _codefix_state(tmp_path, target, max_steps=1)
+    llm = StubLlm(replies=[action("write_file", path=str(target), content="new = 2\n")])
+
+    run(state, llm, FakeVerify(), playbook=playbooks.FORENSICS)
+
+    assert target.read_text(encoding="utf-8") == "new = 2\n"
+
+
 def test_the_evaluator_inode_scan_skips_vendored_and_cache_trees(tmp_path: Path) -> None:
     # The alias scan rglob'd all of /app including .venv on every code-fix write
     # (~9.5 s each). Nothing an evaluator file can hide in lives in a skipped dir, so
@@ -862,8 +982,14 @@ def test_workspace_named_tests_does_not_block_production_source(tmp_path: Path) 
     target.write_text("answer = 1\n", encoding="utf-8")
     state = make_state(workspace)
     state.source_snapshot = result_progress.snapshot_sources(workspace)
-    state.budget.max_steps = 1
-    llm = StubLlm(replies=[action("write_file", path=str(target), content="answer = 2\n")])
+    state.budget.max_steps = 2
+    # read_range first: the unread-source guard now requires the run to have opened the
+    # file before overwriting it. The point of this test -- that a `tests/` workspace
+    # does not make its production source an evaluator path -- is unchanged.
+    llm = StubLlm(replies=[
+        action("read_range", path=str(target), start_line=1),
+        action("write_file", path=str(target), content="answer = 2\n"),
+    ])
 
     run(state, llm, FakeVerify(), playbook=playbooks.CODE_FIX)
 

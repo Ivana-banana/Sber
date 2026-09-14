@@ -251,6 +251,11 @@ class AgentState:
     artifacts: list[Path] = field(default_factory=list)
     """Files this run created or modified, for the final report and for cleanup."""
 
+    read_paths: set[Path] = field(default_factory=set, repr=False)
+    """Resolved paths this run has actually read (read_range, or a read-only shell that
+    opened the file). A code-fix write_file to an unread existing source is refused, so
+    the run cannot overwrite a module it never opened -- the 14B fix-sqli failure."""
+
     audit: list[Event] = field(default_factory=list)
     """Append-only trace. Nothing removes entries; truncation happens at render time."""
 

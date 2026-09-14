@@ -301,6 +301,28 @@ def run_shell(
     )
 
 
+def _python_compile_note(data: bytes, target: Path) -> str:
+    """A short note if `data` written to a `.py` path does not compile, else empty.
+
+    From bytes, not the decoded string: the tokenizer then handles a BOM and a
+    `# coding:` line exactly as `import` does, where `compile(str)` would reject a BOM
+    file that imports fine. `compile` parses without executing, so it is safe on
+    untrusted source. The except is broad on purpose -- a pathological file can raise
+    RecursionError or MemoryError, not only SyntaxError, and the tool dispatcher has no
+    catch-all above it, so a raise here would crash the whole run to zero.
+    """
+    if target.suffix.lower() != ".py":
+        return ""
+    try:
+        compile(data, str(target), "exec")
+    except SyntaxError as exc:
+        where = "" if exc.lineno is None else f" (line {exc.lineno})"
+        return f"; the file does not compile as Python: {exc.msg}{where}"
+    except (ValueError, RecursionError, MemoryError) as exc:
+        return f"; the file could not be compile-checked as Python: {type(exc).__name__}"
+    return ""
+
+
 def write_file(
     path: Path,
     content: str,
@@ -390,11 +412,7 @@ def write_file(
     # with a stub, fail the app's import, and never learn why -- so say so, the way the
     # JSON case above does. `compile` parses without executing, so it is safe on
     # untrusted source.
-    if target.suffix.lower() == ".py":
-        try:
-            compile(content, str(target), "exec")
-        except SyntaxError as exc:
-            written += f"; the file does not compile as Python: {exc.msg} (line {exc.lineno})"
+    written += _python_compile_note(data, target)
 
     return ToolResult(
         name="write_file",
@@ -633,10 +651,14 @@ def replace_text(
                 pass
 
     line = before[: before.index(old)].count("\n") + 1
+    # replace_text is the tool the docstring steers a code-fix toward, so an indentation
+    # error introduced in `new` breaks the module exactly as a bad write_file would --
+    # report it the same way rather than answer only "replaced 1 occurrence".
+    note = _python_compile_note(replacement, target)
     return ToolResult(
         name="replace_text",
         ok=True,
-        output=f"replaced 1 occurrence at line {line} of {target}",
+        output=f"replaced 1 occurrence at line {line} of {target}{note}",
         duration_s=time.monotonic() - started,
     )
 
