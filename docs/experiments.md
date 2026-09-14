@@ -3515,3 +3515,20 @@ timeout 5400 python3 scripts/eval/run_suite.py \
 - **Ограничение:** один повтор, стохастика не усреднена.
 - **Сырое F2-r1:** `results.tsv` sha256 `a66c1df1f86369ac2c0dbf0a66b1eb78d38029025b3bb9bf9f8fabe23531d367`,
   `suite.json` sha256 `2758e242565fbc65388e37706b0890ecaa27c911385e97e2cfeb6ae6f52fdf4e`.
+
+## L-14B-r1 (2026-09-14) — модель 14B вместо 7B: solved 3/6 (find-sqli сконвертирована)
+
+- Тот же архив блок-0 (`build/live-head.zip`, HEAD 4beda56), меняется ТОЛЬКО модель:
+  `qwen2.5-coder:14b-instruct-q4_K_M` (9 ГБ, на RTX 4080). Стенд sber-model/sber-eval.
+- Результат: **solved 3/6, eligible 3/6, 341 943 токенов, 816 с** против 7B-базы (2/6).
+- **find-sqli-login: 0 → 1.** Пустой `{"findings": []}` был пределом 7B; 14B заполняет
+  находку. Подтверждает: агент архитектурно в порядке, нуль был ёмкостью модели.
+- **fix-sqli-login, fix-sqli-search: 0 даже на 14B** (stop=steps). Подтверждает диагноз
+  IR6 (`4930970`): блокирует не модель, а no-reload false-signal — агент правит по кругу,
+  своего 500 не видя. Агент-side баг, бьёт по 2 задачам.
+- **incident-log-forensics: 0, но stop=verified/failure=verification** (на 7B было
+  steps/reasoning) — 14B доделал, verifier отклонил содержимое. Ближе к решению.
+- Хэш results `f2d0da72eeb7af2fc15692cf3c28f54692046173ad2cb5da7e2199b7c3a6db72`.
+- Вывод: потолок solved зависит от (1) ёмкости eval-модели — на 14B-классе +1 (find-sqli);
+  (2) фикса no-reload для fix-задач — потенциально +2 на любой модели. Путь к 5/6:
+  capable eval-модель + фикс проверки code-fix. Модель оценки задаёт организатор.
