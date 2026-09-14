@@ -637,12 +637,20 @@ class HttpLlm:
                     url, json.dumps(body).encode("utf-8"), headers, remaining
                 )
             except Exception as exc:  # transport failure of any kind
+                # No usage came back, but a client-side timeout can cut off a reply the
+                # server already generated and billed. Mark the total a lower bound so
+                # `main` prints it as such rather than as an exact 0.
+                acc[2] = False
                 last = LlmError(reason=f"transport failed: {type(exc).__name__}", retryable=True)
                 if not self._backoff(attempt, deadline):
                     return stamped(last)
                 continue
 
             if status >= 400:
+                # A 4xx/5xx body may carry a usage block, but whether the server bills a
+                # rejected request is server-specific and unknown for the evaluator, so
+                # it is not counted; the total is marked a lower bound instead.
+                acc[2] = False
                 detail = redact(raw.decode("utf-8", "replace"), self.settings.secrets)
                 verdict = classify_status(status)
                 last = LlmError(
@@ -675,6 +683,9 @@ class HttpLlm:
             try:
                 payload = json.loads(raw.decode("utf-8", "replace"))
             except json.JSONDecodeError:
+                # A reply we could not parse was still generated; its usage is unknown,
+                # so the total is a lower bound.
+                acc[2] = False
                 last = LlmError(reason="endpoint reply was not json", retryable=True)
                 if not self._backoff(attempt, deadline):
                     return stamped(last)

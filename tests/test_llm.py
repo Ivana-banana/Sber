@@ -336,6 +336,27 @@ def test_usage_from_demoted_attempts_is_summed_into_the_error() -> None:
     assert result.output_tokens == 2048 * len(llm.LADDER)
 
 
+def test_a_4xx_with_no_usage_marks_the_total_a_lower_bound() -> None:
+    client, _, _ = make_client([(400, b"bad shape")] * len(llm.LADDER))
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+    assert isinstance(result, LlmError)
+    assert result.usage_reported is False
+
+
+def test_a_transport_error_is_a_lower_bound_not_an_exact_zero() -> None:
+    # A client-side timeout can cut off a reply the server already generated and billed,
+    # so 0 tokens is a lower bound, not an exact figure -- telemetry must say so.
+    def boom(*args: object, **kwargs: object) -> tuple[int, bytes]:
+        raise TimeoutError("timed out")
+
+    client = llm.HttpLlm(settings=llm.LlmSettings.from_env(ENV), transport=boom, sleep=lambda _: None)
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmError)
+    assert result.usage_reported is False
+    assert result.output_tokens == 0
+
+
 def test_ladder_walks_all_the_way_down_to_salvaged_text() -> None:
     prose = 'Sure! Here you go:\n```json\n{"action": "ls"}\n```\nHope that helps.'
     client, endpoint, events = make_client(

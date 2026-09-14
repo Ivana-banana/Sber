@@ -235,6 +235,7 @@ def _ask(
     state.finish_phase("plan", started)
 
     if isinstance(reply, LlmError):
+        state.budget.add_usage(reply)  # a failed attempt was still generated and billed
         state.record("llm", "error", reply.reason)
         return f"[step {step}] endpoint error: {reply.reason}"
 
