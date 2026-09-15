@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from agent import limits
+from agent import limits, sources
 from agent.preflight import inspect_environment
 
 ENV = {
@@ -468,3 +468,146 @@ def test_a_large_tree_does_not_swallow_the_excerpts(tmp_path: Path) -> None:
     rendered = inspect_environment(tmp_path, {}, "audit this application").render()
 
     assert "views/session.py:1-3" in rendered
+
+
+# --- the small files, inlined ------------------------------------------------
+
+
+def test_the_brief_inlines_the_content_of_the_small_files_it_found(tmp_path: Path) -> None:
+    # C1. The tree listing named every evidence file in six recorded episodes of a
+    # log-forensics task, and the agent opened none of them: a read is a 90-120 s call
+    # on this endpoint, so seven reads is a budget the run does not have. All seven
+    # files together were 6.5 KB.
+    workspace = tmp_path / "incident"
+    workspace.mkdir()
+    (workspace / "note.txt").write_text("the primary stream was cut mid-sync\n", encoding="utf-8")
+    (workspace / "recovered.jsonl").write_text(
+        '{"ts":"2026-05-01T14:03:44.900Z","subject":"deploysvc","bytes":2457600}\n',
+        encoding="utf-8",
+    )
+
+    brief = inspect_environment(workspace, ENV, instruction="Reconcile `note.txt` and report.")
+    block = brief.artifact_block()
+
+    assert "the primary stream was cut mid-sync" in block
+    assert '"bytes":2457600' in block
+
+
+def test_the_inlined_files_never_carry_the_endpoint_key(tmp_path: Path) -> None:
+    workspace = make_task(tmp_path)
+    (workspace / "leak.txt").write_text(f"OPENAI_API_KEY={ENV['OPENAI_API_KEY']}\n", encoding="utf-8")
+
+    brief = inspect_environment(workspace, ENV)
+
+    assert ENV["OPENAI_API_KEY"] not in brief.artifact_block()
+    assert ENV["OPENAI_API_KEY"] not in brief.artifacts, "dropped at the source, not at render time"
+
+
+def test_the_inlined_files_stay_inside_their_own_bound(tmp_path: Path) -> None:
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    for index in range(300):
+        (workspace / f"evidence-{index:04d}.log").write_text("x" * 1500, encoding="utf-8")
+
+    brief = inspect_environment(workspace, ENV)
+
+    assert len(brief.artifact_block()) <= sources.ARTIFACT_INLINE_MAX_CHARS
+
+
+def test_the_rendered_map_is_not_grown_by_the_inlined_files(tmp_path: Path) -> None:
+    """The map keeps the size the macro packet was built around.
+
+    `agent/macro.py` renders the brief into a packet capped at 2500 characters and
+    hard-cuts whatever does not fit, so an inlined section inside `render()` would
+    push that packet's own trailer -- writable paths, seconds left -- off the end. The
+    contents travel through `artifact_block`, which the loop's prompt appends and the
+    macro packet does not.
+    """
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    for index in range(40):
+        (workspace / f"evidence-{index:02d}.log").write_text("x" * 1500, encoding="utf-8")
+
+    brief = inspect_environment(workspace, ENV)
+
+    assert len(brief.render()) <= limits.BRIEF_MAX_CHARS
+    assert "x" * 200 not in brief.render(), "file content does not belong in the map"
+    assert brief.artifact_block(), "it belongs here"
+
+
+def test_the_inlined_files_do_not_repeat_the_source_excerpts(tmp_path: Path) -> None:
+    # Two sections, one budget between them: whatever the excerpts already carry is
+    # not bought a second time.
+    (tmp_path / "routers").mkdir()
+    (tmp_path / "routers" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "routers" / "auth.py").write_text(
+        '@router.post("/login")\ndef login(name):\n    return conn.fetchrow(f"select {name}")\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "main.py").write_text("from routers import auth\n", encoding="utf-8")
+    (tmp_path / "settings.ini").write_text("[db]\nhost=localhost\n", encoding="utf-8")
+
+    brief = inspect_environment(tmp_path, ENV, "audit this application")
+
+    assert "routers/auth.py:1-3" in brief.render(), "the excerpt still carries it"
+    assert "--- routers/auth.py" not in brief.artifact_block()
+    assert "host=localhost" in brief.artifact_block(), "what the excerpts miss still travels"
+
+
+def test_a_failing_inliner_does_not_stop_the_brief(tmp_path: Path, monkeypatch) -> None:
+    workspace = make_task(tmp_path)
+
+    def boom(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("inlining blew up on a tree it did not expect")
+
+    monkeypatch.setattr("agent.preflight.artifact_previews", boom)
+
+    brief = inspect_environment(workspace, ENV)
+
+    assert brief.render()
+    assert brief.artifact_block() == ""
+
+
+def test_a_hostile_tree_still_produces_a_brief(tmp_path: Path) -> None:
+    """Every shape of workspace that is not a directory of ordinary files, at once.
+
+    The tree is untrusted material and preflight runs before the first LLM call, so
+    none of this may become a traceback, a hang, or an unbounded read: a name that is
+    not UTF-8, a symlink loop, a link out of the workspace, a FIFO, a directory and a
+    file we may not read, deep nesting, and one file far too large to carry.
+    """
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    with open(os.path.join(os.fsencode(str(workspace)), b"weird-\xff.log"), "wb") as handle:
+        handle.write(b"readable text\n")
+    (workspace / "loop-a").symlink_to(workspace / "loop-b")
+    (workspace / "loop-b").symlink_to(workspace / "loop-a")
+    (workspace / "up").symlink_to(workspace, target_is_directory=True)
+    (workspace / "outside").symlink_to("/etc/passwd")
+    os.mkfifo(workspace / "waiting.pipe")
+    shut = workspace / "shut"
+    shut.mkdir()
+    (shut / "hidden.log").write_text("no\n", encoding="utf-8")
+    denied = workspace / "denied.log"
+    denied.write_text("no\n", encoding="utf-8")
+    deep = workspace
+    for level in range(40):
+        deep = deep / f"d{level}"
+        deep.mkdir()
+    (deep / "bottom.log").write_text("deep\n", encoding="utf-8")
+    (workspace / "bulk.jsonl").write_text('{"a":1}\n' * 200_000, encoding="utf-8")
+    (workspace / "evidence.log").write_text("the line that answers\n", encoding="utf-8")
+
+    try:
+        shut.chmod(0o000)
+        denied.chmod(0o000)
+        brief = inspect_environment(workspace, ENV, instruction="Read `evidence.log`.")
+        block = brief.artifact_block()
+    finally:
+        shut.chmod(0o755)
+        denied.chmod(0o644)
+
+    assert "the line that answers" in block
+    assert "root:" not in block, "a link out of the workspace was followed"
+    assert len(block) <= sources.ARTIFACT_INLINE_MAX_CHARS
+    block.encode("utf-8")  # a name that is not UTF-8 must not poison the prompt

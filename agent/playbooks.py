@@ -54,6 +54,13 @@ class Playbook:
     whose text vocabulary is the Qwen2.5 one, against a local cache -- see
     `docs/research/prompt-language.md` for the command and the caveat.
 
+    A line added after that measurement carries an estimate rather than a new
+    measurement, because there is still no tokenizer here to measure with: the body's
+    own measured characters-per-token ratio, applied to the grown body and rounded up.
+    `forensics` (260 at 4.554 chars/token) and `code-fix` (248 at 4.774) were restated
+    that way on 2026-09-16; both stay well inside `TOKEN_BUDGET`, and a real
+    measurement replaces the estimate the next time one is available.
+
     It stays a recorded measurement rather than something computed at import time: no
     tokenizer is usable in the target image. tiktoken 0.13.0 is installed there --
     probed directly on 2026-08-26 -- but `get_encoding("cl100k_base")` downloads the
@@ -86,7 +93,7 @@ Finish with a verified report; save status.""",
 
 CODE_FIX = Playbook(
     name="code-fix",
-    token_count=248,
+    token_count=285,
     body="""\
 Read the contract, the original diff and the limits; save a baseline.
 Find the code tied to the symptom; save candidates and lines.
@@ -99,6 +106,8 @@ Trace data and invariants down to the cause; save the root cause.
 Plan a minimal source patch that leaves the contract alone; save the scope.
 Do not change or weaken tests, evaluator or expected answers; save the allowed diff.
 Patch the cause, not the symptom; save a small diff.
+Anchor replace_text on the whole statement, the call that consumes the value included; save the anchor.
+Re-read the patched region after the edit; save what the file says now.
 Repeat the reproducer; save the failure going away.
 Check edge cases and the security invariant; save the results.
 Run an independent test oracle; save the external PASS or FAIL.
@@ -110,10 +119,12 @@ Finish when the reproducer and the external check both pass; save status.""",
 
 FORENSICS = Playbook(
     name="forensics",
-    token_count=260,
+    token_count=318,
     body="""\
+Read the primary sources before you write any value; get lines you have read.
 Save the artifacts and their hashes; get a manifest.
 Inventory files, formats, hosts and intervals; get an artifact map.
+Prefer small recovered or summary files to the bulk log; cross-check duplicates and time windows.
 Check the logs and the utilities; get an available list.
 Do not assume journalctl, auditd or ausearch; get a yes or no.
 Determine timezone, precision and gaps; get a time map.
@@ -128,6 +139,7 @@ Drop a hypothesis with fewer than two sources or a time conflict; get the next o
 Separate facts from claims; save the alternatives.
 Cross-check the timeline with another parser or artifact; get confirm or conflict.
 Give IOC type, value, source and interval; get a list.
+Quote every value in the report from an observation; never fill a field from memory.
 Give claim, evidence, alternatives and confidence; get a conclusion.
 Lower confidence on gaps, conflict or a single source; save the reason.
 Check the artifact reference of every claim; get an evidence check.""",

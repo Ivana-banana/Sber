@@ -31,7 +31,7 @@ the end.
 
 from __future__ import annotations
 
-from agent import limits
+from agent import limits, sources
 from agent.playbooks import Playbook
 from agent.ports import Message
 from agent.preflight import EnvironmentBrief
@@ -140,12 +140,57 @@ tokens, which is why that bound moved up while the budget moved down.
 """
 
 
+ENVIRONMENT_MAX_CHARS = (
+    limits.BRIEF_MAX_CHARS + limits.SOURCE_EXCERPT_MAX_CHARS + sources.ARTIFACT_INLINE_MAX_CHARS
+)
+"""Everything the ENVIRONMENT block may cost, as one documented number.
+
+The three sections are bounded where they are built -- the map by
+`limits.BRIEF_MAX_CHARS`, the excerpts by `limits.SOURCE_EXCERPT_MAX_CHARS`, the
+inlined files by `sources.ARTIFACT_INLINE_MAX_CHARS` -- and this is their sum, cut
+here as a backstop so that no future section can grow the prompt without changing a
+number someone has to read.
+
+The arithmetic it stands for: 9800 characters is ~2900 tokens of the mixed prose,
+paths and log lines that fill it, on top of ~1100 for the skeleton and the playbook.
+A thinking call may then ask for 8192 output tokens, which lands under the 16384-token
+window the current stand serves. The worst case is also the rare one -- it needs a
+crowded tree, an indexed application *and* a workspace full of small files at once.
+"""
+
+ENVIRONMENT_CUT = f"\n{sources.ARTIFACT_TRUNCATED}"
+"""Marks the backstop cut above, in the same words the inlined section uses for its
+own. A block that was cut must say so: silently truncated evidence reads as complete
+evidence, which is the failure this whole section exists to remove."""
+
+
+def environment_block(brief: EnvironmentBrief) -> str:
+    """The map, then the file contents, inside one documented bound.
+
+    The contents arrive last because they are the part a cut may eat: the map above
+    them says what exists, and losing the tail of an inlined file costs less than
+    losing the line that says where the workspace is.
+    """
+    text = brief.render()
+    artifacts = brief.artifact_block()
+    if artifacts:
+        text = f"{text}\n{artifacts}"
+    if len(text) > ENVIRONMENT_MAX_CHARS:
+        text = text[: ENVIRONMENT_MAX_CHARS - len(ENVIRONMENT_CUT)].rstrip() + ENVIRONMENT_CUT
+    return text
+
+
 def build_system(brief: EnvironmentBrief, playbook: Playbook, instruction: str) -> str:
     """Assemble the system message: skeleton, playbook, environment, task text.
 
     The task goes last and unquoted-but-labelled. It is untrusted data: a public task
     description can contain anything, including text shaped like instructions to the
     agent, and the `РАБОТА` block says so before the text arrives rather than after.
+
+    The ENVIRONMENT block is the map and, behind it, the contents of the small files
+    of the workspace (`environment_block`). Both are per-task and both are untrusted
+    data; the rule that says so is in the `WORK` block above, which is why the order
+    below puts the skeleton first and not merely first by habit.
 
     Shared blocks lead and per-task blocks follow, which is the same separation M15
     recommended -- constant contract apart from per-run input -- carried through to the
@@ -160,7 +205,7 @@ def build_system(brief: EnvironmentBrief, playbook: Playbook, instruction: str) 
             f"\nPROCEDURE ({playbook.name})\n",
             playbook.body.strip(),
             "\n\nENVIRONMENT\n",
-            brief.render(),
+            environment_block(brief),
             "\n\nTASK\n",
             instruction.strip(),
         ]

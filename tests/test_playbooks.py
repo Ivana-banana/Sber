@@ -143,3 +143,41 @@ def test_classify_reports_the_winning_margin_for_a_confident_case() -> None:
 def test_select_is_classify_without_the_reasoning() -> None:
     for instruction in ["fix the bug", "audit for injection", "do the needful", ""]:
         assert playbooks.select(instruction) == playbooks.classify(instruction).playbook
+
+
+# --- the two lines each measured failure asked for ---------------------------
+
+
+def test_the_forensic_playbook_demands_the_sources_before_any_value() -> None:
+    # Six recorded episodes of a log investigation wrote a report without reading one
+    # of the seven files that held the answer, and every value in all six was invented.
+    body = playbooks.select("Investigate the incident logs and reconstruct the timeline").body
+
+    assert "Read the primary sources before you write any value" in body
+    assert "never fill a field from memory" in body
+
+
+def test_the_forensic_playbook_prefers_the_small_artifacts_to_the_bulk_log() -> None:
+    body = playbooks.FORENSICS.body
+
+    assert "Prefer small recovered or summary files to the bulk log" in body
+    assert "cross-check duplicates and time windows" in body
+
+
+def test_the_code_fix_playbook_anchors_an_edit_on_the_whole_statement() -> None:
+    # Twelve recorded episodes of two repair tasks: every executed edit was in the
+    # right file and the right function, and the anchor decided the outcome. Four of
+    # four succeeded when it covered the call that consumes the value; five of five
+    # failed when it stopped at the value itself, leaving a stale or duplicated call.
+    body = playbooks.select("Fix the bug so the failing test passes").body
+
+    assert "Anchor replace_text on the whole statement" in body
+    assert "the call that consumes the value" in body
+    assert "Re-read the patched region after the edit" in body
+
+
+def test_the_new_playbook_lines_name_no_public_task() -> None:
+    for pb in playbooks.PLAYBOOKS:
+        lowered = pb.body.lower()
+        for name in ("incident-log-forensics", "app.jsonl", "auth.log", "sqli", "fetchrow"):
+            assert name not in lowered, f"{pb.name} would be overfitting to the public set"

@@ -26,7 +26,7 @@ from pathlib import Path
 
 from agent import limits
 from agent.redact import redact, secrets_from_env
-from agent.sources import local_sources, source_excerpts
+from agent.sources import artifact_previews, local_sources, source_excerpts
 
 PROBED_TOOLS: tuple[str, ...] = (
     "git",
@@ -155,7 +155,29 @@ class EnvironmentBrief:
     handler that had been named for it.
     """
 
+    artifacts: str = ""
+    """Contents of the small files of the workspace, already bounded and attributed.
+
+    C1. Six recorded episodes of a log-forensics task opened none of the seven files
+    that held the answer -- the model wrote a report out of nothing six times out of
+    six -- because on this endpoint a read is a 90-120 s call and seven of them are
+    not affordable. The tree above named every one of those files and their sizes; the
+    naming was not what was missing.
+    """
+
     secrets: tuple[str, ...] = field(default=(), repr=False)
+
+    def artifact_block(self) -> str:
+        """The inlined files, redacted, for the caller that can afford them.
+
+        Deliberately not part of `render()`. The macro controller's packet is capped
+        at 2500 characters and hard-cuts whatever the brief renders, so an inlined
+        section there would push that packet's own trailer -- writable paths and the
+        seconds left -- off the end for no gain. `agent/prompt.py` appends this to the
+        ENVIRONMENT block of the loop's system message, where it is a constant prefix
+        the server caches across the run's steps.
+        """
+        return redact(self.artifacts, self.secrets) if self.artifacts else ""
 
     def render(self) -> str:
         lines = [f"workspace: {self.workspace}"]
@@ -405,6 +427,15 @@ def inspect_environment(
         excerpts = source_excerpts(workspace, max_chars=limits.SOURCE_EXCERPT_MAX_CHARS)
     except Exception:  # noqa: BLE001 - excerpts are best-effort, never fatal
         excerpts = ""
+    try:
+        # Whatever the excerpts already carry is skipped here, so the two sections
+        # never spend the budget on the same bytes.
+        indexed = {path for path, _, _ in sources} | {parent for _, parent, _ in sources}
+        artifacts = artifact_previews(
+            workspace, instruction=instruction, skip=indexed, secrets=secrets
+        )
+    except Exception:  # noqa: BLE001 - inlining is best-effort, never fatal
+        artifacts = ""
     return EnvironmentBrief(
         workspace=workspace,
         exists=True,
@@ -418,5 +449,6 @@ def inspect_environment(
         located=tuple(located),
         sources=sources,
         excerpts=excerpts,
+        artifacts=artifacts,
         secrets=secrets,
     )
