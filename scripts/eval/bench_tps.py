@@ -38,12 +38,14 @@ def _prompt(target_tokens: int) -> str:
     return "".join(out) + "\nSummarise the anomalies you see in three sentences."
 
 
-def _run(upstream: str, model: str, prompt: str, max_tokens: int, timeout: float) -> dict:
+def _run(upstream: str, model: str, prompt: str, max_tokens: int, timeout: float,
+         num_thread: int | None = None) -> dict:
     body = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        "options": {"num_predict": max_tokens, "temperature": 0},
+        "options": {"num_predict": max_tokens, "temperature": 0,
+                    **({"num_thread": num_thread} if num_thread else {})},
     }).encode()
     req = urllib.request.Request(f"{upstream}/api/chat", data=body,
                                  headers={"Content-Type": "application/json"})
@@ -73,13 +75,18 @@ def main() -> int:
     ap.add_argument("--max-tokens", type=int, default=512)
     ap.add_argument("--runs", type=int, default=2)
     ap.add_argument("--timeout", type=float, default=600.0)
+    ap.add_argument("--num-thread", type=int, default=None,
+                    help="ollama num_thread option (CPU threads for the offloaded part)")
     args = ap.parse_args()
 
     prompt = _prompt(args.prompt_tokens)
     rows = []
     print("run\twall_s\tload_s\tprompt_tokens\tprompt_tps\tgen_tokens\tgen_tps")
     for i in range(1, args.runs + 1):
-        r = _run(args.upstream, args.model, prompt, args.max_tokens, args.timeout)
+        # A per-run salt in front of the text defeats the server's prefix cache, so
+        # prefill is measured on every run rather than only on the first.
+        salted = f"session {i}-{int(time.time())}: " + prompt
+        r = _run(args.upstream, args.model, salted, args.max_tokens, args.timeout, args.num_thread)
         rows.append(r)
         print(f"{i}\t{r['wall_s']}\t{r['load_s']}\t{r['prompt_tokens']}\t{r['prompt_tps']}\t{r['gen_tokens']}\t{r['gen_tps']}")
         sys.stdout.flush()
