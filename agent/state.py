@@ -304,6 +304,25 @@ class AgentState:
         self.seen_results.clear()
         return self.state_epoch
 
+    def repeats_last_action(self, tool: str, args: Mapping[str, object], output: str) -> bool:
+        """Whether this action is a copy of the previous one with the same observation.
+
+        Same tool, same arguments, same redacted output, same epoch. Such a repeat
+        changed nothing the previous copy had not already changed, so the caller keeps
+        the epoch instead of opening a new one: on the 4080 7B stand nineteen identical
+        `write_file` calls each opened a fresh epoch, and no detector ever saw more than
+        one of them (F4-7b-regression-4080: 30 steps for nothing on an audit fixture).
+        """
+        if not self.actions:
+            return False
+        last = self.actions[-1]
+        return (
+            last.state_epoch == self.state_epoch
+            and last.tool == tool
+            and last.args_digest == args_digest(args)
+            and last.result_fingerprint == digest(redact(output, self.secrets))
+        )
+
     def record(
         self,
         kind: str,
