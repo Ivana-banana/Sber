@@ -131,9 +131,11 @@ def run(
                 checkpoint = (
                     "[бюджет] запас шагов и времени на исходе, а на диске нет "
                     "проверяемого результата и ни одного успешного наблюдения. "
-                    "Не выдумывай значения: сначала одним действием посмотри источники, "
-                    "которые называет задание (list_dir, read_range, search), и пиши "
-                    "ответ по тому, что реально прочитал."
+                    "Если ответ целиком задан в условии (точное содержимое файла), "
+                    "запиши его через write_file сейчас. Иначе не выдумывай значения: "
+                    "сначала одним действием посмотри источники, которые называет "
+                    "задание (list_dir, read_range, search), и пиши ответ по тому, что "
+                    "реально прочитал."
                 )
             elif playbook.name == "code-audit":
                 checkpoint += (
@@ -2518,8 +2520,10 @@ def _call_timed_out(error: LlmError) -> bool:
     "with no payload" is literal: an error that carries output tokens was handed part of
     a reply and billed for it, and that is a different failure from silence.
     """
-    reason = error.reason.lower()
-    return ("timeout" in reason or "timed out" in reason) and error.output_tokens == 0
+    # The typed flag, never the reason text: that text can quote the endpoint's own
+    # body, and a 504 "upstream request timeout" or a 400 mentioning a timeout parameter
+    # is a broken endpoint answering instantly, not our clock running out.
+    return error.timed_out and error.output_tokens == 0
 
 
 def _llm_failure_kind(error: LlmError) -> str:

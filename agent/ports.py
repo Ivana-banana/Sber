@@ -61,6 +61,13 @@ class LlmError:
     input_tokens: int = 0
     output_tokens: int = 0
     usage_reported: bool = True
+    timed_out: bool = False
+    """Set by the client only when *our* transport deadline expired.
+
+    The loop classifies a failed call as slow-or-broken on this flag and nothing else:
+    the reason text can quote the endpoint's own response body, and a 504 or a 400 that
+    happens to say "timeout" must not read as our clock running out.
+    """
 
 
 @runtime_checkable

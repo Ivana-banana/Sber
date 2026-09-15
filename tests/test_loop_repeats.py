@@ -64,3 +64,20 @@ def test_a_write_with_different_content_still_advances_the_epoch(tmp_path: Path)
     run(state, llm, FakeVerify())
 
     assert state.state_epoch == 3
+
+
+def test_a_repeat_separated_by_a_read_still_keeps_the_epoch(tmp_path: Path) -> None:
+    # write / list_dir / write ... with identical arguments and output: the read does not
+    # advance the epoch, and the second write must count as a repeat of the first even
+    # though it is not the immediately preceding action (critic, 16.09).
+    target = tmp_path / "security_report.json"
+    state = make_state(tmp_path)
+    state.budget.max_steps = 12
+    write = action("write_file", path=str(target), content='{"findings": []}')
+    look = action("list_dir", path=str(tmp_path))
+    llm = StubLlm(replies=[write, look] * 6)
+
+    run(state, llm, FakeVerify((False, "command", "wrong")))
+
+    assert state.state_epoch == 1, "a read between two identical writes is not a new epoch"
+    assert len(llm.calls) < 12, "the repeat detectors ended the loop before the step cap"

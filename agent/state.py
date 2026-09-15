@@ -340,15 +340,22 @@ class AgentState:
         `write_file` calls each opened a fresh epoch, and no detector ever saw more than
         one of them (F4-7b-regression-4080: 30 steps for nothing on an audit fixture).
         """
-        if not self.actions:
-            return False
-        last = self.actions[-1]
-        return (
-            last.state_epoch == self.state_epoch
-            and last.tool == tool
-            and last.args_digest == args_digest(args)
-            and last.result_fingerprint == digest(redact(output, self.secrets))
-        )
+        # Every action of the current epoch, not just the previous one: a read between
+        # two identical writes does not advance the epoch, and looking only at
+        # `actions[-1]` let a write/list_dir alternation open a fresh epoch per write
+        # (critic, 16.09). Actions before the epoch's first entry are already history.
+        wanted_args = args_digest(args)
+        wanted_result = digest(redact(output, self.secrets))
+        for previous in reversed(self.actions):
+            if previous.state_epoch != self.state_epoch:
+                break
+            if (
+                previous.tool == tool
+                and previous.args_digest == wanted_args
+                and previous.result_fingerprint == wanted_result
+            ):
+                return True
+        return False
 
     def record(
         self,

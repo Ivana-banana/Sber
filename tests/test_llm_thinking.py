@@ -75,15 +75,28 @@ def test_a_cutoff_inside_a_think_tag_is_thinking() -> None:
     assert client._thinking_endpoint is True
 
 
-def test_a_cutoff_with_no_usage_block_is_still_read_as_thinking() -> None:
-    # An endpoint that reports no usage cannot corroborate that the cap was reached, and
-    # refusing the signal there would strand exactly the endpoints we know least about.
+def test_a_cutoff_with_no_usage_block_is_not_read_as_thinking() -> None:
+    # An endpoint that reports no usage cannot corroborate that the cap was reached.
+    # Without corroboration the cheap hypothesis wins (critic, 16.09): the thinking
+    # ceiling costs 240 s per call, and a reasoning field or a timeout with no payload
+    # will still flip the flag on an endpoint that genuinely reasons.
     cut = _reply("", finish="length", usage=False)
     client, _, _ = make_client([(200, cut)] * 2)
 
     client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
 
-    assert client._thinking_endpoint is True
+    assert client._thinking_endpoint is False
+
+
+def test_a_truncated_tool_call_is_not_read_as_thinking() -> None:
+    # A function call with `content: null` is the OpenAI shape of a visible answer; a
+    # long write_file body overrunning the cap is looping, not hidden reasoning.
+    from agent.llm import _thinking_evidence
+    message = {"role": "assistant", "content": None,
+               "tool_calls": [{"id": "x", "type": "function",
+                               "function": {"name": "emit_action", "arguments": '{"tool":"write_file"'}}]}
+    assert _thinking_evidence(message, "length", requested_tokens=2048,
+                              completion_tokens=2048, usage_reported=True) == ""
 
 
 # --- what does not ------------------------------------------------------------

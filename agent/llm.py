@@ -344,12 +344,16 @@ def _thinking_evidence(
     content = content if isinstance(content, str) else ""
     if "<think>" in content or "</think>" in content:
         return "truncated inside a think block"
-    if content.strip():
-        # A truncated but ordinary answer: the model was still talking to us.
+    if content.strip() or message.get("tool_calls"):
+        # A truncated but ordinary answer -- prose or a function call (whose `content`
+        # is null by the OpenAI shape) -- means the model was still talking to us. The
+        # native-tools rung is the default path, and a long `write_file` body is the
+        # commonest thing to overrun the ceiling; that is looping, not thinking.
         return ""
-    if usage_reported and completion_tokens < requested_tokens:
-        # Nothing visible, but the output budget was not spent either -- an empty reply,
-        # not a hidden one. Nothing here says the endpoint reasons.
+    if not usage_reported or completion_tokens < requested_tokens:
+        # Nothing visible, and either the output budget was not spent (an empty reply,
+        # not a hidden one) or the endpoint cannot corroborate that it was. Without
+        # corroboration the cheap hypothesis wins: the thinking ceiling is expensive.
         return ""
     return "truncated with no visible answer"
 
@@ -827,8 +831,9 @@ class HttpLlm:
                 # server already generated and billed. Mark the total a lower bound so
                 # `main` prints it as such rather than as an exact 0.
                 acc[2] = False
-                last = LlmError(reason=_transport_reason(exc), retryable=True)
-                if _is_timeout(exc) and not self._thinking_endpoint and acc[1] == 0:
+                timed_out = _is_timeout(exc)
+                last = LlmError(reason=_transport_reason(exc), retryable=True, timed_out=timed_out)
+                if timed_out and not self._thinking_endpoint and acc[1] == 0:
                     # The one signal available on the very first call of a run, and the
                     # one that cost the most: on the 30B stand every episode's first call
                     # was cut by the pre-checkpoint clamp and the second was then sent at

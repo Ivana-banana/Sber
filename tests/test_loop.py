@@ -330,7 +330,7 @@ def test_a_timeout_with_no_payload_lifts_the_long_llm_clamp(tmp_path: Path) -> N
     state = make_state(tmp_path)
     assert state.budget.allow_long_llm is False
     llm = StubLlm(replies=[
-        LlmError("transport timeout: TimeoutError", retryable=True),
+        LlmError("transport timeout: TimeoutError", retryable=True, timed_out=True),
         action("write_file", path=str(target), content="x"),
         action("finish", path=str(target), verify="test -s out.txt", summary="done"),
     ])
@@ -399,7 +399,7 @@ def test_timeouts_on_a_slow_endpoint_end_the_run_on_budget_not_as_unusable(
 
         def complete_structured(self, messages, **kwargs):  # type: ignore[no-untyped-def]
             now[0] += kwargs.get("timeout_s") or 1.0
-            return LlmError(reason="transport timeout: TimeoutError", retryable=True)
+            return LlmError(reason="transport timeout: TimeoutError", retryable=True, timed_out=True)
 
     outcome = run(state, TimingOutLlm(), FakeVerify())
 
@@ -7206,7 +7206,8 @@ def test_the_checkpoint_asks_for_a_look_before_anything_has_been_observed(
     first = next(text for text in outcome.observations if "[бюджет]" in text)
     assert "ни одного успешного наблюдения" in first
     assert "не выдумывай" in first.lower()
-    assert "write_file" not in first, "nothing to write down yet"
+    assert "целиком задан в условии" in first, "an instruction-determined answer may still be written"
+    assert "list_dir, read_range, search" in first
 
 
 def test_the_checkpoint_asks_for_the_best_attempt_once_something_was_observed(
@@ -7253,7 +7254,7 @@ def test_the_budget_trace_prints_the_thinking_chain_when_asked(
     monkeypatch.setenv(limits.TRACE_BUDGET_ENV_NAME, "1")
     state = make_state(tmp_path)
     llm = StubLlm(replies=[
-        LlmError("transport timeout: TimeoutError", retryable=True),
+        LlmError("transport timeout: TimeoutError", retryable=True, timed_out=True),
         action("list_dir", path=str(tmp_path)),
     ])
 
@@ -7270,7 +7271,7 @@ def test_the_budget_trace_is_off_unless_the_variable_is_set(
     monkeypatch.delenv(limits.TRACE_BUDGET_ENV_NAME, raising=False)
     state = make_state(tmp_path)
     llm = StubLlm(replies=[
-        LlmError("transport timeout: TimeoutError", retryable=True),
+        LlmError("transport timeout: TimeoutError", retryable=True, timed_out=True),
         action("list_dir", path=str(tmp_path)),
     ])
 
@@ -7436,3 +7437,14 @@ def test_exact_file_fast_path_records_one_empty_command_verification(
     assert phase_names.count(("phase", "verify", "start")) == 1
     assert phase_names.count(("phase", "verify", "end")) == 1
     assert sum(event.kind == "verify" for event in state.audit) == 1
+
+
+def test_a_server_body_mentioning_a_timeout_is_a_hard_failure() -> None:
+    # The classification turns on the typed flag, never on the reason text: a 504 body
+    # or a 400 about a timeout parameter is an endpoint answering instantly (critic 16.09).
+    from agent.loop import HARD_FAILURE, SLOW_CALL, _llm_failure_kind
+    from agent.ports import LlmError
+    assert _llm_failure_kind(LlmError("endpoint returned 504: upstream request timeout", retryable=True)) == HARD_FAILURE
+    assert _llm_failure_kind(LlmError("endpoint returned 400: model timeout parameter invalid", retryable=False)) == HARD_FAILURE
+    assert _llm_failure_kind(LlmError("transport timeout: TimeoutError", retryable=True, timed_out=True)) == SLOW_CALL
+    assert _llm_failure_kind(LlmError("transport timeout: TimeoutError", retryable=True, timed_out=True, output_tokens=5)) == HARD_FAILURE
