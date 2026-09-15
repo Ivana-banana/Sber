@@ -54,3 +54,7 @@ Thumbs.db
 !.claude/hooks/
 !.claude/hooks/**
 .worktrees/
+
+# unlazy ledgers (machine-local)
+.unlazy/
+.unlazy-hook-state.json
