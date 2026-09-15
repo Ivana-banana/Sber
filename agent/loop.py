@@ -329,8 +329,15 @@ def run(
             # later report. A diagnostic that changes the result is not a diagnostic.
             traced = (result.output or result.detail or "").replace("\n", " ")[:160]
             print(f"agent tool: step={step} {tool} ok={result.ok} {traced}", flush=True)
-        if _advances_state_epoch(tool, args) and (
-            result.ok or tool == prompt.RUN_SHELL
+        body = result.output or result.detail
+        if (
+            _advances_state_epoch(tool, args)
+            and (result.ok or tool == prompt.RUN_SHELL)
+            # A copy of the previous action with the same observation mutated nothing
+            # new. Keeping the epoch is what lets the repeat detectors count it: with a
+            # fresh epoch per write, nineteen identical writes looked like nineteen
+            # first writes (F4-7b-regression-4080).
+            and not state.repeats_last_action(tool, args, body)
         ):
             state.advance_state_epoch()
         state.record(
@@ -340,7 +347,6 @@ def run(
             duration_s=result.duration_s,
             exit_code=result.exit_code,
         )
-        body = result.output or result.detail
         state.observe(
             tool,
             args,

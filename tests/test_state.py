@@ -77,3 +77,28 @@ def test_a_dead_diagnostic_sink_says_so_once_instead_of_going_quiet(
     err = capsys.readouterr().err
     assert err.splitlines() == ["agent phase: telemetry disabled after OSError"]
     assert "diagnostic pipe closed" not in err, "the trace may not leak through an error"
+
+
+def test_repeats_last_action_needs_the_same_tool_arguments_and_output(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+    args = {"path": "/app/report.json", "content": "{}"}
+    state.observe("write_file", args, "wrote 2 bytes")
+
+    assert state.repeats_last_action("write_file", args, "wrote 2 bytes") is True
+    assert state.repeats_last_action("write_file", {**args, "content": "{ }"}, "wrote 2 bytes") is False
+    assert state.repeats_last_action("write_file", args, "wrote 3 bytes") is False
+    assert state.repeats_last_action("read_range", args, "wrote 2 bytes") is False
+
+
+def test_repeats_last_action_looks_only_at_the_current_epoch(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+    args = {"path": "/app/report.json", "content": "{}"}
+    state.observe("write_file", args, "wrote 2 bytes")
+    state.advance_state_epoch()
+
+    assert state.repeats_last_action("write_file", args, "wrote 2 bytes") is False
+
+
+def test_repeats_last_action_is_false_on_an_empty_history(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+    assert state.repeats_last_action("write_file", {"path": "/x"}, "") is False
