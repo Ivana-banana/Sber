@@ -93,7 +93,7 @@ Finish with a verified report; save status.""",
 
 CODE_FIX = Playbook(
     name="code-fix",
-    token_count=285,
+    token_count=312,
     body="""\
 Read the contract, the original diff and the limits; save a baseline.
 Find the code tied to the symptom; save candidates and lines.
@@ -108,6 +108,7 @@ Do not change or weaken tests, evaluator or expected answers; save the allowed d
 Patch the cause, not the symptom; save a small diff.
 Anchor replace_text on the whole statement, the call that consumes the value included; save the anchor.
 Re-read the patched region after the edit; save what the file says now.
+A running service keeps the old code: restart it the way its entrypoint does before re-testing; save the restart command.
 Repeat the reproducer; save the failure going away.
 Check edge cases and the security invariant; save the results.
 Run an independent test oracle; save the external PASS or FAIL.
