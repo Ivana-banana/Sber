@@ -311,14 +311,26 @@ def test_code_fix_does_not_block_replace_text_on_an_unread_file(tmp_path: Path) 
     assert target.read_text(encoding="utf-8") == "value = 2\n", "replace_text is the targeted tool, never blocked"
 
 
-def test_a_truncation_error_lifts_the_long_llm_clamp(tmp_path: Path) -> None:
-    # F4: seeing a thinking/slow endpoint -- here the truncated-by-length error -- lifts
-    # the 90s pre-checkpoint call clamp for the rest of the run. Sticky, one-way.
+class ThinkingLlm(StubLlm):
+    """A stub whose client has already recognised a reasoning endpoint.
+
+    The real `agent.llm.HttpLlm` sets `_thinking_endpoint` from the evidence in a reply
+    (`tests/test_llm_thinking.py` pins which). The loop only reads the conclusion, so a
+    stub carrying the flag is the honest way to test what the loop does with it.
+    """
+
+    _thinking_endpoint: bool = True
+
+
+def test_a_timeout_with_no_payload_lifts_the_long_llm_clamp(tmp_path: Path) -> None:
+    # Case (a): the first call of an episode has no reply to look at, so the timeout is
+    # the signal. Lifting the clamp here is what stops the *second* call being clamped and
+    # truncated as well.
     target = tmp_path / "out.txt"
     state = make_state(tmp_path)
     assert state.budget.allow_long_llm is False
     llm = StubLlm(replies=[
-        LlmError("reply truncated by length at style native_tools", retryable=False),
+        LlmError("transport timeout: TimeoutError", retryable=True),
         action("write_file", path=str(target), content="x"),
         action("finish", path=str(target), verify="test -s out.txt", summary="done"),
     ])
@@ -326,6 +338,38 @@ def test_a_truncation_error_lifts_the_long_llm_clamp(tmp_path: Path) -> None:
     run(state, llm, FakeVerify((True, "c", "")))
 
     assert state.budget.allow_long_llm is True
+    assert state.budget.llm_timeout_s() <= limits.LLM_THINKING_TIMEOUT_S
+
+
+def test_a_client_that_recognised_thinking_lifts_the_clamp_on_the_first_reply(
+    tmp_path: Path,
+) -> None:
+    # The other half of "as early as the signal allows": the reply parsed fine, but it
+    # carried a reasoning field, so the very next call already gets the raised ceiling.
+    state = make_state(tmp_path)
+    llm = ThinkingLlm(replies=[action("list_dir", path=str(tmp_path))])
+
+    run(state, llm, FakeVerify())
+
+    assert state.budget.allow_long_llm is True
+
+
+def test_a_bare_length_truncation_no_longer_lifts_the_clamp(tmp_path: Path) -> None:
+    """`F4-7b-regression-4080`: the false positive that cost 250 s on the fast 7B.
+
+    A reply cut off by length, with the client seeing no sign of reasoning behind it, is a
+    model looping. The client owns that judgement now, so an error text alone must not
+    move the loop's clamp.
+    """
+    state = make_state(tmp_path)
+    llm = StubLlm(replies=[
+        LlmError("reply truncated by length at style native_tools", retryable=False),
+        action("list_dir", path=str(tmp_path)),
+    ])
+
+    run(state, llm, FakeVerify())
+
+    assert state.budget.allow_long_llm is False
 
 
 def test_a_plain_endpoint_error_does_not_lift_the_clamp(tmp_path: Path) -> None:
@@ -335,6 +379,63 @@ def test_a_plain_endpoint_error_does_not_lift_the_clamp(tmp_path: Path) -> None:
     run(state, llm, FakeVerify())
 
     assert state.budget.allow_long_llm is False, "a non-timeout error is not a thinking signal"
+
+
+def test_timeouts_on_a_slow_endpoint_end_the_run_on_budget_not_as_unusable(
+    tmp_path: Path,
+) -> None:
+    """`F4-30b-paired`: two timeouts demoted a run whose endpoint was still generating.
+
+    A timeout with no payload says the model is slow; a refused connection or an
+    unparseable reply says the endpoint cannot be used. Reporting the first as
+    `llm-unusable` is a claim about the endpoint that the evidence does not support, and
+    it ends a run that still had budget. The clock is what should end it, and does.
+    """
+    now = [0.0]
+    state = make_state(tmp_path, clock=lambda: now[0])
+
+    class TimingOutLlm(StubLlm):
+        _thinking_endpoint = True
+
+        def complete_structured(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            now[0] += kwargs.get("timeout_s") or 1.0
+            return LlmError(reason="transport timeout: TimeoutError", retryable=True)
+
+    outcome = run(state, TimingOutLlm(), FakeVerify())
+
+    assert outcome.stop_reason == "budget"
+    assert outcome.solved is False
+
+
+def test_hard_failures_still_reach_llm_unusable_on_a_slow_endpoint(tmp_path: Path) -> None:
+    # The counter is per kind, not switched off: an endpoint that answers nothing usable
+    # is still declared unusable even after it has been recognised as slow.
+    state = make_state(tmp_path)
+    llm = ThinkingLlm(replies=[LlmError("connection refused", retryable=True)] * 6)
+
+    outcome = run(state, llm, FakeVerify())
+
+    assert outcome.stop_reason == "llm-unusable"
+    assert len(llm.calls) == limits.MAX_CONSECUTIVE_LLM_FAILURES
+
+
+def test_a_delivered_reply_resets_the_unusable_counter(tmp_path: Path) -> None:
+    # Two hard failures, an answer, two more: the endpoint answered in between, so the
+    # run must not be ended as unusable on the fourth failure.
+    state = make_state(tmp_path)
+    state.budget.max_steps = 6
+    llm = StubLlm(replies=[
+        LlmError("connection refused", retryable=True),
+        LlmError("connection refused", retryable=True),
+        action("list_dir", path=str(tmp_path)),
+        LlmError("connection refused", retryable=True),
+        LlmError("connection refused", retryable=True),
+        action("list_dir", path=str(tmp_path)),
+    ])
+
+    outcome = run(state, llm, FakeVerify())
+
+    assert outcome.stop_reason != "llm-unusable"
 
 
 def test_a_non_code_fix_playbook_never_blocks_a_blind_write(tmp_path: Path) -> None:
@@ -6945,7 +7046,10 @@ def test_the_audit_checkpoint_asks_for_what_the_observations_support(tmp_path: P
         brief=make_brief(tmp_path), playbook=playbooks.CODE_AUDIT,
     )
 
-    checkpoint = next(text for text in outcome.observations if "[бюджет]" in text)
+    # The first checkpoint fires before anything has been observed and says so (see
+    # `test_the_checkpoint_asks_for_a_look_before_anything_has_been_observed`); the audit
+    # wording belongs to the checkpoints that follow a successful observation.
+    checkpoint = [text for text in outcome.observations if "[бюджет]" in text][-1]
     assert "нет проверяемого результата" in checkpoint
     assert "наблюдени" in checkpoint
     assert "пустой" in checkpoint.lower()
@@ -6963,7 +7067,10 @@ def test_the_checkpoint_of_another_task_is_left_alone(tmp_path: Path) -> None:
 
     outcome = run(state, llm, FakeVerify())
 
-    checkpoint = next(text for text in outcome.observations if "[бюджет]" in text)
+    # The last one, i.e. the branch that has an observation behind it: that is where the
+    # audit wording would appear if the playbook were being ignored.
+    checkpoint = [text for text in outcome.observations if "[бюджет]" in text][-1]
+    assert "write_file" in checkpoint
     assert "пустой" not in checkpoint.lower()
 
 
@@ -6992,6 +7099,198 @@ def test_a_scoped_edit_keeps_the_part_of_the_file_the_model_never_read(tmp_path:
     assert after == 'import os\n\nrouter = make()\nquery = "WHERE u = $1"\n'
     assert outcome.deliverable == target
     assert outcome.solved is True
+
+
+def test_a_successful_edit_shows_the_model_what_it_left_behind(tmp_path: Path) -> None:
+    """The anchored edit was the one action whose result nobody could see.
+
+    Five of five failed fix-sqli edits anchored the statement that builds the query and
+    not the call that uses it, so a stale `fetchrow(query)` stayed one line below the
+    repaired string and the model never learned it was there -- the observation said
+    `replaced 1 occurrence at line N` and stopped. Four of four successful edits included
+    that call in the anchor. The neighbourhood is the whole difference, and it fits in a
+    few lines.
+    """
+    target = tmp_path / "auth.py"
+    target.write_text(
+        "import os\n"
+        "\n"
+        "async def login(name):\n"
+        "    query = f\"SELECT * FROM users WHERE u = '{name}'\"\n"
+        "    row = await conn.fetchrow(query)\n"
+        "    return row\n",
+        encoding="utf-8",
+    )
+    llm = StubLlm(
+        replies=[
+            action(
+                "replace_text",
+                path=str(target),
+                old="    query = f\"SELECT * FROM users WHERE u = '{name}'\"",
+                new='    query = "SELECT * FROM users WHERE u = $1"',
+            )
+        ]
+    )
+
+    outcome = run(make_state(tmp_path), llm, FakeVerify())
+
+    echoed = next(text for text in outcome.observations if "replace_text -> ok" in text)
+    assert "после правки" in echoed
+    assert 'query = "SELECT * FROM users WHERE u = $1"' in echoed, "the new text is shown"
+    assert "await conn.fetchrow(query)" in echoed, "and so is the call the anchor omitted"
+    assert "async def login(name):" in echoed, "context above the edit as well"
+
+
+def test_the_edit_echo_stays_inside_its_own_budget(tmp_path: Path) -> None:
+    # Paid on every edit and carried in the observation history, so it is a window onto
+    # the edit and never a second read of the file.
+    target = tmp_path / "wide.py"
+    long_line = "x = '" + "y" * 400 + "'"
+    target.write_text("\n".join([long_line] * 12) + "\nanchor = 1\n", encoding="utf-8")
+    llm = StubLlm(replies=[action("replace_text", path=str(target), old="anchor = 1", new="anchor = 2")])
+
+    outcome = run(make_state(tmp_path), llm, FakeVerify())
+
+    echoed = next(text for text in outcome.observations if "replace_text -> ok" in text)
+    _, _, window = echoed.partition("после правки")
+    assert len(window) <= limits.EDIT_ECHO_MAX_CHARS + 120, "bounded whatever the file looks like"
+    assert "echo cut" in window
+
+
+def test_a_refused_edit_echoes_nothing(tmp_path: Path) -> None:
+    target = tmp_path / "auth.py"
+    target.write_text("import os\n", encoding="utf-8")
+    llm = StubLlm(replies=[action("replace_text", path=str(target), old="absent", new="x")])
+
+    outcome = run(make_state(tmp_path), llm, FakeVerify())
+
+    assert not any("после правки" in text for text in outcome.observations)
+
+
+def test_the_edit_echo_does_not_change_what_the_detectors_fingerprint(tmp_path: Path) -> None:
+    # The echo is appended to the text the model reads, not to the tool output the run
+    # hashes: a wider fingerprint would quietly change which repeats the detectors catch.
+    target = tmp_path / "auth.py"
+    target.write_text("a = 1\nb = 2\n", encoding="utf-8")
+    llm = StubLlm(replies=[action("replace_text", path=str(target), old="a = 1", new="a = 3")])
+    state = make_state(tmp_path)
+
+    run(state, llm, FakeVerify())
+
+    record = next(item for item in state.actions if item.tool == "replace_text")
+    assert record.result_fingerprint == loop.detectors.digest(
+        f"replaced 1 occurrence at line 1 of {target}"
+    )
+
+
+# --- the checkpoint has to know whether the run has observed anything ---------
+
+
+def test_the_checkpoint_asks_for_a_look_before_anything_has_been_observed(
+    tmp_path: Path,
+) -> None:
+    """Case (d). The hint fired on a run that had not read one file, 6/6 times.
+
+    "Write your best attempt now" with no observations behind it is an instruction to
+    invent, and the model took it: the forensic answers were fabricated values, different
+    every run, so no detector could catch them. Before anything has been observed the
+    cheapest correct action is to look, and saying so costs the same step.
+    """
+    now = [0.0]
+    state = make_state(tmp_path, clock=lambda: now[0])
+    llm = StubLlm(replies=[action("list_dir", path=str(tmp_path)) for _ in range(3)])
+    now[0] = limits.EARLY_DELIVERABLE_DEADLINE_S + 1
+
+    outcome = run(state, llm, FakeVerify())
+
+    first = next(text for text in outcome.observations if "[бюджет]" in text)
+    assert "ни одного успешного наблюдения" in first
+    assert "не выдумывай" in first.lower()
+    assert "write_file" not in first, "nothing to write down yet"
+
+
+def test_the_checkpoint_asks_for_the_best_attempt_once_something_was_observed(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "evidence.log").write_text("first line\n", encoding="utf-8")
+    now = [0.0]
+    state = make_state(tmp_path, clock=lambda: now[0])
+    llm = StubLlm(replies=[action("list_dir", path=str(tmp_path)) for _ in range(3)])
+    now[0] = limits.EARLY_DELIVERABLE_DEADLINE_S + 1
+
+    outcome = run(state, llm, FakeVerify())
+
+    checkpoints = [text for text in outcome.observations if "[бюджет]" in text]
+    assert len(checkpoints) > 1, "the checkpoint fires on every empty-handed step"
+    assert "write_file" in checkpoints[-1], "an observed run is asked to produce"
+    assert "ни одного успешного наблюдения" not in checkpoints[-1]
+
+
+def test_a_failed_action_is_not_an_observation_the_checkpoint_can_build_on(
+    tmp_path: Path,
+) -> None:
+    now = [0.0]
+    state = make_state(tmp_path, clock=lambda: now[0])
+    missing = tmp_path / "nowhere" / "file.txt"
+    llm = StubLlm(replies=[action("read_range", path=str(missing)) for _ in range(3)])
+    now[0] = limits.EARLY_DELIVERABLE_DEADLINE_S + 1
+
+    outcome = run(state, llm, FakeVerify())
+
+    assert all(
+        "ни одного успешного наблюдения" in text
+        for text in outcome.observations
+        if "[бюджет]" in text
+    )
+
+
+# --- the operator switch that makes the chain visible -------------------------
+
+
+def test_the_budget_trace_prints_the_thinking_chain_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv(limits.TRACE_BUDGET_ENV_NAME, "1")
+    state = make_state(tmp_path)
+    llm = StubLlm(replies=[
+        LlmError("transport timeout: TimeoutError", retryable=True),
+        action("list_dir", path=str(tmp_path)),
+    ])
+
+    run(state, llm, FakeVerify())
+
+    printed = capsys.readouterr().out
+    assert "agent budget:" in printed
+    assert "allow-long-llm" in printed
+
+
+def test_the_budget_trace_is_off_unless_the_variable_is_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv(limits.TRACE_BUDGET_ENV_NAME, raising=False)
+    state = make_state(tmp_path)
+    llm = StubLlm(replies=[
+        LlmError("transport timeout: TimeoutError", retryable=True),
+        action("list_dir", path=str(tmp_path)),
+    ])
+
+    run(state, llm, FakeVerify())
+
+    assert "agent budget:" not in capsys.readouterr().out
+
+
+def test_the_budget_trace_never_prints_a_secret(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv(limits.TRACE_BUDGET_ENV_NAME, "1")
+    state = make_state(tmp_path)
+    state.secrets = ("sk-do-not-print",)
+
+    state.record("thinking", "llm", "endpoint said sk-do-not-print while reasoning")
+
+    printed = capsys.readouterr().out
+    assert "agent thinking:" in printed
+    assert "sk-do-not-print" not in printed
 
 
 def test_an_edit_whose_anchor_is_not_in_the_file_changes_nothing(tmp_path: Path) -> None:

@@ -39,6 +39,7 @@ from agent import detectors, limits, prompt, result_contract, result_progress, s
 from agent.playbooks import Playbook
 from agent.ports import LlmError, LlmPort, LlmReply
 from agent.preflight import EnvironmentBrief
+from agent.redact import redact
 from agent.state import AgentState
 from agent.verify import VerifyResult
 
@@ -93,7 +94,12 @@ def run(
     system = prompt.build_system(brief, playbook, state.instruction)
     observations: list[str] = []
     history_base = 0
+    # Consecutive calls that failed in a way that says the endpoint cannot be used. A
+    # call that merely timed out is counted separately -- see `_llm_failure_kind`.
     llm_failures = 0
+    # Successful tool results carrying content. Zero means the run has observed nothing,
+    # so anything it writes would be invented rather than reported.
+    grounded = 0
     blocks_in_a_row = 0
     last_verdict: VerifyResult | None = None
     stop_reason = ""
@@ -116,7 +122,20 @@ def run(
                 "результата. "
                 "Запиши лучший вариант через write_file сейчас, улучшишь потом."
             )
-            if playbook.name == "code-audit":
+            if not grounded:
+                # P-B1: the same hint fired on a run that had not read a single file, and
+                # the model answered it 6/6 times with fabricated values -- content that
+                # changes every run, so no detector catches it. "Your best attempt" is
+                # only meaningful once something has been observed; before that the
+                # cheapest correct action is to look, and saying so costs the same step.
+                checkpoint = (
+                    "[бюджет] запас шагов и времени на исходе, а на диске нет "
+                    "проверяемого результата и ни одного успешного наблюдения. "
+                    "Не выдумывай значения: сначала одним действием посмотри источники, "
+                    "которые называет задание (list_dir, read_range, search), и пиши "
+                    "ответ по тому, что реально прочитал."
+                )
+            elif playbook.name == "code-audit":
                 checkpoint += (
                     " Лучший вариант — то, что подтверждают твои наблюдения: перенеси в "
                     "отчёт прочитанные строки и файлы. В evidence приведи саму строку "
@@ -145,22 +164,35 @@ def run(
         state.finish_phase("plan", plan_started)
 
         if not state.budget.allow_long_llm and _endpoint_is_slow_or_thinking(reply, llm):
-            # A thinking or slow endpoint: lift the 90s pre-checkpoint clamp so the next
-            # call gets the full budget instead of being truncated mid-reasoning. The
-            # call that just timed out or truncated is already lost -- this saves the
-            # rest of the run (F4).
+            # A thinking endpoint: lift the 90s pre-checkpoint clamp and raise the per-call
+            # ceiling, so the next call gets the time a reasoning reply needs instead of
+            # being truncated mid-thought. The call that just timed out is already lost --
+            # this saves the rest of the run (F4). Set on the first signal, whether that
+            # signal arrived as a reply or as a timeout.
             state.budget.allow_long_llm = True
-            state.record("budget", "allow-long-llm", "slow/thinking endpoint; lifting the call clamp")
+            state.record("budget", "allow-long-llm", "thinking endpoint; lifting the call clamp")
 
         if isinstance(reply, LlmError):
-            llm_failures += 1
+            kind = _llm_failure_kind(reply)
             state.budget.add_usage(reply)  # a failed attempt was still generated and billed
             state.record("llm", "error", reply.reason)
             observations.append(f"[step {step}] endpoint error: {reply.reason}")
-            if llm_failures >= limits.MAX_CONSECUTIVE_LLM_FAILURES:
-                stop_reason = "llm-unusable"
-                summary = f"endpoint unusable after {llm_failures} failed calls: {reply.reason}"
-                break
+            if kind == HARD_FAILURE:
+                llm_failures += 1
+                if llm_failures >= limits.MAX_CONSECUTIVE_LLM_FAILURES:
+                    stop_reason = "llm-unusable"
+                    summary = f"endpoint unusable after {llm_failures} failed calls: {reply.reason}"
+                    break
+            else:
+                # A call that ran out of wall clock with nothing delivered says the
+                # endpoint is slow, not broken, and the two must not end the run the same
+                # way. `F4-30b-paired` measured the cost of conflating them: two
+                # consecutive timeouts on a model that was still generating demoted the
+                # run to `llm-unusable` -- a verdict about the endpoint -- while the
+                # honest account is that the budget ran out. The clock, the step cap and
+                # the shrinking per-call ceiling already bound this branch, so it cannot
+                # spin: each timeout costs real seconds of the same budget that ends it.
+                state.record("budget", "llm-slow", f"timed out without a payload: {reply.reason}")
             continue
 
         llm_failures = 0
@@ -286,13 +318,17 @@ def run(
         act_started = state.start_phase("act")
         result = _execute(tool, args, state, playbook=playbook)
         state.finish_phase("act", act_started)
-        if os.environ.get("AGENT_TRACE_TOOLS"):
+        if os.environ.get(limits.TRACE_TOOLS_ENV_NAME):
             # Diagnostic only, off unless explicitly enabled: the loop otherwise prints
             # phases but never which tool ran with what result, so a live zero cannot be
             # told from the outside. Output is already redacted by the tool. Never on in
             # a submission -- the runner sets none of our variables.
-            summary = (result.output or result.detail or "").replace("\n", " ")[:160]
-            print(f"agent tool: step={step} {tool} ok={result.ok} {summary}", flush=True)
+            #
+            # A local name, not `summary`: this used to reuse the run's own summary
+            # variable, so switching the trace on rewrote the sentence the Outcome would
+            # later report. A diagnostic that changes the result is not a diagnostic.
+            traced = (result.output or result.detail or "").replace("\n", " ")[:160]
+            print(f"agent tool: step={step} {tool} ok={result.ok} {traced}", flush=True)
         if _advances_state_epoch(tool, args) and (
             result.ok or tool == prompt.RUN_SHELL
         ):
@@ -312,8 +348,19 @@ def run(
             ok=result.ok,
             error_code="" if result.ok else _error_code(result),
         )
+        if result.ok and body.strip():
+            # What the checkpoint hint below needs to know: whether this run has seen
+            # anything at all. An action that succeeded and printed something is the
+            # difference between reporting and inventing.
+            grounded += 1
+        echo = ""
+        if result.ok and tool == prompt.REPLACE_TEXT:
+            # The observation the edit was missing. Appended to the text the model reads
+            # and not to `body`, so the detectors keep fingerprinting exactly what they
+            # fingerprinted before.
+            echo = _edit_echo(Path(str(args["path"])), str(args.get("new", "")), result, state)
         observations.append(
-            f"[step {step}] {tool} -> {'ok' if result.ok else 'FAIL'}\n{body}".rstrip()
+            f"[step {step}] {tool} -> {'ok' if result.ok else 'FAIL'}\n{body}{echo}".rstrip()
         )
 
         if result.ok and tool == prompt.WRITE_FILE:
@@ -2449,20 +2496,105 @@ def _shell_can_change(command: str) -> bool:
     return PurePosixPath(words[0]).name not in READ_ONLY_SHELLS
 
 
-def _endpoint_is_slow_or_thinking(reply: LlmReply | LlmError, llm: LlmPort) -> bool:
-    """Whether an endpoint slow or thinking enough that the 90s call clamp hurts.
+SLOW_CALL = "slow"
+HARD_FAILURE = "hard"
+"""The two things a failed call can mean, and they end the run differently.
 
-    Three loop-observable signals, matching the F4 design: the client detected a thinking
-    endpoint (a reasoning field or a length cutoff, tracked inside `agent.llm`), the reply
-    is the truncated-by-length error, or a call timed out with no payload -- the last is
-    the only signal available on the very first call, which is where the 90s clamp bit.
+`slow` is a call that ran out of wall clock having been handed nothing: the endpoint is
+generating and we stopped listening. `hard` is everything else -- a refused connection, a
+reply that never parsed, an unusable protocol.
+"""
+
+
+def _call_timed_out(error: LlmError) -> bool:
+    """Whether a failed call is our deadline expiring rather than a broken endpoint.
+
+    "with no payload" is literal: an error that carries output tokens was handed part of
+    a reply and billed for it, and that is a different failure from silence.
+    """
+    reason = error.reason.lower()
+    return ("timeout" in reason or "timed out" in reason) and error.output_tokens == 0
+
+
+def _llm_failure_kind(error: LlmError) -> str:
+    """Classify a failed call for the consecutive-failure counters."""
+    return SLOW_CALL if _call_timed_out(error) else HARD_FAILURE
+
+
+def _endpoint_is_slow_or_thinking(reply: LlmReply | LlmError, llm: LlmPort) -> bool:
+    """Whether the endpoint reasons before answering, so the 90s call clamp only hurts.
+
+    Two loop-observable signals, and the narrowing of the second one is the point.
+
+    The client owns the reply-shaped evidence -- a reasoning field, a cutoff inside a
+    think block, a cutoff that spent the whole budget with nothing visible -- and exposes
+    it as one sticky flag (`agent.llm._thinking_evidence`). A bare length cutoff is no
+    longer part of it: on the fast 7B that fired on a degenerate generation with an
+    ordinary answer and cost 250 s for the same zero (`F4-7b-regression-4080`).
+
+    The second signal is a call that timed out with no payload, and it exists because it
+    is the only one available on the very first call of a run -- which is exactly where
+    the clamp bit hardest (`F4-30b-paired`: 12/12 and 6/6 episodes losing 185-280 s before
+    their first usable reply).
     """
     if getattr(llm, "_thinking_endpoint", False):
         return True
-    if isinstance(reply, LlmError):
-        reason = reply.reason.lower()
-        return "truncated by length" in reason or "timeout" in reason
-    return False
+    return isinstance(reply, LlmError) and _call_timed_out(reply)
+
+
+_EDIT_LINE = re.compile(r"at line (\d+)")
+"""Where `agent.tools.replace_text` says the edit landed. Read opportunistically: if the
+wording ever changes, the echo falls back to locating the replacement itself."""
+
+
+def _edit_echo(
+    path: Path, new: str, result: tools.ToolResult, state: AgentState
+) -> str:
+    """The edited region with a few lines of context, for the model to read back.
+
+    An anchored edit is the one action whose result the model could not see. It got
+    `replaced 1 occurrence at line N` and nothing else, which says the anchor matched --
+    never what the file now says around it. In 5 of 5 failed fix-sqli edits the anchor
+    covered the statement that built the query but not the call that used it, so the
+    repaired line ended up beside a stale or duplicated call; in 4 of 4 successful edits
+    the anchor included that call. The difference is one line away from the edit and was
+    invisible for the rest of the run.
+
+    So the observation carries the neighbourhood, bounded by `EDIT_ECHO_MAX_CHARS` and
+    `EDIT_ECHO_CONTEXT_LINES` and redacted like any other observation. Best effort
+    throughout: a file that vanished, changed underneath us or is not text costs the echo
+    and never the step -- the edit itself has already succeeded.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+    lines = text.splitlines()
+    if not lines:
+        return ""
+
+    first: int | None = None
+    match = _EDIT_LINE.search(result.output or "")
+    if match:
+        first = int(match.group(1)) - 1
+    elif new:
+        found = text.find(new)
+        if found >= 0:
+            first = text.count("\n", 0, found)
+    if first is None or not 0 <= first < len(lines):
+        return ""
+
+    last = min(len(lines) - 1, first + max(0, new.count("\n")))
+    start = max(0, first - limits.EDIT_ECHO_CONTEXT_LINES)
+    end = min(len(lines), last + 1 + limits.EDIT_ECHO_CONTEXT_LINES)
+
+    window = "\n".join(lines[start:end])
+    if len(window) > limits.EDIT_ECHO_MAX_CHARS:
+        window = window[: limits.EDIT_ECHO_MAX_CHARS] + "\n… [echo cut]"
+    return redact(
+        f"\n[после правки, строки {start + 1}-{end} файла {path}]\n{window}", state.secrets
+    )
 
 
 def _advances_state_epoch(tool: str, args: dict[str, object]) -> bool:

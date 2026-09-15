@@ -566,6 +566,10 @@ class Runner:
             # Diagnostic passthrough: makes the agent print each tool call and result to
             # its log. Off unless set on the host running the suite; never a submission.
             env += ["-e", "AGENT_TRACE_TOOLS=1"]
+        if os.environ.get("AGENT_TRACE_BUDGET"):
+            # Same passthrough for the budget/thinking chain (allow-long-llm, llm-slow,
+            # raised output ceiling), so a paired run shows why a call took what it took.
+            env += ["-e", "AGENT_TRACE_BUDGET=1"]
         if self.args.tell_agent_budget:
             # Off by default, and off in every scaled run: Harbor tells the agent
             # nothing about the deadline, so telling it here would change two things at

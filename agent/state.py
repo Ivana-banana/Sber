@@ -16,6 +16,7 @@ step cap or spend the verifier reserve; those are read-only facts to it.
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from collections.abc import Callable, Mapping
@@ -66,6 +67,18 @@ class ActionRecord:
     """Whether this action produced an observation the run had not already seen."""
 
 
+TRACED_KINDS = frozenset({"thinking", "budget"})
+"""Audit kinds `AGENT_TRACE_BUDGET` mirrors to stdout.
+
+The two that explain a run's wall clock and nobody can see from outside: the endpoint
+being recognised as a reasoning model (`thinking`, relayed from `agent.llm`) and the
+loop acting on it or on a detector (`budget`). Tool calls have their own switch.
+"""
+
+TRACE_DETAIL_CHARS = 200
+"""How much of a traced note is printed. A line, not a dump."""
+
+
 def _reserve_for(total_s: float) -> float:
     """How much of the budget is withheld for verification and a clean exit."""
     reserve = total_s * limits.VERIFY_RESERVE_FRACTION
@@ -98,12 +111,18 @@ class Budget:
     """When a checkable answer must exist, independent of the outer bound."""
 
     allow_long_llm: bool = field(default=False)
-    """Set once, for the rest of the run, when a slow or thinking endpoint is observed (a
-    reply truncated by length, or a call that timed out with no payload). It lifts the
-    pre-checkpoint clamp on `llm_timeout_s`: on such an endpoint a single thinking call
-    needs more than `early_deadline_s - elapsed`, and clamping it truncates the reasoning
-    and loses the call (F4). One-way; the verifier reserve and the task deadline still
-    bound the call, and a fast endpoint never sets it, so a 7B run is unchanged."""
+    """Set once, for the rest of the run, when a thinking endpoint is observed: a reply
+    carrying a reasoning field, a length cutoff with evidence of thinking behind it, or a
+    call that timed out with no payload. It lifts the pre-checkpoint clamp on
+    `llm_timeout_s` and raises its ceiling from `LLM_TIMEOUT_S` to
+    `LLM_THINKING_TIMEOUT_S`: on such an endpoint a single thinking call needs more than
+    `early_deadline_s - elapsed`, and clamping it truncates the reasoning and loses the
+    call (F4, `F4-30b-paired`).
+
+    One-way; the verifier reserve and the task deadline still bound the call. A bare
+    length cutoff with an ordinary non-empty answer does *not* set it -- that is a model
+    looping, not a model thinking, and treating the two alike cost 250 s of wall clock on
+    the fast 7B for the same zero (`F4-7b-regression-4080`)."""
 
     def __post_init__(self) -> None:
         if self.started_at == 0.0:
@@ -186,19 +205,27 @@ class Budget:
         return max(0.0, min(limits.TOOL_TIMEOUT_MAX_S, self.spendable_s()))
 
     def llm_timeout_s(self) -> float:
-        """Ceiling for one logical LLM call: never longer than `LLM_TIMEOUT_S` or the
-        spendable time, and -- before the early checkpoint, on a fast endpoint -- never
-        long enough on its own to run past it. `LLM_TIMEOUT_S` (120s) is wider than
+        """Ceiling for one logical LLM call: never longer than the per-endpoint ceiling or
+        the spendable time, and -- before the early checkpoint, on a fast endpoint --
+        never long enough on its own to run past it. `LLM_TIMEOUT_S` (120s) is wider than
         `early_deadline_s` (90s by default); left uncapped on a fast model, a single call
         could carry the run past the point a deliverable was due before a runner with an
         undeclared short timeout would have killed it.
 
-        The pre-checkpoint clamp is lifted once `allow_long_llm` is set, i.e. once a slow
-        or thinking endpoint is observed: there a single call needs more than the clamp
-        allows, and clamping it truncates the reasoning and loses the call. The verifier
-        reserve and the task deadline still bound the call either way.
+        Two things change once `allow_long_llm` is set, i.e. once a thinking endpoint is
+        observed. The pre-checkpoint clamp is lifted, because there a single call needs
+        more than the clamp allows and clamping it truncates the reasoning and loses the
+        call. And the ceiling itself becomes `LLM_THINKING_TIMEOUT_S`, because 120 s is
+        shorter than one measured thinking reply on the evaluation-class stand, so the
+        lifted clamp would only have moved the loss from a truncation to a timeout
+        (`F4-30b-paired`: two runs demoted to `llm-unusable` for exactly that).
+
+        The verifier reserve and the task deadline bound the call either way: both
+        branches take the minimum with `spendable_s()`, which is what the reserve is
+        subtracted from.
         """
-        ceiling = min(limits.LLM_TIMEOUT_S, self.spendable_s())
+        ceiling = limits.LLM_THINKING_TIMEOUT_S if self.allow_long_llm else limits.LLM_TIMEOUT_S
+        ceiling = min(ceiling, self.spendable_s())
         if not self.allow_long_llm and not self.past_early_deadline():
             ceiling = min(ceiling, self.early_deadline_s - self.elapsed_s())
         return max(0.0, ceiling)
@@ -322,6 +349,7 @@ class AgentState:
             exit_code=exit_code,
         )
         self.audit.append(event)
+        self._trace(event)
         if self.event_sink is not None:
             try:
                 self.event_sink(event)
@@ -344,6 +372,29 @@ class AgentState:
                 except Exception:
                     pass
         return event
+
+    def _trace(self, event: Event) -> None:
+        """Mirror a thinking/budget note to stdout when the operator asked for it.
+
+        Same shape and same rules as the `AGENT_TRACE_TOOLS` line in `agent.loop`: off
+        unless the variable is set, redacted before it is printed, bounded, and never
+        allowed to raise -- a closed pipe must not turn a solvable task into a zero.
+        Why it exists: the chain that decides whether a call gets 90 s or 240 s is
+        entirely internal, so a run that spent its budget waiting looks identical from
+        outside to one that spent it reasoning.
+        """
+        if event.kind not in TRACED_KINDS:
+            return
+        try:
+            if not os.environ.get(limits.TRACE_BUDGET_ENV_NAME):
+                return
+            detail = redact(event.detail, self.secrets)[:TRACE_DETAIL_CHARS]
+            print(
+                f"agent {event.kind}: step={event.step} {event.name} {detail}".rstrip(),
+                flush=True,
+            )
+        except Exception:
+            pass
 
     def start_phase(self, name: str) -> float:
         """Emit a flushed start marker, then return the phase's timing origin."""

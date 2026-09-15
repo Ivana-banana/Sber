@@ -237,6 +237,45 @@ def _finish_reason(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _is_timeout(exc: BaseException) -> bool:
+    """Whether a transport failure is the deadline expiring rather than a broken endpoint.
+
+    `urlopen` reports a read timeout as `TimeoutError` (`socket.timeout` is an alias since
+    3.10) and a connect timeout wrapped in `URLError`, so both shapes are checked. The
+    distinction matters twice over: a timeout is the only thinking signal available before
+    any reply exists, and it is the failure the loop must not count as an unusable
+    endpoint while the server is merely still generating.
+    """
+    seen: list[int] = []
+    current: object = exc
+    # Iterative and bounded: a wrapped cause is one level deep in practice, and a chain
+    # that points back at itself must not become a RecursionError inside the client.
+    for _ in range(4):
+        if isinstance(current, TimeoutError):
+            return True
+        if id(current) in seen:
+            return False
+        seen.append(id(current))
+        reason = getattr(current, "reason", None)
+        if isinstance(reason, BaseException):
+            current = reason
+            continue
+        return isinstance(reason, str) and "timed out" in reason.lower()
+    return False
+
+
+def _transport_reason(exc: BaseException) -> str:
+    """One line naming a transport failure, with timeouts spelled out.
+
+    The type name alone is ambiguous: a connect timeout arrives as `URLError`, which reads
+    exactly like a refused connection, and the loop's failure classification turns on the
+    difference.
+    """
+    if _is_timeout(exc):
+        return f"transport timeout: {type(exc).__name__}"
+    return f"transport failed: {type(exc).__name__}"
+
+
 def _looks_like_context_overflow(detail: str) -> str | None:
     """The marker in a 400 body that says the raised output budget overran the context.
 
@@ -264,6 +303,55 @@ def _has_reasoning_field(message: dict[str, Any]) -> bool:
         if isinstance(value, str) and value.strip():
             return True
     return False
+
+
+def _thinking_evidence(
+    message: dict[str, Any],
+    finish: str,
+    *,
+    requested_tokens: int,
+    completion_tokens: int,
+    usage_reported: bool,
+) -> str:
+    """Why this reply says the endpoint reasons before answering, or "" when it does not.
+
+    The distinction is the whole point, and it was bought with a measurement. F4 flipped
+    the thinking flag on a bare `finish_reason=length`, and on the fast 7B that fired on a
+    degenerate generation with an ordinary, non-empty answer: the run then paid the
+    thinking-endpoint call ceiling on two more steps and cost 250 s of wall clock for the
+    same zero (`F4-7b-regression-4080`, 15.09). A model that ran out of room while
+    answering is looping; a model that ran out of room while *thinking* has produced
+    tokens we cannot see.
+
+    So a cutoff alone is not evidence. Three things are:
+
+    * a `reasoning`/`reasoning_content`/`thinking` field -- the endpoint says so itself;
+    * a `<think>`/`</think>` tag inside a truncated reply -- the model says so itself;
+    * a truncated reply with nothing visible in it, having spent the whole output budget.
+      The tokens were generated and billed and did not reach `content`, which is what a
+      thinking span is. `completion_tokens` is only consulted when the endpoint reports
+      usage at all; a server that reports none cannot be asked to corroborate.
+
+    The third case is also the one that matters most in time: it is the shape the very
+    first call of every episode came back in on the 30B stand (`F4-30b-paired`, ctok=2048
+    and no answer), which is the earliest moment the run can learn what it is talking to.
+    """
+    if _has_reasoning_field(message):
+        return "reasoning field"
+    if finish != "length":
+        return ""
+    content = message.get("content")
+    content = content if isinstance(content, str) else ""
+    if "<think>" in content or "</think>" in content:
+        return "truncated inside a think block"
+    if content.strip():
+        # A truncated but ordinary answer: the model was still talking to us.
+        return ""
+    if usage_reported and completion_tokens < requested_tokens:
+        # Nothing visible, but the output budget was not spent either -- an empty reply,
+        # not a hidden one. Nothing here says the endpoint reasons.
+        return ""
+    return "truncated with no visible answer"
 
 
 def _unwrap_function_envelope(value: Any, schema: dict[str, Any]) -> dict[str, Any] | None:
@@ -389,17 +477,39 @@ class HttpLlm:
     put them in the audit trail. Never receives secrets: text is redacted first."""
 
     _thinking_endpoint: bool = field(default=False, repr=False)
-    """Set once, for the rest of the run, the first time a reply carries a reasoning
-    field or is truncated by length: the endpoint is a thinking model, so the output
-    ceiling is raised on every later call rather than paying a truncated 2048-token
-    attempt first. One-way, like the protocol ladder."""
+    """Set once, for the rest of the run, the first time a reply is *evidence* of a
+    reasoning model (`_thinking_evidence`) or a call times out having been handed no
+    payload at all. The endpoint is then a thinking model: the output ceiling is raised on
+    every later call rather than paying a truncated 2048-token attempt first, and the
+    per-call deadline may reach `LLM_THINKING_TIMEOUT_S` instead of `LLM_TIMEOUT_S`.
+    One-way, like the protocol ladder.
+
+    Deliberately not set by a bare length cutoff any more: see `_thinking_evidence`. The
+    response to a cutoff -- more output room -- lives in `_output_raised` instead, so a
+    model that merely ran long keeps its headroom without the endpoint being treated as
+    slow for the rest of the run."""
+
+    _output_raised: bool = field(default=False, repr=False)
+    """Set once, for the rest of the run, by any reply truncated by length that could not
+    be used. The next request gets the raised ceiling from its first attempt.
+
+    Sticky and not per-call, because the alternative is measurably worse on both endpoints
+    it could meet: a model that genuinely needs a long answer would pay a truncated
+    attempt before every raised one, and a model looping into a degenerate generation
+    would pay the truncated attempt *as well as* the long one on every step. Stickiness
+    here costs nothing on an endpoint that answers within its budget -- a ceiling is not a
+    target -- which is why it is separated from the slow-endpoint verdict rather than
+    dropped with it."""
 
     _thinking_off: bool = field(default=False, repr=False)
-    """Set only after a raised request is STILL truncated: then, and only then, ask the
-    server to skip thinking (`enable_thinking=false`). Kept separate from raising the
-    budget because on a vLLM server that honours the flag, turning thinking off is the
-    part that can cut the model's capability -- the thing a big reasoning model is smart
-    for -- so it is the last resort, not the first response to seeing a reasoning field."""
+    """Set only after a raised request on a thinking endpoint is STILL truncated: then,
+    and only then, ask the server to skip thinking (`enable_thinking=false`). Kept
+    separate from raising the budget because on a vLLM server that honours the flag,
+    turning thinking off is the part that can cut the model's capability -- the thing a
+    big reasoning model is smart for -- so it is the last resort, not the first response
+    to seeing a reasoning field. Never sent to an endpoint that showed no sign of
+    thinking: there is nothing there to turn off, and the request buys another full-length
+    generation for nothing."""
 
     _output_cap: int = field(default=limits.LLM_THINKING_MAX_OUTPUT_TOKENS, repr=False)
     """Upper bound on the raised ceiling, lowered only when the server answers a raised
@@ -496,10 +606,14 @@ class HttpLlm:
             "max_tokens": tokens,
             "temperature": 0,
         }
-        if self._thinking_endpoint:
+        if self._output_raised or self._thinking_endpoint:
             # Room for the thinking span plus the answer: the caller's ceiling times a
             # factor, capped, so a deliberately low ceiling (macro's runaway guard) is
             # raised in proportion rather than flattened to 8192.
+            #
+            # Two ways in, and they mean different things: `_thinking_endpoint` says the
+            # completion has an invisible half to pay for, `_output_raised` only says a
+            # previous answer did not fit. Both need the same room.
             raised = tokens * limits.LLM_THINKING_TOKEN_MULTIPLIER
             body["max_tokens"] = min(self._output_cap, max(tokens, raised))
         if self._thinking_off:
@@ -669,7 +783,12 @@ class HttpLlm:
         if missing:
             return LlmError(reason=f"endpoint not configured: {', '.join(missing)}", retryable=False)
 
-        budget_s = limits.LLM_TIMEOUT_S if timeout_s is None else min(limits.LLM_TIMEOUT_S, timeout_s)
+        # The hard ceiling depends on what the endpoint has already shown itself to be.
+        # One reply of a reasoning model measured 110 s of generation on the stand that
+        # stands in for the evaluator, so capping it at `LLM_TIMEOUT_S` would throw away a
+        # reply the server is still producing; a fast endpoint keeps the old number.
+        ceiling = limits.LLM_THINKING_TIMEOUT_S if self._thinking_endpoint else limits.LLM_TIMEOUT_S
+        budget_s = ceiling if timeout_s is None else min(ceiling, timeout_s)
         if budget_s <= 0:
             return LlmError(reason="no time left for an llm call", retryable=False)
 
@@ -708,7 +827,17 @@ class HttpLlm:
                 # server already generated and billed. Mark the total a lower bound so
                 # `main` prints it as such rather than as an exact 0.
                 acc[2] = False
-                last = LlmError(reason=f"transport failed: {type(exc).__name__}", retryable=True)
+                last = LlmError(reason=_transport_reason(exc), retryable=True)
+                if _is_timeout(exc) and not self._thinking_endpoint and acc[1] == 0:
+                    # The one signal available on the very first call of a run, and the
+                    # one that cost the most: on the 30B stand every episode's first call
+                    # was cut by the pre-checkpoint clamp and the second was then sent at
+                    # the default ceiling and truncated mid-reasoning. A call that ran out
+                    # of wall clock having been handed no payload at all is an endpoint
+                    # that is still generating, so raise the ceiling now rather than pay
+                    # a second truncated attempt to learn the same thing.
+                    self._thinking_endpoint = True
+                    self._note("thinking", "call timed out with no payload; treating the endpoint as slow")
                 if not self._backoff(attempt, deadline):
                     return stamped(last)
                 continue
@@ -730,7 +859,7 @@ class HttpLlm:
                 # rather than downgrade the protocol, which would not fix the size.
                 if (
                     verdict == SHAPE
-                    and self._thinking_endpoint
+                    and (self._thinking_endpoint or self._output_raised)
                     and self._output_cap > limits.LLM_MAX_OUTPUT_TOKENS
                     and _looks_like_context_overflow(detail)
                 ):
@@ -779,33 +908,50 @@ class HttpLlm:
             acc[1] += completion_tokens
             acc[2] = acc[2] and reported
 
-            # A reasoning field or a length cutoff marks a thinking endpoint. Set it
-            # stickily so every later call gets the raised ceiling; `was_raised` records
-            # whether the request that just came back already had it, to tell a first
-            # truncation from one that survived the raise.
+            # Evidence of reasoning -- not a bare cutoff -- marks a thinking endpoint. Set
+            # it stickily so every later call gets the raised ceiling and the longer
+            # deadline; `was_raised` records whether the request that just came back
+            # already had the raised ceiling, to tell a first truncation from one that
+            # survived the raise.
             message = _first_message(payload)
             finish = _finish_reason(payload)
-            was_raised = self._thinking_endpoint
-            if not self._thinking_endpoint and (_has_reasoning_field(message) or finish == "length"):
+            was_raised = self._thinking_endpoint or self._output_raised
+            evidence = _thinking_evidence(
+                message,
+                finish,
+                requested_tokens=int(body.get("max_tokens", max_output_tokens)),
+                completion_tokens=completion_tokens,
+                usage_reported=reported,
+            )
+            if evidence and not self._thinking_endpoint:
                 self._thinking_endpoint = True
-                self._note("thinking", "reasoning endpoint; raising the output ceiling")
+                self._note("thinking", f"{evidence}; raising the output ceiling and the call deadline")
 
             text, reason = self._read_reply(payload, schema)
             if text is None:
                 if finish == "length":
                     # Truncated, not a shape problem, so the ladder must not step down.
-                    # Retry the same rung: first with the raised ceiling, then with
-                    # thinking disabled, then give up as truncated -- each is one attempt,
-                    # bounded by LLM_MAX_ATTEMPTS. `last` is set before the retry so that
-                    # if the deadline expires between attempts the returned error names
-                    # the truncation, not the placeholder "no attempt was made".
+                    # Retry the same rung: first with the raised ceiling, then -- only on
+                    # an endpoint that showed it thinks -- with thinking disabled, then
+                    # give up as truncated. Each is one attempt, bounded by
+                    # LLM_MAX_ATTEMPTS. `last` is set before the retry so that if the
+                    # deadline expires between attempts the returned error names the
+                    # truncation, not the placeholder "no attempt was made".
                     last = LlmError(reason=f"reply truncated by length at style {self.style}", retryable=False)
                     if not was_raised:
+                        self._output_raised = True
+                        # `budget` and not `thinking`: the answer needs more room, which
+                        # is a statement about this reply's length and not a verdict on
+                        # the endpoint. Keeping the two notes apart is what makes a trace
+                        # readable when only one of them fired.
+                        self._note("budget", "reply truncated by length; raising the output ceiling")
                         continue
-                    if not self._thinking_off:
+                    if self._thinking_endpoint and not self._thinking_off:
                         self._thinking_off = True
                         self._note("thinking", "still truncated; asking the endpoint to skip thinking")
                         continue
+                    # Nothing said this endpoint thinks, so there is no thinking to turn
+                    # off and a third full-length generation would buy the same answer.
                     return stamped(last)
                 last = LlmError(reason=f"{reason} at style {self.style}", retryable=False)
                 if schema is not None and self._demote(reason):

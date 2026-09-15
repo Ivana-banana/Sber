@@ -191,7 +191,43 @@ def test_allow_long_llm_lifts_the_pre_checkpoint_clamp() -> None:
     assert budget.llm_timeout_s() == budget.early_deadline_s, "clamped by default"
 
     budget.allow_long_llm = True
-    assert budget.llm_timeout_s() == limits.LLM_TIMEOUT_S, "full ceiling once lifted"
+    assert budget.llm_timeout_s() == limits.LLM_THINKING_TIMEOUT_S, "full ceiling once lifted"
+
+
+def test_allow_long_llm_raises_the_ceiling_above_one_thinking_reply() -> None:
+    """`F4-30b-paired`: lifting the clamp alone only moved the loss.
+
+    The ceiling stayed `min(LLM_TIMEOUT_S, spendable)` = 120 s, and one raised thinking
+    reply measured 6549 completion tokens = 110 s of generation plus a queue wait. The
+    call timed out instead of being truncated, and two such timeouts demoted the run to
+    `llm-unusable` -- two cells the control arm did not have.
+    """
+    budget, _ = make_budget(600.0)
+    budget.allow_long_llm = True
+
+    assert budget.llm_timeout_s() > limits.LLM_TIMEOUT_S
+    assert budget.llm_timeout_s() >= 2 * 110.0
+
+
+def test_a_fast_endpoint_never_reaches_the_thinking_ceiling() -> None:
+    # The 7B regression guard at the budget level: with the flag unset nothing about the
+    # per-call ceiling moves, before or after the checkpoint.
+    budget, clock = make_budget(600.0)
+    assert budget.llm_timeout_s() == budget.early_deadline_s
+
+    clock.advance(budget.early_deadline_s + 1.0)
+    assert budget.llm_timeout_s() == limits.LLM_TIMEOUT_S
+
+
+def test_the_thinking_ceiling_still_stops_at_the_verifier_reserve() -> None:
+    # The longer ceiling is a ceiling, not a grant: the reserve is what `spendable_s`
+    # already excludes, so a lifted clamp can never spend the verifier's seconds.
+    budget, clock = make_budget(600.0)
+    budget.allow_long_llm = True
+    clock.advance(600.0 - budget.verify_reserve_s - 7.0)
+
+    assert budget.llm_timeout_s() == 7.0
+    assert budget.remaining_s() > budget.llm_timeout_s()
 
 
 def test_allow_long_llm_still_respects_the_spendable_budget() -> None:

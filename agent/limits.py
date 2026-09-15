@@ -176,6 +176,22 @@ TOOL_OUTPUT_TAIL_BYTES = 2000
 """How much of a tool's output reaches the model. Head and tail are kept because the
 command and its failure usually live at opposite ends. Truncation is always marked."""
 
+EDIT_ECHO_CONTEXT_LINES = 4
+EDIT_ECHO_MAX_CHARS = 600
+"""How much of the file an anchored edit reports back, around the region it changed.
+
+Measured on the fix-sqli fixtures (`F4-30b-paired` traces, 15.09): after a successful
+`replace_text` the observation was `replaced 1 occurrence at line N` and nothing else,
+so the model never saw what its edit left behind. In 5 of 5 failed edits the anchor
+covered the statement that built the query but not the call that used it, leaving a
+stale or duplicated call line right next to the new one; in 4 of 4 successful edits the
+anchor included that call. The neighbouring statement is exactly what fits in a few
+lines of context, and it is the difference the model could not observe.
+
+Four lines each side and 600 characters, because this is paid on every edit and travels
+in the observation history: it is a window onto the edit, not a second `read_range`.
+"""
+
 VERIFY_DETAIL_CHARS = 1200
 """How much failed-check output is relayed in a verifier verdict.
 
@@ -296,6 +312,24 @@ core dump contains any short string by accident."""
 # --- LLM --------------------------------------------------------------------
 
 LLM_TIMEOUT_S = 120.0
+"""Ceiling on one logical call against an ordinary, non-thinking endpoint."""
+
+LLM_THINKING_TIMEOUT_S = 240.0
+"""Ceiling on one logical call once the endpoint is known to reason before answering.
+
+Measured, not chosen for roundness. On the 4080 stand `qwen3:30b-a3b` generates at ~60
+tok/s and one raised thinking reply cost 6549 completion tokens = 110 s of generation
+(`F4-30b-paired`, 15.09); the same card shows the request also waiting for a busy slot.
+At 120 s such a call cannot finish, and two consecutive client timeouts demoted the run
+to `llm-unusable` -- two cells the control arm did not have. 240 gives the measured 110 s
+call room for a queue wait of the same size and still leaves the run bounded.
+
+It is a ceiling and never a grant: `Budget.llm_timeout_s` takes the minimum of this, the
+spendable time and (before the checkpoint, on a fast endpoint) the checkpoint clamp, so
+the verifier reserve and the task deadline bound the call exactly as before. A fast
+endpoint never reaches this number -- it keeps `LLM_TIMEOUT_S`.
+"""
+
 LLM_MAX_OUTPUT_TOKENS = 2048
 LLM_THINKING_MAX_OUTPUT_TOKENS = 8192
 """Hard ceiling on the raised output budget once a thinking endpoint is detected. A
@@ -348,6 +382,23 @@ lower makes `native_tools` unreachable for the whole run. On an endpoint that ac
 actually documents -- the agent would spend three requests falling to `text` and never
 try the one shape that works. The defect is fixed where it belongs, in
 `agent.llm._unwrap_function_envelope`, which reads the reply this model really sends.
+"""
+
+# --- Diagnostics --------------------------------------------------------------
+
+TRACE_TOOLS_ENV_NAME = "AGENT_TRACE_TOOLS"
+TRACE_BUDGET_ENV_NAME = "AGENT_TRACE_BUDGET"
+"""Opt-in live traces, both off unless the variable is set to a non-empty value.
+
+`AGENT_TRACE_TOOLS` prints which tool ran with what result; `AGENT_TRACE_BUDGET` prints
+the `thinking` and `budget` notes the run writes to `state.audit` -- the endpoint being
+recognised as a reasoning model, the call clamp being lifted, a detector refusing an
+action. Both exist because a live zero cannot be told apart from the outside otherwise,
+and an evaluator reading the terminal should not have to open a trace file to see why a
+call was given 240 s instead of 90.
+
+Never on in a submission: the runner sets none of our variables, and both printers emit
+already-redacted text, so neither can carry the endpoint key.
 """
 
 # --- Where the task lives ----------------------------------------------------
@@ -409,9 +460,11 @@ allowed to finish has a real attempt behind it. A longer bound therefore loses n
 it was going to win and wins what the shorter one threw away.
 
 170 and not 180 leaves the margin for the program, the inspector and the exit. Note
-that `LLM_TIMEOUT_S` (120) still caps any single call, which is above the 57-80 s a
-program-writing call actually costs here and is deliberately left alone: it is the
-loop's constant too, and the loop is the control arm.
+that `LLM_TIMEOUT_S` (120) still caps any single call on an ordinary endpoint, which is
+above the 57-80 s a program-writing call actually costs here and is deliberately left
+alone: it is the loop's constant too, and the loop is the control arm. On an endpoint
+that has shown itself to reason the cap becomes `LLM_THINKING_TIMEOUT_S`, and this
+budget minus the program's own seconds is then what actually bounds the call.
 """
 
 MACRO_FINALIZE_RESERVE_S = 5.0

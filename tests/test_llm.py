@@ -386,7 +386,10 @@ def test_a_reasoning_field_raises_the_ceiling_on_later_calls_without_disabling_t
 
 
 def test_a_length_cutoff_escalates_raise_then_thinking_off_then_gives_up() -> None:
-    truncated = _reply("partial reasoning, no json", finish="length", completion=2048)
+    # The full escalation belongs to a cutoff that is *evidence* of thinking: the whole
+    # output budget spent and nothing visible in the reply. A cutoff with an ordinary
+    # answer stops one rung earlier -- see the next test.
+    truncated = _reply("", finish="length", completion=2048)
     client, endpoint, _ = make_client([(200, truncated)] * 3)
 
     result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
@@ -398,6 +401,26 @@ def test_a_length_cutoff_escalates_raise_then_thinking_off_then_gives_up() -> No
     assert "chat_template_kwargs" not in endpoint.bodies[1], "raise before disabling thinking"
     assert endpoint.bodies[2].get("chat_template_kwargs") == {"enable_thinking": False}, "third disables thinking"
     assert result.output_tokens == 3 * 2048, "all three truncated attempts are counted"
+
+
+def test_a_length_cutoff_with_an_ordinary_answer_stops_after_one_raised_retry() -> None:
+    # `F4-7b-regression-4080`: the fast 7B looped into a degenerate generation, hit the
+    # cap with an ordinary non-empty answer, and F4 read that as a thinking endpoint --
+    # three 8192-token replies and two steps at the long call ceiling, +250 s for the same
+    # zero. The answer still gets one retry with room; it never buys a third generation
+    # asking a model that does not think to stop thinking.
+    truncated = _reply("partial answer, no json", finish="length", completion=2048)
+    client, endpoint, _ = make_client([(200, truncated)] * 3)
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(result, LlmError)
+    assert "truncated by length" in result.reason
+    assert len(endpoint.bodies) == 2, "one raised retry, then the call is given up"
+    assert endpoint.bodies[0]["max_tokens"] == 2048
+    assert endpoint.bodies[1]["max_tokens"] == 8192, "the answer still gets room once"
+    assert not any("chat_template_kwargs" in body for body in endpoint.bodies)
+    assert client._thinking_endpoint is False, "a cutoff alone never marks a slow endpoint"
 
 
 def test_a_context_overflow_400_lowers_the_ceiling_without_a_protocol_downgrade() -> None:
@@ -446,7 +469,7 @@ def test_a_non_context_400_on_a_thinking_client_does_not_lower_the_cap() -> None
     # Even after the client is in thinking mode (raised ceiling), a 400 that is not about
     # context (an unsupported response_format) must step the protocol down, not be taken
     # for an overflow and halve the ceiling.
-    truncate = _reply("x", finish="length", completion=2048)  # sets thinking, retries raised
+    truncate = _reply("", finish="length", completion=2048)  # sets thinking, retries raised
     generic = (400, b"response_format is not supported")
     ok = _reply('{"tool": "list_dir"}')
     client, endpoint, _ = make_client([(200, truncate), generic, (200, ok)])
