@@ -3675,3 +3675,48 @@ timeout 5400 python3 scripts/eval/run_suite.py \
 - Решение: регресса нет, интеграции F4 это не блокирует; блокирует 30B-результат
   (`F4-30b-paired`: паритет + новый каскад таймаутов). Если F4 дорабатывать — сигнал
   должен требовать поле reasoning или замеренную скорость, а не голую отсечку по длине.
+
+### AFK-4080-final (2026-09-16) — ночной кандидат против базы на стенде Qwen3.6-35B-A3B: 12/18 → 14/18
+
+- Стенд **c** (`docs/research/live-runs/2026-09-16-stand-4080.md`): RTX 4080 16 ГБ,
+  `hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ3_XXS` (thinking, то же семейство, что у
+  организатора), `CONTEXT=16384`, `OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0`,
+  15 %/85 % CPU/GPU, 118,6 ток/с генерации, 2490 prefill. Харнесс с ожиданием простоя
+  слота (`--idle-wait-max 240`, H1 `2795ad5`), `--timeout-scale 1.0`, `REPEATS=3`,
+  `REUSE=1`, control → treatment подряд на одном тёплом стенде.
+- control: `f4.zip` = `8b568ac` (sha `246ef93e…`, тот же архив, что в `F4-30b-paired`).
+  treatment: `build/afk-treat.zip` = `61f4a4c` (sha
+  `65784ac23319a5849d9fad5e59e912bc3b911d3ddd2a582526b31e93f5e41523`, 137 368 байт,
+  `check_submission` PASS). Diff пары: B1 `872a303` (бюджет/thinking), C1 `8129b92`
+  (инлайн артефактов + playbook), G1 `a5bbeed`, правки по критику `7d563a9`, playbook
+  `61f4a4c`; C2 откачён (`08ea98e`), см. JOURNAL 04:30. Несколько факторов сразу —
+  это замер кандидата, не абляция.
+- Команды: `run_suite.py --archive <zip> --model 'hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ3_XXS' --repeats 3 --reuse-images --idle-wait-max 240 --out build/afk-q36-{control,treatment}`.
+- results.tsv: control `bd993229055a944e2a9a71524bfad0d2bc4a8bea13e3638b5e5dbb9767e7f7dc`,
+  treatment `5428612c38a890430cbf7b6bd5b8d359bcd573f10be178a02a0f74e023fa0be0`.
+
+| Задача | control r1/r2/r3 | treatment r1/r2/r3 |
+|---|---|---|
+| bye-file | 1/1/1 | 1/1/1 |
+| find-sqli-login | 1/1/1 (steps, ver, steps) | 1/1/1 (ver, stuck, steps) |
+| fix-sqli-login | 1/0/0 | **1/0/1** |
+| fix-sqli-search | 0/0/1 | **0/0/0** |
+| hello-file | 1/1/1 | 1/1/1 |
+| incident-log-forensics | 0/1/0 | **1/1/1** (ver 402 с, stuck 416 с, ver) |
+| **Σ reward** | **12/18** (4/4/4) | **14/18** (5/4/5) |
+| tokens / wall | 1 439 766 / 1926 с | 1 449 209 / 1986 с |
+
+- **Результат: +2 reward, solved по повторам 4/4/4 → 5/4/5, токены и время равны.**
+  incident-log-forensics впервые стабильно решается (3/3): инлайн семи файлов-улик в
+  бриф (C1) + чекпоинт «сначала прочитай источники» (B1) — ровно та первопричина, что
+  нашёл аналитик (агент не читал логи). fix-sqli-login 1/3 → 2/3 (эхо правки + якорь
+  на весь оператор). fix-sqli-search 1/3 → 0/3 — регресс или шум при n=3: все шесть
+  нулей control+treatment по `stop=steps` (30 вызовов за ~100 с), это следующая цель.
+- Профиль стенда c: быстрый thinking-эндпоинт выжигает **шаги**, а не время — из 10
+  нулей на treatment/control все по `steps`/`stuck`, ни одного `budget`/`llm-unusable`.
+  Потолок 240 с (B1) на этом стенде не срабатывал; его эффект измерим только на
+  медленном стенде (30B, 61 % GPU) — не измерено этой ночью.
+- Оговорки: n=3; кандидат содержит пять факторов (не разделены); квант IQ3_XXS
+  занижает качество относительно организаторского эндпоинта; сравнение с картами на
+  `qwen3:30b-a3b` — только по направлению (там control давал 11/18 за 5142 с, здесь
+  12/18 за 1926 с — стенд в 2,7 раза быстрее).
