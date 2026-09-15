@@ -20,6 +20,14 @@ STORE=${STORE:-/var/lib/ollama}
 # `OBSERVATION_BUDGET_CHARS` plus the system block, and `LLM_MAX_OUTPUT_TOKENS` is
 # 2048, so 4096 cannot hold both and the server truncates without saying so.
 CONTEXT=${CONTEXT:-4096}
+# Optional serving knobs, passed through only when set so the default stand stays the
+# one every earlier run was measured on. OLLAMA_KV_CACHE_TYPE=q8_0 halves the KV cache
+# (needs OLLAMA_FLASH_ATTENTION=1), which on a card that cannot hold the whole model
+# buys a few more layers on the GPU; both are stand factors and go in the run card.
+EXTRA_ENV=""
+[ -n "${OLLAMA_FLASH_ATTENTION:-}" ] && EXTRA_ENV="$EXTRA_ENV -e OLLAMA_FLASH_ATTENTION=$OLLAMA_FLASH_ATTENTION"
+[ -n "${OLLAMA_KV_CACHE_TYPE:-}" ] && EXTRA_ENV="$EXTRA_ENV -e OLLAMA_KV_CACHE_TYPE=$OLLAMA_KV_CACHE_TYPE"
+[ -n "${OLLAMA_KEEP_ALIVE_OVERRIDE:-}" ] && EXTRA_ENV="$EXTRA_ENV -e OLLAMA_KEEP_ALIVE=$OLLAMA_KEEP_ALIVE_OVERRIDE"
 
 docker network inspect "$NETWORK" >/dev/null 2>&1 || \
   docker network create --internal --subnet 172.28.0.0/24 --gateway 172.28.0.1 "$NETWORK"
@@ -42,6 +50,7 @@ start_model() {
     -e OLLAMA_MAX_LOADED_MODELS=1 \
     -e OLLAMA_KEEP_ALIVE=30m \
     -e OLLAMA_CONTEXT_LENGTH="$CONTEXT" \
+    $EXTRA_ENV \
     ollama/ollama:latest >/dev/null
 }
 
