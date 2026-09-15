@@ -45,6 +45,7 @@ import subprocess
 import sys
 import time
 import tomllib
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -74,6 +75,35 @@ DOCKER_STEP_TIMEOUT_S = 900.0
 # Slack added to the agent's own kill so `timeout` inside the container is what stops
 # the run, and this process only steps in if the container itself wedged.
 OUTER_SLACK_S = 30.0
+
+IDLE_WAIT_MAX_S = 240.0
+"""How long an episode may wait for the endpoint to finish the previous episode's work.
+
+The endpoint serves one request at a time and does not cancel: a call the agent
+abandoned -- at its own clamp, at the harness kill, or because the run stopped on
+budget -- keeps generating after the client is gone. Measured on the RTX 4080 stand
+(F4-30b-paired) that tail ran one to two and a half minutes, and the next episode's
+first call simply queued behind it: 31 requests per arm spent over 60 s on five to
+seven seconds of work, and two cells died in the queue without the agent having done
+anything wrong. Those are not measurements of the arm, they are measurements of the
+previous arm's leftovers.
+
+240 s covers the longest tail seen there with margin. The bound exists so a wedged
+endpoint costs one episode's patience rather than the night.
+"""
+
+IDLE_POLL_S = 2.0
+"""Gap between `in_flight` polls. Each costs a `docker exec`, so not tighter; every
+second of slack past the drain is wasted wall clock, so not looser."""
+
+IDLE_NOTE_S = 1.0
+"""Below this, the elapsed time is the cost of asking, not time spent waiting.
+
+One poll is a `docker exec` into the counter container and a Python interpreter start:
+a few hundred milliseconds even when the endpoint answers `in_flight: 0` on the first
+look. Reporting that would put the same constant in every row's `note` and bury the
+rows where the previous episode's tail actually cost something.
+"""
 
 DONE_LINE = re.compile(
     r"agent done: solved=(?P<solved>\w+) stop=(?P<stop>\S+) stage=(?P<stage>\S+) "
@@ -264,6 +294,53 @@ def run(
     )
 
 
+def wait_for_idle_upstream(
+    counters: Callable[[], dict[str, object] | None],
+    max_wait_s: float,
+    *,
+    now: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    poll_s: float = IDLE_POLL_S,
+) -> tuple[float, str]:
+    """Block until the proxy reports no upstream request in flight.
+
+    Returns the seconds waited and why the wait ended: `idle` when the endpoint
+    drained, `timeout` when it did not within `max_wait_s`, `disabled` when no wait was
+    asked for, and `unknown` when the proxy cannot answer the question.
+
+    Every outcome lets the episode proceed. A harness that refused to run because it
+    could not confirm an idle endpoint would convert a slow endpoint into a missing
+    row, which is strictly worse than a slow row: the queueing this guards against
+    distorts a measurement, it does not invalidate the run.
+
+    `unknown` covers every way the question goes unanswered and treats them alike: the
+    proxy could not be reached, or it answered without the field because it predates it.
+    Neither can be told apart from here, and in both the honest answer is that this
+    harness has no idea whether the endpoint is busy -- so it stops waiting instead of
+    burning `max_wait_s` learning nothing, and says so to whoever reads the log.
+
+    The clock and the sleep are parameters so the timing can be tested without one.
+    """
+    if max_wait_s <= 0:
+        return 0.0, "disabled"
+    started = now()
+    deadline = started + max_wait_s
+    while True:
+        snapshot = counters()
+        reported = snapshot.get("in_flight") if isinstance(snapshot, dict) else None
+        if not isinstance(reported, (int, float)):
+            reason = "unknown"
+        elif reported <= 0:
+            reason = "idle"
+        elif now() >= deadline:
+            reason = "timeout"
+        else:
+            # Never past the deadline: the bound is what the caller was promised.
+            sleep(min(poll_s, deadline - now()))
+            continue
+        return round(now() - started, 1), reason
+
+
 def task_names(root: Path) -> list[str]:
     """Every package under `root`, and nothing else.
 
@@ -369,6 +446,42 @@ class Runner:
             return json.loads(answered.stdout)
         except ValueError:
             return None
+
+    def in_flight_snapshot(self) -> dict[str, object] | None:
+        """The counter's view, or nothing when the proxy cannot be asked.
+
+        `counter_call` lets a `docker exec` that overruns its own timeout raise. That is
+        right where a missing counter means a missing metric, and wrong here: refusing
+        to start an episode because the harness could not ask a question would cost the
+        row it is trying to protect.
+        """
+        try:
+            return self.counter_call("/__counters", "GET")
+        except subprocess.TimeoutExpired:
+            return None
+
+    def wait_for_idle(self, spec: TaskSpec, repeat: int) -> tuple[float, str]:
+        """Let the endpoint finish the previous episode before this one starts.
+
+        Without this the first call of an episode competes with a generation nobody is
+        waiting for, and the row records the queue rather than the agent.
+        """
+        if not self.args.counter_container:
+            return 0.0, "disabled"
+        waited, reason = wait_for_idle_upstream(
+            self.in_flight_snapshot,
+            float(getattr(self.args, "idle_wait_max", IDLE_WAIT_MAX_S)),
+        )
+        if waited >= IDLE_NOTE_S or reason != "idle":
+            # `unknown` is reported too: it means this guard did nothing, and a row
+            # measured without it should not look like a row measured with it.
+            print(
+                f"idle wait: {spec.name} r{repeat} waited {waited:.1f}s "
+                f"for the endpoint ({reason})",
+                file=sys.stderr,
+                flush=True,
+            )
+        return waited, reason
 
     def image_tag(self, spec: TaskSpec) -> str:
         return f"sber-eval/{spec.name}:latest"
@@ -555,6 +668,15 @@ class Runner:
                 base.note = f"install failed: {error}"
                 return base
 
+            # Here and not at the top of the episode: building and starting the
+            # container is work the endpoint can drain underneath, so only the
+            # remainder of the previous episode's tail is paid for as idle time.
+            waited, idle_reason = self.wait_for_idle(spec, repeat)
+            if waited >= IDLE_NOTE_S or idle_reason == "timeout":
+                base.note = f"idle_wait={waited:.1f}s" + (
+                    "" if idle_reason == "idle" else f" ({idle_reason})"
+                )
+
             self.counter_call("/__reset", "POST")
             proc, wall, killed = self.exec_agent(container, spec)
             counters = self.counter_call("/__counters", "GET")
@@ -640,7 +762,9 @@ class Runner:
                 # clutter behind.
                 self.post_mortem(container, spec, deliverable, repeat)
             if note:
-                base.note = note
+                # Appended, not assigned: an idle wait recorded before the agent ran is
+                # part of this row's story, and a verifier note is no reason to lose it.
+                base.note = f"{base.note} {note}".strip()
             base.failure_mode = classify_failure(base, killed=killed)
             return base
         finally:
@@ -706,6 +830,13 @@ def main() -> int:
         "--counter-container", default="",
         help="name of a running counting_proxy container; empty disables the counter",
     )
+    parser.add_argument(
+        "--idle-wait-max", type=float, default=IDLE_WAIT_MAX_S, metavar="SECONDS",
+        help="before each episode, wait up to this many seconds for the counting proxy "
+             "to report no request in flight at the endpoint, so the episode does not "
+             "queue behind the previous one's abandoned generation; 0 disables the idle "
+             "wait, and a wait that expires is logged and the episode runs anyway",
+    )
     parser.add_argument("--reuse-images", action="store_true",
                         help="use existing local task images without building or pulling")
     parser.add_argument("--repeats", type=int, default=1)
@@ -726,6 +857,8 @@ def main() -> int:
 
     if args.repeats < 1 or args.timeout_scale <= 0:
         parser.error("repeats and timeout-scale must be positive")
+    if args.idle_wait_max < 0:
+        parser.error("idle-wait-max must be zero or positive")
     out = Path(args.out)
     try:
         reserve_output(out)
@@ -766,6 +899,7 @@ def main() -> int:
         "expected_tasks": names, "repeats": args.repeats, "model": args.model,
         "timeout_scale": args.timeout_scale, "controller": args.controller or "archive default",
         "tell_agent_budget": args.tell_agent_budget, "reuse_images": args.reuse_images,
+        "idle_wait_max_s": args.idle_wait_max,
         "sampling": "archive settings; request samples retained in logs", "images": {},
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")

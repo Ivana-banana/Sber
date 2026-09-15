@@ -74,6 +74,21 @@ class Counters:
         `fix-redirect-scheme` were byte-for-byte the answer `fix-cache-key-scope` was
         still working on when it was killed.
         """
+        self.in_flight = 0
+        """Upstream requests started and not yet finished, whoever is still listening.
+
+        Deliberately outside `_zero`: a reset happens between tasks, and the request
+        this number exists to expose is exactly the one that outlives its task. Zeroing
+        it there would erase the previous task's generation and then drive the count
+        negative when that answer finally arrives.
+
+        The endpoint serves one slot, so a non-zero value means the next task's first
+        call will queue behind work nobody is waiting for. Measured on the RTX 4080
+        stand (F4-30b-paired): every request abandoned at the agent's clamp or timeout
+        kept generating for another one to two and a half minutes, and the following
+        episode's first call paid for it -- twice fatally, as a 120 s kill spent
+        entirely in the queue.
+        """
         self._zero()
 
     def _zero(self) -> None:
@@ -98,6 +113,21 @@ class Counters:
         with self.lock:
             self.epoch += 1
             self._zero()
+
+    def start(self) -> None:
+        """One upstream request has begun. Paired with `finish` on every path."""
+        with self.lock:
+            self.in_flight += 1
+
+    def finish(self) -> None:
+        """That request is over: answered, refused, or failed.
+
+        Clamped at zero so an unpaired call -- a proxy restarted while a request was
+        open, say -- degrades into an over-eager idle report rather than a negative
+        count that would read as idle forever.
+        """
+        with self.lock:
+            self.in_flight = max(0, self.in_flight - 1)
 
     def record(self, payload: bytes, epoch: int, sent: bytes = b"") -> None:
         with self.lock:
@@ -209,6 +239,7 @@ class Counters:
                 "responses_without_usage": self.responses_without_usage,
                 "upstream_errors": self.upstream_errors,
                 "late_responses": self.late_responses,
+                "in_flight": self.in_flight,
             }
 
 
@@ -267,6 +298,11 @@ class Handler(BaseHTTPRequestHandler):
             headers=headers,
             method=self.command,
         )
+        # The count is taken around the upstream call and released in `finally`, so a
+        # client that walked away mid-answer -- the normal end of a killed task -- still
+        # clears the slot the moment the model stops generating, and an exception this
+        # function does not name cannot leave the proxy looking permanently busy.
+        COUNTERS.start()
         try:
             with urllib.request.urlopen(request, timeout=UPSTREAM_TIMEOUT_S) as response:
                 payload = response.read()
@@ -285,6 +321,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         else:
             COUNTERS.record(payload, epoch, body)
+        finally:
+            COUNTERS.finish()
 
         self.send_response(status)
         self.send_header("Content-Type", content_type)
