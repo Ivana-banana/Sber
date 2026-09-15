@@ -3568,3 +3568,69 @@ timeout 5400 python3 scripts/eval/run_suite.py \
 - Побочно: control-архив (уже с thinking-fixes/`write_json`) даёт 3/6 на 7B против
   задокументированной базы 2/6 — `find-sqli-login` конвертируется и на 7B. n=1, не вывод.
 - Не сделано: причинный замер F4 (30B/4080) — стенда с 18 ГБ на этой машине нет.
+
+### F4-30b-paired (2026-09-15) — причинный замер F4 на 30B/4080: solved-паритет 11/18 = 11/18, incident не сдвинулся
+
+- Гейт #2 плана `docs/research/live-runs/2026-09-14-F4-paired-measurement-plan.md`: парный
+  прогон control → treatment на одном тёплом стенде, один фактор — F4 (`allow_long_llm`).
+- Стенд: RTX 4080 **16 ГБ** (не 18, как в плане), `qwen3:30b-a3b` в `ollama/ollama:latest`
+  (0.34.0), `CONTEXT=16384`, `ollama ps`: `39%/61% CPU/GPU`, 20 ГБ футпринт, один слот;
+  модели из `~/.ollama/models` (`STORE=$HOME/.ollama/models`, `/var/lib/ollama` на этой
+  машине пуст). `sber-proxy` (counting_proxy), `--timeout-scale 1.0`, `REPEATS=3`,
+  `REUSE=1` (образы `sber-eval/*` от 13.09 новее пакетов задач; ID образов меняются при
+  каждой пересборке, поэтому сверка с манифестом L-Q3-FIX невозможна по построению).
+- Пара из коммитов (worktree): control `64636f9` → `nof4.zip`
+  `19cc77e162abb79771c47615142b36c2717abc7734ad4584fa5de548538bf4f9`; treatment `8b568ac` →
+  `f4.zip` `246ef93eba31aa5881325ff811d71a1fcde7c0c6ece89ed6a6f0208951b2a102`. Оба SHA
+  побайтно совпали с ноутбучной сборкой из плана; `check_submission.py` — PASS.
+- Команда: `REUSE=1 MODEL=qwen3:30b-a3b PROXY=sber-proxy TAG=30b scripts/eval/f4_paired_measurement.sh /tmp/c/build/nof4.zip /tmp/t/build/f4.zip`
+  (control start 15:30:16, treatment start 16:56:55 МСК).
+- results.tsv: control `7d7867785d719e835fafd68dc017d9e1e62d74cd65797b7e2cdcec118bb7f860`,
+  treatment `1fadf9e73652b23f88f68f40cde7fb74757d0991135a0e0e02a4e246bb7d1135`
+  (`build/f4-paired-30b-{control,treatment}/`). Лог ollama за весь прогон —
+  `build/f4-paired-30b-ollama.log`.
+
+| Задача | control r1 / r2 / r3 | treatment r1 / r2 / r3 |
+|---|---|---|
+| bye-file | 1 ver / 1 ver / 1 ver | **0 killed (очередь)** / 1 ver / 1 ver |
+| find-sqli-login | 1 budget / 1 budget / 1 ver | 1 ver / 1 ver / 1 ver |
+| fix-sqli-login | 0 budget / 0 verif / **1 ver** | **1 budget** / 0 budget / **0 llm-unusable** |
+| fix-sqli-search | 0 verif / 0 verif / 1 ver | **0 llm-unusable** / 0 verif / 1 ver |
+| hello-file | 1 ver / 1 ver / **0 killed (сирота)** | 1 ver / 1 ver / 1 ver |
+| incident-log-forensics | 0 budget ×3 | 0 budget ×3 |
+| **Σ reward** | **11/18** (по повторам 3/3/4, объединение 5/6) | **11/18** (3/3/4, объединение 5/6) |
+| tokens (нижняя граница) / wall | 332 810 / 5142 с | 279 583 / 4920 с |
+
+- **Результат: solved-паритет, ожидаемого +1 нет.** Incident на treatment трижды
+  `stop=budget` с неверным ответом; F4 при этом механически сработал (шаги плана по
+  99–101 с за пределами 90-с клампа), но задаче не хватает не времени на вызов, а
+  рассуждения. find-sqli-login на treatment все три раза `verified` вместо двух `budget`
+  — единственный внятный сдвиг в пользу F4 (reward тот же).
+- **Новый режим отказа на treatment:** две ячейки `llm-unusable/endpoint` (fix-login r3,
+  fix-search r1), профиль 90 + 120 + 120 с. Один raised thinking-вызов даёт 6549
+  completion-токенов = 110 с генерации при 60 ток/с, плюс ожидание слота — вызов
+  вылетает за `LLM_TIMEOUT_S=120`, два таймаута подряд демотируют лестницу. На control
+  таких ячеек нет (кламп режет на 90 с и агент идёт дальше). Таймауты ~120 с: 5 → 8
+  шагов; late-ответы прокси (`ep_late`, сироты): 6 → 10; клампы ~90 с: 11 = 11 (F4 не
+  спасает первый вызов эпизода — по дизайну); эпизоды с «lower bound»: 13 → 10.
+- **Находка стенда (обе стороны):** `counting_proxy` намеренно держит upstream-соединение
+  после ухода клиента, чтобы досчитать usage. На одном слоте ollama каждый оборванный
+  (клампом, таймаутом или бюджетом) вызов становится «сиротой», которого сервер
+  догенерирует 1–2,5 мин, а следующий запрос — в том числе следующей задачи или
+  следующего архива — ждёт в очереди. В GIN-логе 31 запрос на каждой стороне длится
+  >60 с при 5–7 с реальной работы. Жертвы: control hello r3 (второй вызов в json_schema
+  ушёл в thinking, обрезан на 90, killed на 120), treatment bye r1 (первый вызов ждал
+  слот за сиротой incident r3 из control, killed на 120). Обе ячейки — не reasoning.
+- **Решение по гейтам:** #1 валидность — control 3–4/6 по повторам согласуется с L-Q3-FIX
+  4/6, fix-sqli-login впервые решена на 30B (1/3 на обеих сторонах: нестабильна, а не
+  невозможна). #2 — solved не упал, но и выигрыша нет; F4 в текущем виде **не
+  интегрировать**: потолок `min(LLM_TIMEOUT_S, spendable)` = 120 с короче одного
+  thinking-вызова на этой скорости, и снятие клампа превращает обрыв-и-продолжить в
+  таймаут-и-демоцию.
+- Следующие факторы: (a) `LLM_TIMEOUT_S` под thinking (≥ 180 с или по скорости токенов)
+  либо cap на длину рассуждения; (b) харнесс: ждать простоя слота между эпизодами или рвать
+  upstream при уходе клиента (терять usage сироты честнее, чем ронять соседний эпизод);
+  (c) демоция в llm-unusable после двух таймаутов на медленном эндпоинте слишком жёсткая.
+- Оговорки: n=3; две ячейки-жертвы очереди распределены по одной на сторону, без них
+  паритет сохраняется (11 vs 11 → 12 vs 12); токены — нижняя граница (сироты usage не
+  отдают); стенд 61 % GPU — лучшее физически возможное для 20 ГБ на 16-ГБ карте.
