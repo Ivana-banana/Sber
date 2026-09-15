@@ -3634,3 +3634,44 @@ timeout 5400 python3 scripts/eval/run_suite.py \
 - Оговорки: n=3; две ячейки-жертвы очереди распределены по одной на сторону, без них
   паритет сохраняется (11 vs 11 → 12 vs 12); токены — нижняя граница (сироты usage не
   отдают); стенд 61 % GPU — лучшее физически возможное для 20 ГБ на 16-ГБ карте.
+
+### F4-7b-regression-4080 (2026-09-15) — регресс-страж F4 на быстром 7B, n=3: solved 6/18 → 7/18, регресса нет, но сигнал F4 ложно срабатывает на отсечке по длине
+
+- Гейт #3 плана F4 на стабильном стенде (дополняет `F4-7b-regression` от 14.09, n=1, где
+  три ячейки были endpoint-отказами ноутбука). Та же пара `64636f9` → `8b568ac`, те же
+  архивы и SHA, что в `F4-30b-paired`.
+- Стенд: RTX 4080, `qwen2.5-coder:7b-instruct-q4_K_M`, `CONTEXT=4096`, `ollama ps`:
+  **`100% GPU`**, ~100 ток/с; `sber-proxy`, `--timeout-scale 1.0`, `REPEATS=3`, `REUSE=1`.
+  Команда: `REUSE=1 MODEL=qwen2.5-coder:7b-instruct-q4_K_M PROXY=sber-proxy TAG=7b scripts/eval/f4_paired_measurement.sh /tmp/c/build/nof4.zip /tmp/t/build/f4.zip`
+  (control start 18:23:11, treatment 18:38:46 МСК). Лог ollama — `build/f4-paired-7b-ollama.log`.
+- results.tsv: control `65363e2daa649afe1d5b9b94f872e2aa26304d6e84870ab30efbd34f76d348e0`,
+  treatment `483c48a76b48252e0368702ea23b5bf9c988399f11ba4d90f7eed029e6baa1b2`.
+
+| Задача | control r1 / r2 / r3 | treatment r1 / r2 / r3 |
+|---|---|---|
+| bye-file | 1 / 1 / 1 | 1 / 1 / 1 |
+| find-sqli-login | 0 / 0 / 0 (steps) | 0 / **1** / 0 (steps) |
+| fix-sqli-login | 0 / 0 / 0 (steps) | 0 / 0 / 0 (steps; r2 **381 с**) |
+| fix-sqli-search | 0 / 0 / 0 (steps) | 0 / 0 / 0 (steps) |
+| hello-file | 1 / 1 / 1 | 1 / 1 / 1 |
+| incident-log-forensics | 0 / 0 / 0 (steps) | 0 / 0 / 0 (steps) |
+| **Σ reward** | **6/18** (2/2/2) | **7/18** (2/3/2) |
+| deliverable есть / killed | 18/18 / 0 | 18/18 / 0 |
+| tokens / wall | 1 019 598 / 883 с | 1 041 355 / 1173 с |
+
+- **Гейт #3 пройден: solved и deliverable не упали** (7 ≥ 6; +1 на find-sqli-login r2 —
+  одиночная ячейка, шум на грани, не выигрыш F4). Гейт #4: killed = 0 на обеих сторонах.
+- **Быстрый 7B — другая картина, чем на ноутбуке:** все нули по `stop=steps` (30 шагов за
+  12–150 с), ни одного `budget`; find-sqli-login на 4080 даёт 0/3 против 1/1 (`budget`) у
+  IR6 — на быстром эндпоинте агент выжигает шаги, не время. Ни одного клампа ~90 с на
+  control (F4 тут нечего снимать).
+- **Ложное срабатывание сигнала F4 (treatment fix-sqli-login r2):** 7B ушёл в вырожденную
+  генерацию до `max_tokens=8192` (три ответа по 8192 токена, ~85 с каждый в логе
+  ollama). Отсечка по длине трактуется `_endpoint_is_slow_or_thinking` как признак
+  thinking-эндпоинта → `allow_long_llm=True` → шаги 17–18 по **120 с** (клиентский
+  таймаут) вместо 90-с клампа. Итог той же нулевой ячейки: 381 с против ~130 с у control,
+  +250 с wall. На solved не повлияло, но это ровно случай «ужесточить сигнал» из плана:
+  `finish_reason=length` без поля reasoning — не thinking, а зацикливание.
+- Решение: регресса нет, интеграции F4 это не блокирует; блокирует 30B-результат
+  (`F4-30b-paired`: паритет + новый каскад таймаутов). Если F4 дорабатывать — сигнал
+  должен требовать поле reasoning или замеренную скорость, а не голую отсечку по длине.
