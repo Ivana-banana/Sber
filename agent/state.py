@@ -364,6 +364,12 @@ class AgentState:
     opened the file). A code-fix write_file to an unread existing source is refused, so
     the run cannot overwrite a module it never opened -- the 14B fix-sqli failure."""
 
+    relaunch_commands: set[str] = field(default_factory=set, repr=False)
+    """Exact shell lines this run itself offered as a service restart (`agent.loop`,
+    stale-service hint). The code-fix shell policy refuses compound commands and
+    `nohup`, which is every way to background a service, so the one command the hint
+    hands the model is let through verbatim and nothing resembling it is."""
+
     audit: list[Event] = field(default_factory=list)
     """Append-only trace. Nothing removes entries; truncation happens at render time."""
 

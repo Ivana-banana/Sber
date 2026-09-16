@@ -1579,4 +1579,8 @@ def _relaunch_command(argv: Sequence[str], secrets: Sequence[str]) -> str:
             return ""
         previous = token
     quoted = " ".join(shlex.quote(token) for token in argv)
-    return redact(quoted, secrets)[: limits.SERVICE_SCAN_TOKEN_CHARS * 8]
+    if len(quoted) > limits.SERVICE_SCAN_TOKEN_CHARS * 8 or redact(quoted, secrets) != quoted:
+        # A cut or redacted command line is not a command: offering it as "ready" would
+        # start something else, or nothing, in place of the service.
+        return ""
+    return quoted

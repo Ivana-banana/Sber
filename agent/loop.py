@@ -2496,7 +2496,7 @@ def _execute(
 
     if tool == prompt.RUN_SHELL:
         command = str(args["command"])
-        if playbook.name == "code-fix":
+        if playbook.name == "code-fix" and command.strip() not in state.relaunch_commands:
             refusal = _code_fix_shell_refusal(command, state)
             if refusal:
                 return tools.ToolResult(name=tool, ok=False, detail=refusal)
@@ -2933,10 +2933,14 @@ def _stale_service(
         cwd_note = f" (`{process.cwd}`)" if process.cwd else ""
         relaunch = ""
         if process.command:
-            where = f"cd {process.cwd} && " if process.cwd else ""
+            where = f"cd {shlex.quote(str(process.cwd))} && " if process.cwd else ""
+            # Braces background the service alone: `a && b &` backgrounds a subshell that
+            # bash keeps holding our output pipe with, and the tool then waits out its
+            # whole timeout and kills the service it just started. dash does not, bash does.
+            ready = f"{where}{{ nohup {process.command} >/tmp/service-restart.log 2>&1 </dev/null & }}"
+            state.relaunch_commands.add(ready)
             relaunch = (
-                f" Готовая команда: `{where}nohup {process.command} "
-                ">/tmp/service-restart.log 2>&1 &` — после неё проверь, что порт снова "
+                f" Готовая команда: `{ready}` — после неё проверь, что порт снова "
                 "отвечает, прежде чем гонять тесты."
             )
         hint = (
