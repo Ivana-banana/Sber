@@ -7632,6 +7632,75 @@ def test_a_probe_that_touches_git_metadata_is_reported_and_ends_the_privilege(tm
     assert state.python_probes_disabled is True
 
 
+def test_a_symlink_smuggled_into_the_evaluator_is_removed(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_a.py").write_text("def test_a(): pass\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text("def test_z(): assert False\n", encoding="utf-8")
+    state = make_state(tmp_path)
+
+    result = _probe("python3 -c \"import os; os.symlink('../app.py', 'te' + 'sts/te' + 'st_link.py')\"", state)
+
+    assert result.ok is False and "test_link.py" in result.detail
+    assert not (tmp_path / "tests" / "test_link.py").is_symlink()
+    assert (tmp_path / "app.py").exists()
+
+
+def test_a_symlink_already_in_the_evaluator_is_kept_and_put_back_if_replaced(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "shared_test.py").write_text("def test_s(): pass\n", encoding="utf-8")
+    link = tmp_path / "tests" / "test_shared.py"
+    link.symlink_to("../shared_test.py")
+    state = make_state(tmp_path)
+
+    harmless = _probe("python3 -c 'print(1)'", state)
+    assert harmless.ok is True and state.python_probes_disabled is False
+
+    replaced = _probe(
+        "python3 -c \"import os; p='te'+'sts/te'+'st_shared.py'; os.unlink(p); open(p, 'w').write('x')\"", state
+    )
+    assert replaced.ok is False and "test_shared.py" in replaced.detail
+    assert link.is_symlink() and os.readlink(link) == "../shared_test.py"
+
+
+def test_a_probe_that_changes_a_mode_gets_the_mode_restored(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    target = tmp_path / "tests" / "test_a.py"
+    target.write_text("def test_a(): pass\n", encoding="utf-8")
+    target.chmod(0o644)
+    state = make_state(tmp_path)
+
+    result = _probe("python3 -c \"import os; os.chmod('te' + 'sts/te' + 'st_a.py', 0)\"", state)
+
+    assert result.ok is False and "test_a.py" in result.detail and "could not" not in result.detail
+    assert (target.stat().st_mode & 0o777) == 0o644
+    assert target.read_text(encoding="utf-8") == "def test_a(): pass\n"
+
+
+def test_a_watched_root_is_reported_but_not_restored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    logs = tmp_path.parent / f"{tmp_path.name}-logs"
+    logs.mkdir()
+    (logs / "reward.txt").write_text("0\n", encoding="utf-8")
+    monkeypatch.setattr(loop, "_EXTRA_PROTECTED_ROOTS", (logs,))
+    state = make_state(tmp_path)
+
+    result = _probe(f"python3 -c \"open('{logs}/reward.txt', 'w').write('1')\"", state)
+
+    assert result.ok is False and "watched, not restored" in result.detail
+    assert (logs / "reward.txt").read_text(encoding="utf-8") == "1"
+    assert state.python_probes_disabled is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -c 'import os; os.posix_spawn(\"/bin/rm\", [\"rm\", \"x\"], {})'",
+        "python3 -c 'import multiprocessing as mp; mp.Process(target=print, daemon=True).start()'",
+    ],
+)
+def test_spawning_through_posix_spawn_or_multiprocessing_is_refused_up_front(tmp_path: Path, command: str) -> None:
+    assert loop._code_fix_shell_refusal(command, make_state(tmp_path)) != ""
+
+
 def test_a_harmless_probe_runs_and_keeps_the_privilege(tmp_path: Path) -> None:
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "conftest.py").write_text("x = 1\n", encoding="utf-8")

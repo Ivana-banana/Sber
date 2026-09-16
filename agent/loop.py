@@ -2451,7 +2451,8 @@ def _code_fix_shell_has_configured_git_execution(command: str, state: AgentState
 _PYTHON_SPAWN = re.compile(
     r"""(?x)
     \bsubprocess\b | \bctypes\b | \bpty\b | \bbuiltins\b
-  | \bos\.(?:system|popen|exec\w*|spawn\w*|fork|kill|killpg)\b
+  | \bos\.(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*|kill|killpg)\b
+  | \bmultiprocessing\b
   | \bshutil\.rmtree\b
   | \b(?:exec|eval|compile|__import__)\s*\(
     """
@@ -2469,13 +2470,50 @@ cannot undo.
 _PROTECTED_SNAPSHOT_MAX_FILES = 400
 _PROTECTED_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024
 _EXTRA_PROTECTED_ROOTS = (Path("/logs"),)
+"""Watched, never restored: `/logs` belongs to the runner and the verifier, which may be
+writing there during the probe. A change under it is reported as a violation; putting
+it back would be a second intervention into someone else's directory."""
+
+
+@dataclass(frozen=True)
+class _Guarded:
+    """One protected path as it was before the probe. Symlinks keep their target, not
+    the file behind it, so a probe cannot smuggle one into `tests/`."""
+
+    mode: int
+    content: bytes | None = None
+    link: str | None = None
+
+
+def _is_raw_evaluator_path(path: Path, root: Path) -> bool:
+    """`_is_evaluator_path` on the spelling, not the target: a symlink `tests/test_x.py`
+    resolves to whatever it points at, and the guard must still see it as a test."""
+    try:
+        parts = tuple(part.lower() for part in path.relative_to(root).parts)
+    except ValueError:
+        return False
+    filename = parts[-1] if parts else ""
+    return any(part in _EVALUATOR_DIRS for part in parts) or (
+        filename in _EVALUATOR_FILES or filename.startswith("test_") or filename.endswith("_test.py")
+    )
 
 
 def _protected_files(state: AgentState) -> list[Path] | None:
-    """Every file a probe must leave alone; None when there are too many to snapshot."""
+    """Every path a probe must leave alone; None when there are too many to snapshot.
+
+    Known gap, on purpose: `__pycache__` and the other `_INODE_SCAN_SKIP` directories
+    are not walked, so compiled bytecode of the tests is outside the guard.
+    """
     found: list[Path] = []
     total = 0
-    roots = [state.workspace, *[root for root in _EXTRA_PROTECTED_ROOTS if root.is_dir()]]
+    extra_roots = []
+    for root in _EXTRA_PROTECTED_ROOTS:
+        try:
+            if root.is_dir():
+                extra_roots.append(root.resolve())
+        except OSError:
+            continue
+    roots = [state.workspace, *extra_roots]
     for root in roots:
         try:
             root = root.resolve()
@@ -2486,13 +2524,16 @@ def _protected_files(state: AgentState) -> list[Path] | None:
             dirs[:] = [d for d in dirs if d not in _INODE_SCAN_SKIP]
             for name in files:
                 path = here / name
-                if root in [r.resolve() for r in _EXTRA_PROTECTED_ROOTS if r.is_dir()] or (
-                    _is_evaluator_path(path, state) or _is_repository_control_path(path, state)
+                if root in extra_roots or (
+                    _is_evaluator_path(path, state)
+                    or _is_raw_evaluator_path(path, root)
+                    or _is_repository_control_path(path, state)
                 ):
                     try:
-                        if path.is_symlink() or not path.is_file():
-                            continue
-                        total += path.stat().st_size
+                        if not path.is_symlink():
+                            if not path.is_file():
+                                continue
+                            total += path.stat().st_size
                     except OSError:
                         continue
                     found.append(path)
@@ -2501,51 +2542,83 @@ def _protected_files(state: AgentState) -> list[Path] | None:
     return found
 
 
-def _protected_snapshot(state: AgentState) -> dict[Path, bytes] | None:
+def _protected_snapshot(state: AgentState) -> dict[Path, _Guarded] | None:
     files = _protected_files(state)
     if files is None:
         return None
-    snapshot: dict[Path, bytes] = {}
+    snapshot: dict[Path, _Guarded] = {}
     for path in files:
         try:
-            snapshot[path] = path.read_bytes()
+            if path.is_symlink():
+                snapshot[path] = _Guarded(mode=path.lstat().st_mode, link=os.readlink(path))
+            else:
+                snapshot[path] = _Guarded(mode=path.stat().st_mode, content=path.read_bytes())
         except OSError:
             return None
     return snapshot
 
 
-def _restore_protected(snapshot: dict[Path, bytes], state: AgentState) -> list[str]:
-    """Put the snapshot back; return what had changed (empty when nothing did)."""
+def _guarded_now(path: Path) -> _Guarded | None:
+    try:
+        if path.is_symlink():
+            return _Guarded(mode=path.lstat().st_mode, link=os.readlink(path))
+        if not path.exists():
+            return None
+        return _Guarded(mode=path.stat().st_mode, content=path.read_bytes())
+    except OSError:
+        return _Guarded(mode=-1)
+
+
+def _restorable(path: Path, state: AgentState) -> bool:
+    """`/logs` is only watched; the evaluator and `.git` inside the workspace are put back."""
+    try:
+        path.resolve().relative_to(state.workspace.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _restore_protected(snapshot: dict[Path, _Guarded], state: AgentState) -> list[str]:
+    """Put the snapshot back; return what had changed (empty when nothing did).
+
+    An entry that could not be put back says so in the returned list: "restored" and
+    "still changed" must not look the same to the model or in the trace.
+    """
     changed: list[str] = []
-    for path, content in snapshot.items():
-        try:
-            same = path.is_file() and not path.is_symlink() and path.read_bytes() == content
-        except OSError:
-            same = False
-        if same:
+    for path, before in snapshot.items():
+        if _guarded_now(path) == before:
             continue
-        changed.append(str(path))
+        if not _restorable(path, state):
+            changed.append(f"{path} (watched, not restored)")
+            continue
         try:
-            if path.is_symlink():
+            if path.is_symlink() or path.exists():
                 path.unlink()
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(content)
-        except OSError:
-            pass
+            if before.link is not None:
+                os.symlink(before.link, path)
+            else:
+                path.write_bytes(before.content or b"")
+                os.chmod(path, before.mode & 0o7777)
+            changed.append(str(path))
+        except OSError as error:
+            changed.append(f"{path} (could not restore: {type(error).__name__})")
     after = _protected_files(state) or []
     for path in after:
-        if path not in snapshot:
+        if path in snapshot:
+            continue
+        if not _restorable(path, state) or _is_repository_control_path(path, state):
+            changed.append(f"{path} (new, watched, not removed)")
+            continue
+        try:
+            path.unlink()
             changed.append(str(path))
-            if not _is_repository_control_path(path, state):
-                try:
-                    path.unlink()
-                except OSError:
-                    pass
+        except OSError as error:
+            changed.append(f"{path} (new, could not remove: {type(error).__name__})")
     return changed
 
 
 _PYTHON_PROBE_MAX_BYTES = 65536
-
 
 _WORKSPACE_CD = re.compile(r"^\s*cd\s+(?P<dir>[^\s;&|<>$`(){}\\'\"]+)\s*&&\s*(?P<rest>.+)$", re.DOTALL)
 
@@ -2717,7 +2790,7 @@ def _execute(
 
     if tool == prompt.RUN_SHELL:
         command = str(args["command"])
-        guarded: dict[Path, bytes] | None = None
+        guarded: dict[Path, _Guarded] | None = None
         if playbook.name == "code-fix":
             refusal = _code_fix_shell_refusal(command, state)
             if refusal:
