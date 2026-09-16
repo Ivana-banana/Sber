@@ -8,8 +8,11 @@ deliverable after a failure) and `.verifier.log`.
     python3 scripts/eval/zero_taxonomy.py build/eval-EXTRA-x [--only task ...] [--verbose]
 
 `--only` matters for the dev/holdout discipline: run it with the dev tasks only and the
-holdout logs are never opened. The class column is a *hint* from mechanical signals
-(stop reason, refusals, self-verified claim); the final class is assigned by reading.
+holdout logs are never opened. Because that discipline should not rest on remembering a
+flag, a run whose tasks all belong to the extra set is narrowed to the dev side by
+default; `--all` opens the holdout logs and says so out loud. The class column is a
+*hint* from mechanical signals (stop reason, refusals, self-verified claim); the final
+class is assigned by reading.
 """
 
 from __future__ import annotations
@@ -17,10 +20,34 @@ from __future__ import annotations
 import argparse
 import csv
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from extra_split import split as extra_sides  # noqa: E402
 
 REFUSED_RE = re.compile(r"^agent tool: step=(?P<step>[\d.]+) (?P<tool>\S+) ok=False (?P<text>.*)$")
 TOOL_RE = re.compile(r"^agent tool: step=(?P<step>[\d.]+) (?P<tool>\S+) ok=(?P<ok>\w+) (?P<text>.*)$")
+
+
+EXTRA_TASKS_ROOT = Path(__file__).resolve().parents[2] / "local_task_extra" / "tasks"
+
+
+def dev_side_default(task_names: set[str]) -> set[str] | None:
+    """The dev half of the split, when this run is an extra-set run; otherwise None.
+
+    Opening a holdout log is not undone by deciding to ignore what it said, so the safe
+    default belongs in the tool rather than in the operator's memory. A run that is not
+    entirely extra tasks (the public six, a mixed run) has no holdout to protect and is
+    left alone.
+    """
+    if not EXTRA_TASKS_ROOT.is_dir():
+        return None
+    extra = {p.name for p in EXTRA_TASKS_ROOT.iterdir() if (p / "task.toml").is_file()}
+    if not task_names or not task_names <= extra:
+        return None
+    sides = extra_sides(sorted(extra))
+    return {name for name in task_names if sides.get(name) == "dev"}
 
 
 def read_rows(run: Path) -> list[dict[str, str]]:
@@ -75,14 +102,29 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run")
     parser.add_argument("--only", nargs="*", default=None)
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="open every task's logs, holdout included (an extra-set run defaults to dev)",
+    )
     parser.add_argument("--verbose", action="store_true", help="print every tool line of each zero")
     args = parser.parse_args()
     run = Path(args.run)
     rows = read_rows(run)
     zeros = [r for r in rows if r.get("reward", "0") not in {"1", "1.0"}]
+    scope_note = ""
     if args.only:
         zeros = [r for r in zeros if r["task"] in set(args.only)]
-    print(f"{run.name}: {len(rows)} rows, {len(zeros)} zeros listed\n")
+    elif args.all:
+        scope_note = " (--all: holdout logs opened)"
+    else:
+        dev = dev_side_default({r["task"] for r in rows})
+        if dev is not None:
+            hidden = sorted({r["task"] for r in zeros} - dev)
+            zeros = [r for r in zeros if r["task"] in dev]
+            if hidden:
+                scope_note = f" (dev side only; holdout left unopened: {', '.join(hidden)})"
+    print(f"{run.name}: {len(rows)} rows, {len(zeros)} zeros listed{scope_note}\n")
     print("| задача | повтор | stop | шаги | wall | claim | deliverable | отказы | verifier | класс (hint) |")
     print("|---|---|---|---|---|---|---|---|---|---|")
     details = []

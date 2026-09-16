@@ -96,3 +96,29 @@ def test_the_shipped_extra_set_is_solvable() -> None:
     failures, skipped = audit_module.audit(ROOT / "local_task_extra" / "tasks")
     assert failures == {}, f"fixtures whose answer is not in environment/: {failures}"
     assert len(skipped) < 18, "no task declared a literal answer -- the audit found nothing to check"
+
+
+def test_zero_taxonomy_defaults_to_the_dev_side() -> None:
+    """The dev/holdout discipline should not rest on remembering `--only`.
+
+    An opened holdout log cannot be un-opened by deciding to ignore it, so a run made
+    entirely of extra tasks is narrowed to dev unless `--all` says otherwise.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "zero_taxonomy", ROOT / "scripts" / "eval" / "zero_taxonomy.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    extra = {p.name for p in (ROOT / "local_task_extra" / "tasks").iterdir() if p.is_dir()}
+    dev = module.dev_side_default(extra)
+    assert dev is not None and dev, "an all-extra run must be narrowed"
+    assert "forensics-ssh-bruteforce" not in dev, "a holdout task leaked into the default scope"
+    assert "forensics-webshell-chain" in dev
+
+    # A public run has no holdout to protect and must be left alone.
+    assert module.dev_side_default({"hello-file", "bye-file", "find-sqli-login"}) is None
+    # So must a mixed run: narrowing it would silently drop the public half.
+    assert module.dev_side_default({"hello-file", "fix-cache-key-scope"}) is None
