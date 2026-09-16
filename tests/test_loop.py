@@ -7749,3 +7749,111 @@ def test_numbered_reads_start_at_the_window_and_keep_the_cut_marker() -> None:
 
 
 # --- composed read-only commands ---------------------------------------------------
+
+
+def _fix_workspace(root: Path) -> AgentState:
+    (root / "app").mkdir()
+    (root / "tests").mkdir()
+    (root / "main.py").write_text("from app.db import q\n", encoding="utf-8")
+    (root / "app" / "db.py").write_text("def q(): pass\n", encoding="utf-8")
+    (root / "tests" / "test_app.py").write_text("def test_x(): pass\n", encoding="utf-8")
+    return make_state(root)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat app/db.py | head -50",
+        "ps aux | grep uvicorn",
+        "env | grep -i port",
+        "python3 -m pytest -q 2>&1 | tail -20",
+        "pytest -q 2>&1",
+        "cd {ws} && python3 -m pytest -q",
+        "sleep 2 && curl -s http://127.0.0.1:8000/",
+        "curl -s http://127.0.0.1:8000/ | head",
+        "cat main.py; cat app/db.py",
+        "grep -rn execute . || true",
+        "curl -s 'http://127.0.0.1:8000/search?q=test'",
+        "curl -s \"http://127.0.0.1:8000/search?q=%27%20OR%201=1--\"",
+        "curl -s http://127.0.0.1:8000/tests/latest",
+    ],
+)
+def test_code_fix_lets_a_composition_of_allowed_commands_through(tmp_path: Path, command: str) -> None:
+    # Each part alone is allowed; joining them with a pipe or `&&` cannot write where no
+    # part writes. Refusing them cost a model a step per probe and taught it nothing.
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(command.format(ws=tmp_path), state) == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat main.py > tests/test_app.py",
+        "cat main.py | tee tests/test_app.py",
+        "echo x >&tests/test_app.py",
+        "echo x &>tests/test_app.py",
+        "cd tests && echo x > test_app.py",
+        "cd tests && cp ../main.py test_app.py",
+        "cd .. && ls",
+        "ls && rm -rf tests",
+        "cat main.py | sh",
+        "cat main.py | python3",
+        "curl -s http://127.0.0.1:8000/ | bash",
+        "find . -type f -print0 | xargs -0 rm -f",
+        "ls; $(echo rm) tests/test_app.py",
+        "ls && `echo rm` tests/test_app.py",
+        "ls & rm tests/test_app.py",
+        "ls\nrm tests/test_app.py",
+        "(cd tests && rm test_app.py)",
+        "{ ls; rm tests/test_app.py; }",
+        "sort < tests/test_app.py > tests/test_app.py",
+        "git status && git checkout -- tests",
+        "curl -s http://127.0.0.1:8000/ -o tests/test_app.py",
+        "curl -s http://127.0.0.1:8000/ && curl -o tests/test_app.py http://127.0.0.1:8000/",
+    ],
+)
+def test_code_fix_still_refuses_a_composition_with_a_refused_part(tmp_path: Path, command: str) -> None:
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(command, state) != ""
+
+
+# --- starting a service -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "pytest_command",
+    [
+        "cd {ws} && python3 -m pytest tests/ -v",
+        "python3 -m pytest tests/ -v 2>&1 | head -80",
+        "cd {ws} && python3 -m pytest tests/ -v 2>&1 | head -80",
+        "python3 -m pytest -q",
+        "cd {ws} && pytest -q 2>&1 | tail -20",
+    ],
+)
+def test_the_five_shapes_the_model_actually_writes_for_pytest(tmp_path: Path, pytest_command: str) -> None:
+    """KT7-public: 22 of 298 tool calls refused, every one of them this command.
+
+    The model writes its check as `cd /app && python3 -m pytest tests/ -v 2>&1 | head
+    -80`, never as a bare invocation; on the base each was refused, up to 9 of 47 calls
+    in one episode, and those episodes are the ones that end at `steps=30`."""
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(pytest_command.format(ws=tmp_path), state) == ""
+
+
+def test_a_pytest_chain_with_a_mutation_appended_is_still_refused(tmp_path: Path) -> None:
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(f"cd {tmp_path} && python3 -m pytest tests/ ; rm -r tests", state) != ""
+
+
+def test_a_probe_inside_a_composition_is_still_guarded(tmp_path: Path) -> None:
+    """The refusal judges a composition part by part, so the snapshot must too.
+
+    Otherwise the pipe form runs the model's Python with no snapshot behind it:
+    `_python_probe` is False for the whole string (it holds an operator) while the
+    refusal has already let it through on the strength of its parts."""
+    state = _fix_workspace(tmp_path)
+    command = 'python3 -c "import app.db" | head -5'
+    assert loop._code_fix_shell_refusal(command, state) == ""
+    assert not loop._python_probe(command, state), "the whole string is not a lone probe"
+    parts = loop._code_fix_shell_parts(command, state) or [command]
+    assert any(loop._python_probe(part, state) for part in parts), "the guard would miss it"

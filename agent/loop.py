@@ -23,7 +23,7 @@ the deliverable.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -2706,9 +2706,133 @@ def _python_probe(command: str, state: AgentState) -> bool:
     return True
 
 
+_CURL_WRITING_LONG = (
+    "--output", "--remote-name", "--remote-header-name", "--output-dir", "--dump-header",
+    "--cookie-jar", "--config", "--trace", "--libcurl", "--stderr", "--etag-save",
+    "--hsts", "--alt-svc", "--create-dirs", "--upload-file",
+)
+_CURL_WRITING_SHORT = frozenset("oODcKTJ")
+
+
+def _curl_can_write(arguments: Sequence[str]) -> bool:
+    """Whether this curl invocation can put bytes into a local file.
+
+    A plain HTTP probe of the service writes only to stdout, and after a restart it is
+    the direct way to see that the port answers. Anything that names an output, a
+    header/cookie dump, a config file, an upload or a `file:` URL is still refused, as
+    is a `%output{}` write-out; so is an option cluster we cannot read letter by letter.
+    """
+    for word in arguments:
+        lowered = word.lower()
+        if "file:" in lowered or "%output{" in lowered:
+            return True
+        if word.startswith("--"):
+            if word.split("=", 1)[0].startswith(_CURL_WRITING_LONG):
+                return True
+        elif word.startswith("-") and len(word) > 1:
+            if _CURL_WRITING_SHORT.intersection(word[1:]):
+                return True
+    return False
+
+_FD_DUPLICATION = re.compile(r"(?:(?<=\s)|^)\d*>&\d+(?=\s|$)")
+# What may read a pipe: filters that treat stdin as data. A shell, python or anything
+# else on the right of `|` would run the stream as a program the check never saw.
+_PIPE_FILTERS = frozenset({
+    "awk", "base64", "cat", "column", "cut", "egrep", "fgrep", "grep", "head", "jq", "less",
+    "md5sum", "more", "nl", "od", "rev", "sed", "sha256sum", "sort", "strings", "tail", "tee",
+    "tr", "uniq", "wc", "xxd",
+})
+
+
+def _code_fix_shell_parts(command: str, state: AgentState) -> list[str] | None:
+    """The simple commands of `a | b`, `a && b`, `a || b` or `a; b`, each checked alone.
+
+    A composition writes nowhere its parts do not, so a pipe into `head` or a leading
+    `cd <workspace> &&` is no reason to refuse. None -- keep the whole-command check --
+    for anything a part-by-part check cannot see through: substitution, a subshell or
+    group, stdin redirection, a newline, a lone `&`, or a `cd` anywhere but first and
+    into the workspace itself (relative paths in later parts would resolve elsewhere).
+    `2>&1`-style fd duplication writes no file and is dropped from each part. A part
+    reading a pipe must be a plain filter (`_PIPE_FILTERS`).
+    """
+    parts: list[str] = []
+    piped: list[bool] = [False]
+    start = index = 0
+    quote = ""
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            quote = "" if char == "'" else quote
+        elif quote == '"':
+            if char == "\\":
+                index += 1
+            elif char == '"':
+                quote = ""
+            elif char == "`" or command.startswith("$(", index):
+                return None
+        elif char == "\\":
+            index += 1
+        elif char in "'\"":
+            quote = char
+        elif char in "`\n<(){}" or command.startswith("$(", index):
+            return None
+        elif char in ";|&" and not command.startswith((">&", "&>"), index - (char == "&")):
+            width = 2 if command.startswith(("&&", "||"), index) else 1
+            if char == "&" and width == 1:
+                return None
+            parts.append(command[start:index])
+            piped.append(char == "|" and width == 1)
+            index += width
+            start = index
+            continue
+        index += 1
+    if quote:
+        return None
+    parts = [_FD_DUPLICATION.sub("", part).strip() for part in [*parts, command[start:]]]
+    if not all(parts):
+        return None
+    try:
+        words = [shlex.split(part) for part in parts]
+    except ValueError:
+        return None
+    if any(part_words[0] == "cd" for part_words in words[1:]):
+        return None
+    if any(
+        reads_pipe and PurePosixPath(part_words[0]).name not in _PIPE_FILTERS
+        for reads_pipe, part_words in zip(piped, words)
+    ):
+        return None
+    if words[0][0] == "cd":
+        try:
+            into_workspace = len(words[0]) == 2 and (
+                (state.workspace / words[0][1]).resolve() == state.workspace.resolve()
+            )
+        except OSError:
+            into_workspace = False
+        if not into_workspace or len(parts) == 1:
+            return None
+        parts = parts[1:]
+    return parts
+
+
+def _curl_probe(command: str) -> bool:
+    """A lone curl that writes only to stdout: its URL is not a path, whatever it spells."""
+    if any(_code_fix_shell_operator_flags(command)):
+        return False
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    return bool(words) and words[0] == "curl" and not _curl_can_write(words[1:])
+
+
 def _code_fix_shell_refusal(command: str, state: AgentState) -> str:
     """Reject an explicit shell mutation aimed at the evaluator, not source edits."""
-    if _python_probe(command, state):
+    parts = _code_fix_shell_parts(command, state)
+    if parts is not None and parts != [command]:
+        refusals = [_code_fix_shell_refusal(part, state) for part in parts]
+        return next((refusal for refusal in refusals if refusal), "")
+    if _curl_probe(command) or _python_probe(command, state):
         return ""
     try:
         workspace_text = str(state.workspace.resolve()).lower()
@@ -2803,7 +2927,12 @@ def _execute(
             refusal = _code_fix_shell_refusal(command, state)
             if refusal:
                 return tools.ToolResult(name=tool, ok=False, detail=refusal)
-            if _python_probe(command, state):
+            # A probe can now arrive as one part of a composition (`cd ws && python3 -c
+            # …`, `python3 -c … | head`), and the refusal above judges those part by
+            # part. The guard has to look at the same parts, or a probe inside a pipe
+            # would run with no snapshot behind it.
+            probe_parts = _code_fix_shell_parts(command, state) or [command]
+            if any(_python_probe(part, state) for part in probe_parts):
                 guarded = _protected_snapshot(state)
                 if guarded is None:
                     return tools.ToolResult(
