@@ -3946,3 +3946,21 @@ thinking на длинной истории); reward=1, но это новый �
   диагностикой, но незавершённой правкой (60 ток/с). C3+C4 стабильно закрывают
   fix-sqli-search (6/6 за два кандидата), которая на этом стенде была 0/6 у всех
   предыдущих версий. Ложных verified нет.
+
+### REVIEW-afk-4080-smoke (2026-09-16) — ветка `fix/review-afk-4080` (023b075): интеграционный smoke, не замер решаемости
+
+- Что проверяется: шесть багфиксов ревью поверх 95d23c5 (перезапуск по подсказке C4 в
+  code-fix, `cmd &` без перенаправления, `curl`-проба, повтор чтения в пакете после
+  re-lay, `write_json` в продлении шагов, сервер на переднем плане) не ломают полный путь
+  через `run.sh` и Harbor-подобный харнесс.
+- Архив: `scripts/build_submission.py`, 166 952 байт, sha256 `50da3174…`,
+  `check_submission.py` — все PASS.
+- Модель `qwen2.5-coder:3b-instruct-q4_K_M` (ollama, RTX 3050 4 GiB), `--network host`,
+  `--reuse-images`, 1 повтор, timeout-scale 1.0:
+  `python3 scripts/eval/run_suite.py --tasks-root local_task --only hello-file bye-file fix-sqli-login incident-log-forensics --model qwen2.5-coder:3b-instruct-q4_K_M --base-url http://127.0.0.1:11434/v1 --api-key ollama --network host --counter-container "" --reuse-images --archive <zip> --label review-3b-smoke-2`
+- Итог **2/4**, 182 637 ток, 99 с: hello-file и bye-file — verified; fix-sqli-login —
+  steps 30/30 (reasoning), incident — stuck с неверным отчётом. Ни одного crash/traceback.
+  Траектория fix-sqli-login совпала токен в токен с прогоном до двух последних коммитов
+  (91 662) — 3B до новых веток кода не доходит.
+- Ограничения: 3B не репрезентативна; эффект фиксов на решаемость **не измерен** — нужен
+  прогон на стенде c и на 30B против кандидата-9 (95d23c5).
