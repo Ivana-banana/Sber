@@ -87,3 +87,19 @@ cat validation/reference-results.tsv
 ## References
 
 [1] [SecureIntelligent, UniversalAgenticCompetitionPublic, commit 71f9081](https://github.com/SecureIntelligent/UniversalAgenticCompetitionPublic/tree/71f90810d7a608677bbcf44f409f0aefded38340)
+
+## Восстановление улик 17.09.2026 (`forensics-ssh-bruteforce`, `forensics-webshell-chain`)
+
+Коммит M5 (`06315ad`) положил для этих двух задач только `case/context.txt` и
+`evidence/app.jsonl`: файлы `*.log` на тот момент отсекало правило `.gitignore`
+(негация для `local_task_extra` появилась позже), и эталонные значения чекеров
+(`198.51.100.44`, `2026-06-04T10:03:08.902Z`; `198.51.100.86`) не встречались ни в одном
+файле окружения — задачи были нерешаемы, что и дало 0/3 у обоих кандидатов в
+`EXTRA-9a8673c` / `EXTRA-review`. Улики восстановлены по описанию в таблице выше и по
+первой строке `auth.log`, сохранившейся в `docs/research/verdict-image-cookbook.md`:
+`case/auth.log` (четыре строки: два отказа пароля, публичный ключ другого пользователя с
+внутреннего адреса, принятый пароль `deploy`), `evidence/access.log` и `evidence/edge.jsonl`
+(URL-кодированная загрузка `shell%2Ephp`, разрешённая edge, и отклонённая попытка-приманка
+с другого адреса). Это реконструкция, а не оригинал Manus; эталон `solve.sh` + `check.py`
+даёт reward 1, каждое ожидаемое значение чекера теперь присутствует в окружении.
+Прогоны до этой даты по этим двум задачам сравнивать с последующими нельзя.
