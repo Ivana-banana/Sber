@@ -2484,6 +2484,27 @@ def _code_fix_shell_refusal(command: str, state: AgentState) -> str:
     )
 
 
+_LONE_AMPERSAND = re.compile(r"(?<![&>|<])&(?![&>])")
+_STDOUT_REDIRECT = re.compile(r"(?:^|[^0-9&])>(?!&)|&>|1>(?!&)")
+_QUOTED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+
+
+def _background_holds_pipe(command: str) -> bool:
+    """Whether a job this command puts in the background still writes to our pipe.
+
+    `run_shell` reads the command's output until every writer closes it, so `app &` or
+    `app & sleep 2; curl ...` holds the call for the whole tool timeout (up to 120 s),
+    and the timeout then reaps the session -- the service the model just started dies
+    with it. Measured in the target image (dash) and on bash alike. A job whose segment
+    sends stdout to a file (`>log 2>&1`) does not hold the pipe; `2>&1` alone does and is left alone. Quoted text
+    is blanked first, so `echo 'a & b'` is not a job.
+    """
+    segments = _LONE_AMPERSAND.split(_QUOTED.sub("''", command))
+    if len(segments) < 2:
+        return False
+    return any(not _STDOUT_REDIRECT.search(segment) for segment in segments[:-1])
+
+
 def _execute(
     tool: str,
     args: dict[str, object],
@@ -2496,6 +2517,16 @@ def _execute(
 
     if tool == prompt.RUN_SHELL:
         command = str(args["command"])
+        if _background_holds_pipe(command):
+            return tools.ToolResult(
+                name=tool,
+                ok=False,
+                detail=(
+                    "refused: a background job (`&`) without redirected output keeps this "
+                    "tool waiting until its timeout, and the timeout then kills the job. "
+                    "Start it as `nohup CMD >/tmp/CMD.log 2>&1 &`, then check it separately."
+                ),
+            )
         if playbook.name == "code-fix" and command.strip() not in state.relaunch_commands:
             refusal = _code_fix_shell_refusal(command, state)
             if refusal:

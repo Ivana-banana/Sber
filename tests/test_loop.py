@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -7481,3 +7482,42 @@ def test_a_server_body_mentioning_a_timeout_is_a_hard_failure() -> None:
     assert _llm_failure_kind(LlmError("endpoint returned 400: model timeout parameter invalid", retryable=False)) == HARD_FAILURE
     assert _llm_failure_kind(LlmError("transport timeout: TimeoutError", retryable=True, timed_out=True)) == SLOW_CALL
     assert _llm_failure_kind(LlmError("transport timeout: TimeoutError", retryable=True, timed_out=True, output_tokens=5)) == HARD_FAILURE
+
+
+# --- a background job that keeps the output pipe -------------------------------
+
+
+def test_a_background_job_without_redirected_output_is_refused_at_once(tmp_path: Path) -> None:
+    # `uvicorn main:app &` keeps our stdout pipe: `run_shell` then waits out the whole
+    # tool timeout (up to 120 s) and reaps the session, killing the service it started.
+    marker = tmp_path / "started"
+    llm = StubLlm(
+        replies=[
+            action("run_shell", command=f"touch {marker} & sleep 30"),
+            action("run_shell", command=f"sleep 30 & sleep 1; touch {marker}"),
+            action("run_shell", command=f"sleep 30 2>&1 & touch {marker}"),
+        ]
+    )
+    started = time.monotonic()
+
+    outcome = run(make_state(tmp_path), llm, playbook=playbooks.GENERAL)
+
+    assert time.monotonic() - started < 10, "refused before running, not after a timeout"
+    shells = [text for text in outcome.observations if "run_shell" in text]
+    assert len(shells) == 3 and all(">/tmp/" in text and "nohup" in text for text in shells), shells
+    assert not marker.exists(), "nothing ran"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "nohup uvicorn main:app --port 8000 >/tmp/app.log 2>&1 &",
+        "cd /app && { nohup uvicorn main:app >/tmp/app.log 2>&1 </dev/null & }",
+        "pytest -q 2>&1 | tail -5",
+        "make test && echo ok",
+        "echo 'a & b'",
+        "app >/dev/null 2>/dev/null & sleep 1; curl -s localhost:8000",
+    ],
+)
+def test_backgrounding_with_redirected_output_or_no_background_is_not_refused(command: str) -> None:
+    assert loop._background_holds_pipe(command) is False
