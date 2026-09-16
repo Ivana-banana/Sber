@@ -90,6 +90,28 @@ def test_recovery_may_not_start_inside_the_verifier_reserve() -> None:
     assert not budget.may_recover()
 
 
+def test_a_second_red_check_with_most_of_the_time_left_is_not_the_end() -> None:
+    # One pass stopped a run after its second red check with most of the budget unspent,
+    # and a fix a third look would have found was never tried.
+    budget, _ = make_budget(600.0)
+    budget.start_recovery()
+    assert budget.may_recover()
+
+
+def test_a_further_pass_needs_half_the_time_left() -> None:
+    budget, clock = make_budget(600.0)
+    budget.start_recovery()
+    clock.advance(600.0 * (1 - limits.RECOVERY_SPARE_FRACTION) + 1.0)
+    assert budget.spendable_s() > 0
+    assert not budget.may_recover(), "the first pass is free; later ones only with time to spare"
+
+
+def test_the_first_pass_needs_no_spare_half() -> None:
+    budget, clock = make_budget(600.0)
+    clock.advance(400.0)
+    assert budget.may_recover()
+
+
 def test_tool_timeout_shrinks_with_the_remaining_time() -> None:
     budget, clock = make_budget(600.0)
     assert budget.tool_timeout_s() == limits.TOOL_TIMEOUT_MAX_S
