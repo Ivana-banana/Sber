@@ -17,3 +17,8 @@ python3 scripts/eval/run_suite.py --tasks-root local_task_extra/tasks --model re
 `/log.jsonl` holds every action sent and the last observation the agent returned, which
 is where a refusal shows. `$KILL` and `$READY` in a script are filled from the latest
 stale-service hint. Scripts are keyed by a phrase of the instruction.
+
+The endpoint keeps a per-task cursor for the whole life of the container: a second
+suite against the same `sber-replay` starts every task past the end of its script and
+scores 0/18 with `stop=steps` (REPLAY-fc, 2026-09-17). `docker rm -f sber-replay` and
+start it again before every run.

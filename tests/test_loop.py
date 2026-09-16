@@ -7579,6 +7579,65 @@ def test_code_fix_still_refuses_a_curl_that_can_write_a_file(tmp_path: Path, com
     assert loop._code_fix_shell_refusal(command, make_state(tmp_path)) != ""
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -c \"import profile_cache; print(profile_cache.render_profile('a', 'u', 1))\"",
+        "python3 -c 'import importlib.util, sys\nif \"m\" in sys.modules: del sys.modules[\"m\"]\nimport m\nassert m.f(1) == 2, \"leak\"'",
+        "python3 {ws}/verify_fix.py",
+        "python3 -B verify_fix.py",
+        "cd {ws} && python3 verify_fix.py",
+    ],
+)
+def test_code_fix_lets_a_read_only_python_probe_through(tmp_path: Path, command: str) -> None:
+    # On a fix task without a test suite the model's only check is to import the patched
+    # module and call it. Refusing every `python -c` and every local script left it with
+    # nothing (EXTRA-taxonomy: 6-12 refusals per fix episode).
+    (tmp_path / "verify_fix.py").write_text(
+        "import importlib.util\nspec = importlib.util.spec_from_file_location('m', 'm.py')\n"
+        "print(spec)\nassert spec is not None\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    assert loop._code_fix_shell_refusal(command.format(ws=tmp_path), state) == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -c \"open('tests/test_api.py', 'w').write('')\"",
+        "python3 -c \"from pathlib import Path; Path('conftest.py').write_text('x')\"",
+        "python3 -c 'import os; os.remove(\"tests/conftest.py\")'",
+        "python3 -c 'import shutil; shutil.rmtree(\"tests\")'",
+        "python3 -c 'import subprocess; subprocess.run([\"rm\", \"-r\", \"tests\"])'",
+        "python3 -c 'getattr(__builtins__, \"open\")(\"tests/x\", \"w\")'",
+        "python3 -c 'exec(\"import os\")'",
+        "python3 -c 'print(open(\"tests/test_api.py\").read())'",
+        "python3 {ws}/tests/conftest.py",
+        "python3 {ws}/mutate.py",
+        "python3 -c 'print(1)' > tests/out.txt",
+        "python3 -W ignore -c 'print(1)'",
+    ],
+)
+def test_code_fix_still_refuses_a_python_snippet_that_could_touch_the_evaluator(
+    tmp_path: Path, command: str
+) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "conftest.py").write_text("print(1)\n", encoding="utf-8")
+    (tmp_path / "mutate.py").write_text("import shutil\nshutil.rmtree('tests')\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    assert loop._code_fix_shell_refusal(command.format(ws=tmp_path), state) != ""
+
+
+def test_a_python_script_outside_the_workspace_is_not_a_probe(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.py"
+    outside.write_text("print(1)\n", encoding="utf-8")
+    try:
+        assert loop._code_fix_shell_refusal(f"python3 {outside}", make_state(tmp_path)) != ""
+    finally:
+        outside.unlink()
+
+
 # --- composed read-only commands ---------------------------------------------------
 
 

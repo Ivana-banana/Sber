@@ -2485,7 +2485,7 @@ def _code_fix_shell_refusal(command: str, state: AgentState) -> str:
     if parts is not None and parts != [command]:
         refusals = [_code_fix_shell_refusal(part, state) for part in parts]
         return next((refusal for refusal in refusals if refusal), "")
-    if _curl_probe(command):
+    if _curl_probe(command) or _python_probe(command, state):
         return ""
     try:
         workspace_text = str(state.workspace.resolve()).lower()
@@ -2624,6 +2624,83 @@ def _curl_probe(command: str) -> bool:
     except ValueError:
         return False
     return bool(words) and words[0] == "curl" and not _curl_can_write(words[1:])
+
+
+_PYTHON_MUTATION = re.compile(
+    r"""(?x)
+    \bopen\s*\([^)]*['"][rwax]*[wax+]        # open(..., 'w' | 'a' | 'x' | 'r+')
+  | \.write(?:_text|_bytes|lines)?\s*\(       # f.write(...), Path.write_text(...)
+  | \b(?:os|shutil|subprocess|ctypes|pty|signal|multiprocessing)\b
+  | \.(?:unlink|rename|replace|touch|mkdir|rmdir|symlink_to|link_to|chmod|truncate)\s*\(
+  | \b(?:exec|eval|compile|__import__|getattr|setattr|delattr|globals|vars)\s*\(
+  | \bbuiltins\b
+  | \bsys\.(?:path|argv)\s*(?:\.|\[|=)
+    """
+)
+"""What a Python snippet may not spell to count as a read-only probe.
+
+A denylist, deliberately: the policy's threat model is a careless model, not an
+adversary. Everything here either writes or deletes a file, runs another program, or
+hides which name is being called (`getattr`, `exec`, `builtins`), which is what an
+evaluator mutation would have to go through. Pure reads -- `import`, `importlib.util`
+loaders, `sys.modules` juggling, asserts, prints, `sqlite3` reads -- stay legal.
+"""
+
+_PYTHON_PROBE_MAX_BYTES = 65536
+
+
+def _python_probe(command: str, state: AgentState) -> bool:
+    """A lone `python -c <code>` or `python <script inside the workspace>` that only reads.
+
+    The code-fix policy refused every Python one-liner and every local script outright,
+    so on a fix task without a test suite the model's own check -- import the patched
+    module, call it, assert -- was refused on every attempt (EXTRA-taxonomy: fix tasks
+    spent 6-12 refusals per episode). The policy's job is to keep the evaluator
+    immutable, not to forbid reading the program under repair: a snippet or script whose
+    text contains no write, delete, spawn or name-hiding primitive and names no evaluator
+    path cannot touch the evaluator, so it goes through like a curl probe does.
+    """
+    if any(_code_fix_shell_operator_flags(command)):
+        return False
+    try:
+        words = _code_fix_shell_unwrap_simple_wrappers(shlex.split(command))
+    except ValueError:
+        return False
+    if len(words) < 2 or not _code_fix_is_python_executable(words[0], state.workspace):
+        return False
+    options = [word for word in words[1:] if word.startswith("-")]
+    if any(option not in {"-c", "-B", "-u", "-I", "-S", "-E", "-s"} for option in options):
+        return False
+    operands = [word for word in words[1:] if not word.startswith("-")]
+    if len(operands) != 1:
+        return False
+    if "-c" in words:
+        if words[words.index("-c") + 1 :] != [operands[0]]:
+            return False
+        text = operands[0]
+    else:
+        script = Path(operands[0])
+        try:
+            root = state.workspace.resolve()
+            target = (script if script.is_absolute() else root / script).resolve()
+            target.relative_to(root)
+            if _is_evaluator_path(target, state) or not target.is_file():
+                return False
+            if target.stat().st_size > _PYTHON_PROBE_MAX_BYTES:
+                return False
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            return False
+    if _PYTHON_MUTATION.search(text):
+        return False
+    for token in re.findall(r"[\w./-]+", text):
+        if "/" in token or token.endswith(".py"):
+            try:
+                if _is_evaluator_path(Path(token), state):
+                    return False
+            except (OSError, ValueError):
+                return False
+    return True
 
 
 _SERVER_EXECUTABLES = frozenset({"uvicorn", "gunicorn", "hypercorn", "daphne", "waitress-serve"})
