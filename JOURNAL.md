@@ -1785,3 +1785,9 @@ K tool calls returned, using the first`), и тот же пакет запраш
 **04:55 — окно сброшено (0 %), запущен лист L1** (субагент): исполнять пакет read-only
 tool_calls из одного ответа за один шаг (до 4), state-changing — по одному; тесты;
 затем парный замер на стенде c по трём fix/find-задачам.
+
+**05:20 — принят L1 (c7551d9):** LlmReply несёт extra_actions; петля исполняет до 4
+read-only вызовов из того же ответа за один шаг ([step N.k]), state-changing — по одному;
+922 passed. Собран второй кандидат `build/afk-treat2.zip` (sha 21c8f0f6…), запущен замер
+по 6 задачам × 3 повтора на стенде c: `build/afk-q36-treatment2`. Сравнение — с
+treatment-1 (61f4a4c, 14/18) и control (8b568ac, 12/18) на том же стенде.
