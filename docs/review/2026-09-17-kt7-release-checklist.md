@@ -6,21 +6,21 @@
 
 ## Что отправлять
 
-Кандидат — ветка `cand/kt7` (на момент проверки `c5a6e7c`): база `9a8673c`
+Кандидат — ветка `cand/kt7` (на момент проверки `0fc814f`): база `9a8673c`
 (36/36 public, 17/18 30B, паритет 7B) плюс три фактора — перенесённая на эту базу
 python-проба code-fix (`51f1074`), нумерация строк в audit-чтениях (`4a55c8c`),
-отказ на `write_file` без `content` (`201c164`) — плюс восстановленные фикстуры и
-скрипты оценки, в архив не входящие.
+отказ на `write_file` без `content` (`201c164`) — и ужесточение сторожа пробы
+(`0fc814f`), плюс восстановленные фикстуры и скрипты оценки, в архив не входящие.
 
 Архив пересобирается из коммита и совпадает бит-в-бит, файл искать не нужно:
 
 ```sh
 git archive cand/kt7 | tar -x -C /tmp/kt7src && cd /tmp/kt7src
 python3 scripts/build_submission.py --out /tmp/kt7.zip
-sha256sum /tmp/kt7.zip   # 5ed1232ed1bd8482c3db66096a00694ddcb44210d4ccc61b00256a356053218c
+sha256sum /tmp/kt7.zip   # beaeaa00c0cc235b05f6b03433bc376dcdccbcb7efdcae8ee6afe177048ccefb
 ```
 
-167 664 байта, 21 запись: `run.sh` (0755), `agent/*.py` (0644), `THIRD_PARTY_NOTICES.md`.
+168 453 байта, 21 запись: `run.sh` (0755), `agent/*.py` (0644), `THIRD_PARTY_NOTICES.md`.
 Ни тестов, ни логов, ни фикстур, ни `.pyc`. Лимит регламента — 10 МБ, запас 60×.
 
 ## Что проверено, командой и результатом
@@ -31,7 +31,8 @@ sha256sum /tmp/kt7.zip   # 5ed1232ed1bd8482c3db66096a00694ddcb44210d4ccc61b00256
 | Контракт архива | `python3 scripts/check_submission.py /tmp/kt7.zip` | все PASS |
 | Старт в целевом образе без сети | `scripts/eval/offline_gate.sh /tmp/kt7.zip kt7` (образ `secureintelligent/acp@sha256:1324d7bb…c8a3`, `--network none`) | `run.sh` 755 после `unzip`; инструкция с кавычками, `$`, бэкслешем и переводом строки доходит побайтово; пустой аргумент и его отсутствие → exit 2 + usage; импорт всех модулей `agent.*` на 3.12.13 без ошибок |
 | Нет хардкода задач | `scripts/check_no_task_hardcode.py`, `scripts/check_fixture_vocabulary.py` | оба чисты (108 литералов фикстур, 0 попаданий) |
-| Тесты | `python3 -m pytest -q` на ветке | зелёные |
+| Тесты | `python3 -m pytest -q` на ветке | 1061 passed, 12 skipped |
+| Сторож python-пробы | шесть сценариев на временном workspace, вызовами `_protected_snapshot`/`_restore_protected` напрямую | перезапись теста, `chmod 000`, новый симлинк в `tests/`, симлинк вместо файла, вложенный новый файл — все обнаружены и отменены; существовавший до пробы симлинк не трогается; `multiprocessing`, `os.posix_spawn`, `os.spawnv` отклоняются заранее, `sqlite3` и `os.path` остаются законными |
 
 ## Что человек решает сам
 
