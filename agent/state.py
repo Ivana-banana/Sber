@@ -260,12 +260,7 @@ class Budget:
         once only the reserve was left -- spending the very time the re-verification
         needs. A run that cannot verify cannot finish.
         """
-        if self.recovery_passes_used >= self.max_recovery_passes or self.spendable_s() <= 0:
-            return False
-        return (
-            self.recovery_passes_used == 0
-            or self.remaining_s() >= self.total_s * limits.RECOVERY_SPARE_FRACTION
-        )
+        return self.recovery_passes_used < self.max_recovery_passes and self.spendable_s() > 0
 
     def tool_timeout_s(self) -> float:
         """Timeout for one shell command: never long enough to eat the reserve."""

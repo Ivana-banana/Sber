@@ -192,14 +192,9 @@ that ladder, not three requests. A run that cannot reach a model has no path to 
 deliverable and should say so while there is still time to leave what it has.
 """
 
-MAX_RECOVERY_PASSES = 3
+MAX_RECOVERY_PASSES = 1
 """Directed retries after a red verifier, borrowed as a shape from the bounded
-fact-check loop in the ai-v-massy pipeline (`factcheck_retries <= 2`). The first is
-always allowed; each later one only while `RECOVERY_SPARE_FRACTION` of the run is left.
-A single pass ended runs after their second red check with most of the budget unspent."""
-
-RECOVERY_SPARE_FRACTION = 0.5
-"""Share of the total time that must remain for a recovery pass after the first."""
+fact-check loop in the ai-v-massy pipeline (`factcheck_retries <= 2`)."""
 
 ACTION_HISTORY = 6
 """How many recent actions the loop remembers for its stuck detectors.
