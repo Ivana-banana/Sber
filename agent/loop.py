@@ -757,8 +757,8 @@ REQUIRED: dict[str, str] = {
 """The one argument each tool cannot be run without.
 
 Absent from the list: `list_dir` and `search`'s path, which default to the workspace,
-and `write_file`'s content, because writing an empty file is a legitimate thing to ask
-for even though no verifier accepts one.
+and `write_file`'s content, because `content: ""` is a legitimate request for an empty
+file; a write_file with no content key at all is refused separately, see below.
 """
 
 
@@ -794,6 +794,18 @@ def _arguments(act: dict[str, Any], state: AgentState) -> tuple[dict[str, object
         return None, f"{tool} needs `{needed}`, and it was missing or empty"
 
     path = _in_workspace(str(fields.get("path", "") or "").strip(), state)
+
+    if tool == prompt.WRITE_FILE and "content" not in fields:
+        # `content: ""` is a request for an empty file and is honoured. A write_file
+        # with no content key at all is a reply that lost its payload -- seen after a
+        # truncated or schema-constrained turn (REVIEW-public-q36: the report file was
+        # written empty and the run scored 0) -- and an empty deliverable is never what
+        # the model meant.
+        return None, (
+            "write_file needs `content` (the exact text to write); the action had no "
+            "content key, so nothing was written. Send it again with `content`, or "
+            'with `content: ""` if an empty file is really what you want.'
+        )
 
     if tool == prompt.RUN_SHELL:
         return {"command": str(fields["command"])}, ""
