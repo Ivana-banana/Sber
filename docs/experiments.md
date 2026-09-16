@@ -4000,3 +4000,26 @@ thinking на длинной истории); reward=1, но это новый �
      `e39af75`: лишние проходы отправили бы модель «чинить» верный код.
 - Ограничения: сценарий — нижняя граница вины агента; реальная модель ошибается иначе.
   Решаемость на сильной модели не измерена.
+
+### AB7B-local (2026-09-16) — кандидат-9 (95d23c5) против ветки ревью (307cbc0) на RTX 3050 4 GiB, 7B, n=1
+
+- Стенд: `qwen2.5-coder:7b-instruct-q4_K_M` в контейнере `sber-model` (`start_model.sh`,
+  `CONTEXT=8192 OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0`), `ollama ps` 39 %/61 %
+  CPU/GPU, через `sber-proxy`, `--timeout-scale 1.0`, `--reuse-images`.
+- Архивы: control `83f48e63eec20909…`, treatment `48aac6229b00d38f…`.
+- Команда: `python3 scripts/eval/run_suite.py --tasks-root local_task --model qwen2.5-coder:7b-instruct-q4_K_M --base-url http://sber-proxy:8000/v1 --api-key ollama --counter-container sber-proxy --timeout-scale 1.0 --reuse-images --archive <zip> --label AB7B-local_task-<arm>`
+  (results.tsv control `02e0f832dbad100f…`, treatment `e8d6af6b4a3116ce…`).
+
+| Задача | control | treatment |
+|---|---|---|
+| hello-file / bye-file | 1 / 1 | 1 / 1 |
+| find-sqli-login | 0 (budget, 24 шага повторов search) | **1** (verified, 7 шагов) |
+| fix-sqli-login | 0 (stuck) | 0 (stuck) |
+| fix-sqli-search | 0 (steps) | 0 (steps) |
+| incident-log-forensics | 0 (stuck) | **1** (budget, отчёт верен) |
+| **Σ** | **2/6**, 341 978 ток, 1269 с | **4/6**, 300 726 ток, 1023 с |
+
+- Регрессий по задачам нет. n=1 на слабом частично-CPU стенде: разница в пределах шума,
+  fix-задачи 7B не доводит до ветвей C3/C4 ни в одном арме — эффект фиксов там не проверен.
+- Extra-набор не измерен: очередь дважды убита из-за нехватки RAM на машине (control успел
+  9/18 задач: 1/9 — только fix-cache-key-scope).
