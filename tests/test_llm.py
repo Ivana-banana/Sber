@@ -822,28 +822,115 @@ def test_a_native_call_for_an_unknown_function_is_rejected() -> None:
     assert len(endpoint.bodies) == 1
 
 
-def test_several_tool_calls_are_recorded_not_silently_dropped() -> None:
-    payload = json.dumps(
-        {
-            "choices": [
-                {
-                    "message": {
-                        "content": None,
-                        "tool_calls": [
-                            {"function": {"name": "emit_action", "arguments": '{"action":"ls"}'}},
-                            {"function": {"name": "emit_action", "arguments": '{"action":"rm"}'}},
-                        ],
-                    }
-                }
-            ]
-        }
+def _native_calls(*entries: object) -> bytes:
+    """A reply whose `tool_calls` list is exactly these entries."""
+    return json.dumps(
+        {"choices": [{"message": {"content": None, "tool_calls": list(entries)}}]}
     ).encode()
+
+
+def _call(arguments: str, *, name: str = "emit_action") -> dict[str, object]:
+    return {"function": {"name": name, "arguments": arguments}}
+
+
+def test_several_tool_calls_are_recorded_not_silently_dropped() -> None:
+    payload = _native_calls(_call('{"action":"ls"}'), _call('{"action":"rm"}'))
     client, _, events = make_client([(200, payload)])
     result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
 
     assert isinstance(result, LlmReply)
     assert json.loads(result.text) == {"action": "ls"}
     assert any("2 tool calls" in detail for _, detail in events)
+    assert result.extra_actions == ('{"action":"rm"}',), "the rest of the reply is carried"
+
+
+def test_three_tool_calls_become_one_action_and_two_extras() -> None:
+    # The reply shape that made the loop burn its step cap: a reasoning model answers
+    # one step with several reads at once. The first call is still the step's action;
+    # the others travel with it instead of being dropped and re-requested next step.
+    payload = _native_calls(
+        _call('{"action":"one"}'), _call('{"action":"two"}'), _call('{"action":"three"}')
+    )
+    client, _, events = make_client([(200, payload)])
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert json.loads(result.text) == {"action": "one"}
+    assert [json.loads(extra) for extra in result.extra_actions] == [
+        {"action": "two"},
+        {"action": "three"},
+    ]
+    assert any("3 tool calls returned, keeping 3" in detail for _, detail in events)
+
+
+def test_a_malformed_entry_among_the_tool_calls_is_dropped_not_fatal() -> None:
+    # A bad extra must never cost the usable action in front of it: the reply already
+    # carries one, and failing here would spend a rung and a step for nothing.
+    payload = _native_calls(
+        _call('{"action":"one"}'),
+        _call("{not json at all"),
+        _call('{"action":"three"}'),
+    )
+    client, _, events = make_client([(200, payload)])
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert json.loads(result.text) == {"action": "one"}
+    assert [json.loads(extra) for extra in result.extra_actions] == [{"action": "three"}]
+    assert any("3 tool calls returned, keeping 2" in detail for _, detail in events)
+    assert any("malformed" in detail for _, detail in events)
+
+
+def test_an_extra_that_breaks_the_schema_is_dropped_from_the_tool_calls() -> None:
+    strict: dict[str, object] = {
+        "type": "object",
+        "properties": {"action": {"type": "string"}},
+        "required": ["action"],
+    }
+    payload = _native_calls(
+        _call('{"action":"one"}'), _call('{"actoin":"two"}'), _call('{"action":"three"}')
+    )
+    client, _, _ = make_client([(200, payload)])
+    result = client.complete_structured([], schema=strict, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert [json.loads(extra) for extra in result.extra_actions] == [{"action": "three"}]
+
+
+def test_an_extra_naming_another_function_is_not_kept_among_the_tool_calls() -> None:
+    # Same rule the first call obeys: the request offers exactly one function, and
+    # arguments meant for a different one are never ours to run.
+    payload = _native_calls(
+        _call('{"action":"one"}'),
+        _call('{"action":"two"}', name="not_emit_action"),
+    )
+    client, _, _ = make_client([(200, payload)])
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert result.extra_actions == ()
+
+
+def test_a_single_entry_in_tool_calls_carries_no_extras() -> None:
+    client, _, events = make_client([(200, tool_reply('{"action":"ls"}'))])
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert result.extra_actions == ()
+    assert not any("keeping" in detail for _, detail in events), "no note without a batch"
+
+
+def test_a_reply_salvaged_from_content_reports_no_extra_tool_calls() -> None:
+    # `tool_calls` is empty and the call sits in `content`. There is no batch to read,
+    # and the rung is demoted as before -- the extras must not reopen that question.
+    payload = json.dumps(
+        {"choices": [{"message": {"content": '{"action":"ls"}', "tool_calls": []}}]}
+    ).encode()
+    client, _, _ = make_client([(200, payload)])
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert result.extra_actions == ()
 
 
 def test_valid_json_that_breaks_the_schema_is_not_a_success() -> None:

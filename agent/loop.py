@@ -63,6 +63,17 @@ Unknown commands and compound commands are considered capable of changing files 
 services. This is a progress-detector hint, not a shell security boundary.
 """
 
+BATCH_READ_TOOLS = frozenset({prompt.READ_RANGE, prompt.LIST_DIR, prompt.SEARCH})
+"""Tools an extra call of the same reply is allowed to run inside one step.
+
+The three that cannot change a file or a service, and nothing else. `run_shell` is
+absent even though most of what a model runs through it only reads: whether a command
+reads or writes is a guess here (`READ_ONLY_SHELLS` says as much about itself), and a
+guess is not a basis for running an unasked-for second action in the same step.
+`write_file`, `write_json`, `replace_text` and `finish` are absent because they are
+exactly what the one-action-per-step rule exists for.
+"""
+
 
 @dataclass(frozen=True)
 class Outcome:
@@ -387,6 +398,13 @@ def run(
                 observations.append(
                     f"[step {step}] exact-file check failed: {verdict.detail}"
                 )
+
+        if reply.extra_actions:
+            # The rest of the reply. Read-only, bounded, and inside the step the
+            # primary action already paid for -- see `_batch_reads`.
+            grounded += _batch_reads(
+                state, reply.extra_actions, observations, step=step, playbook=playbook
+            )
 
         signal = detectors.stuck(state)
         if signal is not None:
@@ -2432,6 +2450,146 @@ def _execute(
         # variant of it is a different string to a verifier that compares paths.
         state.artifacts.append(target)
     return result
+
+
+def _already_observed(state: AgentState, tool: str, args: str) -> bool:
+    """Whether this exact call already ran in the current state epoch.
+
+    Inside one epoch nothing the run did changed a file or a service, so a repeat of a
+    read returns what the history already carries. That covers the primary action of
+    this very step -- its record is written before the batch starts -- and every read
+    of every earlier step back to the last mutation, which is exactly the window
+    `agent.detectors` already treats as one environment.
+
+    Cheaper than `detectors.blocked` and strictly stricter than it: `blocked` refuses
+    the third identical call, this skips the second, because an extra is an action
+    nobody asked to pay for and re-reading a file for the same bytes is the failure
+    this batch exists to stop, not one it may reproduce inside a step.
+    """
+    return any(
+        record.state_epoch == state.state_epoch
+        and record.tool == tool
+        and record.args_digest == args
+        for record in state.actions
+    )
+
+
+def _batch_reads(
+    state: AgentState,
+    extras: tuple[str, ...],
+    observations: list[str],
+    *,
+    step: int,
+    playbook: Playbook,
+) -> int:
+    """Run the read-only tail of one reply inside the step its first action used.
+
+    Why: on an endpoint fast enough that a call costs seconds, the step cap and not
+    the clock is what ends a run, and a reasoning model answers most code-fix steps
+    with three to six `read_range` calls at once. Keeping only the first made the model
+    re-request the same batch every step -- 49 of 51 calls of one measured episode were
+    reads, no edit was ever made, all 30 steps went, and 10 of 10 runs on that stand
+    stopped at `steps` or `stuck` (JOURNAL 16.09, the code-fix traces under
+    `build/afk-q36-treatment/logs`).
+
+    What it must not become is several state changes for the price of one step. Only
+    `BATCH_READ_TOOLS` run here, so a batch can never advance the state epoch; the
+    first extra that is anything else stops the batch and is left un-executed, and the
+    model re-asks for it as the next step's primary action, where the write policy, the
+    finish gate and the epoch bookkeeping all apply unchanged. The reply costs one step
+    and one LLM call either way -- that is the whole point, and it is also why nothing
+    here touches the token budget.
+
+    Returns how many of the executed extras came back with content, which is what the
+    early-deliverable checkpoint counts as grounding.
+    """
+    # An equal share of the budget one observation is allowed, so the whole batch adds
+    # no more text than the widest single `read_range` a step may add today.
+    share = limits.OBSERVATION_BUDGET_CHARS // limits.BATCH_READONLY_MAX
+    executed = 0
+    grounded = 0
+
+    for index, raw in enumerate(extras[: limits.BATCH_READONLY_MAX], start=2):
+        if state.budget.spendable_s() <= 0:
+            # The step's own time is gone. Whatever is left of the batch is not worth
+            # spending the verifier reserve on.
+            state.record("budget", "batch-stop", "no time left for the rest of the batch")
+            break
+
+        act, problem = _parse(raw)
+        if problem:
+            # `agent.llm` validated these against the action schema, so this is the
+            # second line of defence and the entry is skipped rather than acted on.
+            state.record("llm", "batch-malformed", problem)
+            continue
+
+        tool = str(act.get("tool", ""))
+        if tool not in BATCH_READ_TOOLS:
+            state.record(
+                "budget",
+                "batch-stop",
+                f"{tool or 'unnamed tool'} is not read-only; leaving it for its own step",
+            )
+            break
+
+        args, problem = _arguments(act, state)
+        if problem or args is None:
+            state.record("llm", "batch-bad-action", problem)
+            continue
+
+        if _already_observed(state, tool, detectors.args_digest(args)):
+            state.record("budget", "batch-repeat", f"{tool} already ran in this epoch")
+            continue
+
+        act_started = state.start_phase("act")
+        try:
+            result = _execute(tool, args, state, playbook=playbook)
+        except Exception as error:
+            # `_execute` is documented never to raise and the primary path trusts that.
+            # The asymmetry here is deliberate: an extra is work the run did not have
+            # to be given, and losing a whole task to a defect in a bonus action would
+            # be the worst trade in the file. The exception type only -- its message
+            # may quote file content.
+            result = tools.ToolResult(
+                name=tool, ok=False, detail=f"batch action failed: {type(error).__name__}"
+            )
+        state.finish_phase("act", act_started)
+
+        if os.environ.get(limits.TRACE_TOOLS_ENV_NAME):
+            # Same line as the primary action's, with the sub-step marker, so a live
+            # trace shows a batch as what it is rather than as a step that vanished.
+            traced = (result.output or result.detail or "").replace("\n", " ")[:160]
+            print(f"agent tool: step={step}.{index} {tool} ok={result.ok} {traced}", flush=True)
+
+        body = result.output or result.detail
+        state.record(
+            "tool",
+            tool,
+            result.detail or "ok",
+            duration_s=result.duration_s,
+            exit_code=result.exit_code,
+        )
+        state.observe(
+            tool,
+            args,
+            body,
+            ok=result.ok,
+            error_code="" if result.ok else _error_code(result),
+        )
+        executed += 1
+        if result.ok and body.strip():
+            grounded += 1
+
+        header = f"[step {step}.{index}] {tool} -> {'ok' if result.ok else 'FAIL'}\n"
+        room = max(0, share - len(header))
+        head = (room * 2) // 3
+        clipped, _ = tools.clip(body, head=head, tail=room - head)
+        # Hard-cut after `clip`: its truncation marker can add a few characters back,
+        # and the bound on what one step may add is the point of the share.
+        observations.append(f"{header}{clipped[:room]}".rstrip())
+
+    state.record("budget", "batch", f"executed {executed} of {len(extras)} extra calls")
+    return grounded
 
 
 def _verify_exact_write(

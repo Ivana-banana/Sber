@@ -43,6 +43,20 @@ class LlmReply:
     flag propagates to telemetry instead.
     """
 
+    extra_actions: tuple[str, ...] = ()
+    """Further actions the same reply asked for, as JSON text, in the order sent.
+
+    `text` is always the first call and is unaffected by this field, so every consumer
+    that ignores it behaves exactly as before -- that is why it is last and defaulted.
+
+    It exists because the reply is not always one action. A reasoning model answers a
+    code-fix step with three to six `read_range` calls at once, and a client that keeps
+    only the first makes the model re-request the whole batch on the next step: 49 of
+    51 calls in one measured episode were reads, no edit was ever made and the step cap
+    ended the run. The calls are carried, not executed -- whether any of them may run,
+    and under what contract, is `agent.loop`'s decision and nothing here assumes it.
+    """
+
 
 @dataclass(frozen=True)
 class LlmError:

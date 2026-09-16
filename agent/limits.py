@@ -103,6 +103,23 @@ back; four and not more because a re-lay that keeps most of the history spends i
 prefill again almost immediately.
 """
 
+BATCH_READONLY_MAX = 4
+"""Extra read-only calls from one reply that may run inside that reply's step.
+
+A reasoning model answers a code-fix step with three to six `read_range` calls at
+once. Executing only the first spends a step per file and makes the model re-request
+the whole batch: 49 of 51 calls of one measured episode were reads, no edit was ever
+made and all 30 steps went (the 16.09 code-fix traces under
+`build/afk-q36-treatment/logs`). On an endpoint fast enough that a call costs 2-4 s,
+the step cap and not the clock is what ends such a run, so the fix has to buy steps
+rather than seconds.
+
+Four, and only for the three read tools: it covers the observed batch size while
+keeping the one-action-per-step contract for everything that changes state, and four
+observations of `OBSERVATION_BUDGET_CHARS / 4` each add no more text than the single
+widest `read_range` a step may add today.
+"""
+
 MAX_CONSECUTIVE_LLM_FAILURES = 3
 """Logical calls that may fail in a row before the endpoint is declared unusable.
 

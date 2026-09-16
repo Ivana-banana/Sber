@@ -430,6 +430,74 @@ def _strip_thinking(text: str) -> str:
     return text.strip()
 
 
+def _tool_call_entries(message: dict[str, Any]) -> list[Any]:
+    """The reply's tool calls as a list, whatever container the server used.
+
+    TGI sends a single object where OpenAI sends a list; anything else -- absent, null,
+    a string -- is no calls at all rather than an error, because the caller has a
+    `content` fallback for exactly that case.
+    """
+    calls = message.get("tool_calls")
+    if isinstance(calls, dict):
+        calls = [calls]
+    return calls if isinstance(calls, list) else []
+
+
+def _call_payload(entry: Any) -> str | None:
+    """The argument JSON of one tool-call entry, or None when it is not ours to run.
+
+    The three accepted dialects are documented on `HttpLlm._read_tool_call`; this is
+    that reading applied to one entry, so the first call and the extras after it are
+    parsed by the same code and cannot drift apart.
+    """
+    if not isinstance(entry, dict):
+        return None
+    function = entry.get("function")
+    if not isinstance(function, dict):
+        # A flat entry carries name and arguments itself. Documented by llama.cpp,
+        # not observed from it -- see `HttpLlm._read_tool_call`.
+        function = entry
+
+    if function.get("name") != TOOL_NAME:
+        # The request offers exactly one function. Never execute arguments from a call
+        # for another function just because their JSON happens to match our action
+        # schema; an unknown function is a protocol error.
+        return None
+
+    arguments = function.get("arguments")
+    if isinstance(arguments, str):
+        return arguments
+    if isinstance(arguments, dict):
+        return json.dumps(arguments)
+
+    parameters = function.get("parameters")
+    if isinstance(parameters, dict):
+        return json.dumps(parameters)
+    return None
+
+
+def _normalise_action(payload: str, schema: dict[str, Any]) -> str | None:
+    """One extra call reduced to the JSON text of a schema-valid action, or None.
+
+    The same three repairs the first call gets -- prose around the JSON, a function
+    envelope instead of the flat action, plain schema validation -- and for the same
+    reason: an action in an unexpected wrapper is still an action, and the alternative
+    to repairing it is paying a whole step to be asked for it again. What it does not
+    do is raise or demote; an extra that cannot be read is simply not carried.
+    """
+    text = _salvage_json(payload) or payload
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    if validate_against_schema(parsed, schema) is None:
+        return text if isinstance(parsed, dict) else None
+
+    unwrapped = _unwrap_function_envelope(parsed, schema)
+    return None if unwrapped is None else json.dumps(unwrapped)
+
+
 def _salvage_json(text: str) -> str | None:
     """Pull the outermost JSON object out of prose.
 
@@ -668,7 +736,7 @@ class HttpLlm:
         return body
 
     def _read_tool_call(self, message: dict[str, Any]) -> str | None:
-        """Pull the arguments out of a tool call, across the dialects seen in the wild.
+        """Pull the arguments out of the *first* tool call, across the dialects.
 
         Three shapes are accepted because three shapes are documented:
 
@@ -685,43 +753,59 @@ class HttpLlm:
 
         Rejecting the TGI shape as unusable would throw away a correct answer and
         downgrade the protocol for no reason.
+
+        Calls after the first are read by `_read_extra_calls`, not here: this one
+        answers "what is the action of this reply", and the answer is the same whether
+        the model sent one call or six.
         """
-        calls = message.get("tool_calls")
-        if isinstance(calls, dict):
-            calls = [calls]
-        if not isinstance(calls, list) or not calls:
+        calls = _tool_call_entries(message)
+        if not calls:
             return None
+        return _call_payload(calls[0])
 
-        if len(calls) > 1:
-            # The protocol has exactly one action per turn. More than one means the
-            # model produced conflicting intent; taking the first silently would hide
-            # that, so it goes into the trace.
-            self._note("protocol", f"{len(calls)} tool calls returned, using the first")
+    def _read_extra_calls(
+        self, message: dict[str, Any], schema: dict[str, object] | None
+    ) -> tuple[str, ...]:
+        """Every further call of our function in the same reply, validated, in order.
 
-        if not isinstance(calls[0], dict):
-            return None
-        function = calls[0].get("function")
-        if not isinstance(function, dict):
-            # A flat entry carries name and arguments itself. Documented by
-            # llama.cpp, not observed from it -- see the docstring.
-            function = calls[0]
+        A reply with several calls used to be one action plus a trace note. On a fast
+        reasoning endpoint that is the dominant reply shape and the note was the only
+        thing the dropped calls produced: the model asked for the same batch again on
+        the next step, and the step cap -- not the clock -- ended the run with nothing
+        written. So the calls are carried out of the client and `agent.loop` decides,
+        under its own one-action-per-step rule, which of them may run.
 
-        if function.get("name") != TOOL_NAME:
-            # The request offers exactly one function. Never execute arguments from
-            # a call for another function just because their JSON happens to match
-            # our action schema; an unknown function is a protocol error.
-            return None
+        The first call is the reply's action and is returned through `text`, so only
+        `calls[1:]` are collected here, and only when that first call is the one the
+        caller actually used: a reply whose action was salvaged from `content`, or one
+        read on a lower rung, has nothing to add and returns nothing.
 
-        arguments = function.get("arguments")
-        if isinstance(arguments, str):
-            return arguments
-        if isinstance(arguments, dict):
-            return json.dumps(arguments)
+        A malformed entry among the extras is dropped, never a failure. The reply
+        already carries a usable action; refusing it over a bad third call would spend
+        a rung and a step on something the loop would simply not have run.
+        """
+        if schema is None or self.style != NATIVE_TOOLS:
+            return ()
+        calls = _tool_call_entries(message)
+        if len(calls) < 2 or _call_payload(calls[0]) is None:
+            return ()
 
-        parameters = function.get("parameters")
-        if isinstance(parameters, dict):
-            return json.dumps(parameters)
-        return None
+        kept: list[str] = []
+        dropped = 0
+        for entry in calls[1:]:
+            payload = _call_payload(entry)
+            action = None if payload is None else _normalise_action(payload, dict(schema))
+            if action is None:
+                dropped += 1
+                continue
+            kept.append(action)
+
+        # The note the single-action protocol used to make, now saying what was done
+        # with the calls rather than only how many arrived.
+        self._note("protocol", f"{len(calls)} tool calls returned, keeping {1 + len(kept)}")
+        if dropped:
+            self._note("protocol", f"{dropped} of the extra tool calls were malformed and dropped")
+        return tuple(kept)
 
     def _read_reply(
         self, payload: dict[str, Any], schema: dict[str, object] | None
@@ -967,7 +1051,9 @@ class HttpLlm:
                 # for it in tokens, which is the second ranking criterion.
                 return stamped(last)
 
-            return stamped(LlmReply(text=text))
+            return stamped(
+                LlmReply(text=text, extra_actions=self._read_extra_calls(message, schema))
+            )
 
         return stamped(last)
 
