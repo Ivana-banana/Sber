@@ -1,0 +1,3 @@
+{"ts":"2026-06-11T08:33:52Z","client":"198.51.100.86","decision":"allow","rule":"upload-path","target":"/upload?name=shell%2Ephp"}
+{"ts":"2026-06-11T08:34:05Z","client":"203.0.113.9","decision":"deny","rule":"php-upload-block","target":"/upload?name=cmd%2Ephp"}
+{"ts":"2026-06-11T08:34:19Z","client":"198.51.100.86","decision":"allow","rule":"default","target":"/uploads/shell.php?c=tar"}
