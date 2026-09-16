@@ -496,7 +496,12 @@ def run(
             # The rest of the reply. Read-only, bounded, and inside the step the
             # primary action already paid for -- see `_batch_reads`.
             grounded += _batch_reads(
-                state, reply.extra_actions, observations, step=step, playbook=playbook
+                state,
+                reply.extra_actions,
+                observations,
+                step=step,
+                playbook=playbook,
+                visible_from=base,
             )
 
         signal = detectors.stuck(state)
@@ -2637,8 +2642,17 @@ def _execute(
     return result
 
 
-def _already_observed(state: AgentState, tool: str, args: str) -> bool:
-    """Whether this exact call already ran in the current state epoch.
+_STEP_PREFIX = re.compile(r"\[step (\d+)\]")
+
+
+def _already_observed(
+    state: AgentState, tool: str, args: str, visible_steps: frozenset[int]
+) -> int | None:
+    """The earlier step whose identical call the model can still read, or None.
+
+    Only a result still inside the request the model just answered counts
+    (`visible_steps`): after a re-lay the earlier read is gone from its view, and
+    skipping the repeat then left it with neither the content nor a word about why.
 
     Inside one epoch nothing the run did changed a file or a service, so a repeat of a
     read returns what the history already carries. That covers the primary action of
@@ -2651,12 +2665,15 @@ def _already_observed(state: AgentState, tool: str, args: str) -> bool:
     nobody asked to pay for and re-reading a file for the same bytes is the failure
     this batch exists to stop, not one it may reproduce inside a step.
     """
-    return any(
-        record.state_epoch == state.state_epoch
-        and record.tool == tool
-        and record.args_digest == args
-        for record in state.actions
-    )
+    for record in reversed(state.actions):
+        if (
+            record.state_epoch == state.state_epoch
+            and record.tool == tool
+            and record.args_digest == args
+            and record.step in visible_steps
+        ):
+            return record.step
+    return None
 
 
 def _batch_reads(
@@ -2666,6 +2683,7 @@ def _batch_reads(
     *,
     step: int,
     playbook: Playbook,
+    visible_from: int = 0,
 ) -> int:
     """Run the read-only tail of one reply inside the step its first action used.
 
@@ -2702,6 +2720,11 @@ def _batch_reads(
     grounded = 0
     seen: set[tuple[str, str]] = set()
     parts: list[str] = []
+    visible_steps = frozenset(
+        int(found.group(1))
+        for text in observations[visible_from:]
+        if (found := _STEP_PREFIX.match(text))
+    )
 
     for index, raw in enumerate(extras[: limits.BATCH_READONLY_MAX], start=2):
         if state.budget.spendable_s() <= 0:
@@ -2732,8 +2755,18 @@ def _batch_reads(
             continue
 
         digest = detectors.args_digest(args)
-        if (tool, digest) in seen or _already_observed(state, tool, digest):
+        if (tool, digest) in seen:
+            state.record("budget", "batch-repeat", f"{tool} already ran in this batch")
+            continue
+        earlier = _already_observed(state, tool, digest, visible_steps)
+        if earlier is not None:
             state.record("budget", "batch-repeat", f"{tool} already ran in this epoch")
+            if earlier != step:
+                # This step's own primary sits right above the batch; an older one is
+                # worth naming, or the model reads the silence as "not run".
+                parts.append(
+                    f"[step {step}.{index}] {tool}: same call as [step {earlier}] above, not repeated"
+                )
             continue
         seen.add((tool, digest))
 
