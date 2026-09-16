@@ -16,8 +16,10 @@
 Claude (Fable 5.1) AFK, 16.09.2026 ночь — ветка `afk/4080-20260916`, всё **закоммичено и
 запушено**. Стенд RTX 4080 переведён на `hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ3_XXS`
 (thinking, 118 ток/с; карточка `docs/research/live-runs/2026-09-16-stand-4080.md`).
-Кандидат `61f4a4c` (`build/afk-treat.zip`, sha `65784ac2…`): парно на этом стенде
-**14/18 против 12/18** базы `8b568ac` (карточка `AFK-4080-final`); incident 3/3.
+Кандидат `c7551d9` (`build/afk-treat2.zip`, sha `21c8f0f6…`): на этом стенде **14/18**
+(fix-sqli-login 3/3, incident 2/3) против базы `8b568ac` 12/18, токены −8 % к `61f4a4c`
+(карточки `AFK-4080-final`, `AFK-4080-final-2`). Добавлен L1: пакет read-only
+tool_calls за один шаг.
 Что внутри: B1 (сигнал thinking по доказательству, потолок 240 с, slow-таймауты →
 `budget`, чекпоинт при наличии наблюдений, эхо replace_text, `AGENT_TRACE_BUDGET`),
 C1 (мелкие артефакты в бриф, playbook), G1 (повтор в эпохе), H1 (харнесс ждёт простоя
