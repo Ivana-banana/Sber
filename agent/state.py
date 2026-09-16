@@ -364,6 +364,12 @@ class AgentState:
     opened the file). A code-fix write_file to an unread existing source is refused, so
     the run cannot overwrite a module it never opened -- the 14B fix-sqli failure."""
 
+    python_probes_disabled: bool = field(default=False, repr=False)
+    """Set when a Python probe changed an evaluator or repository-control file. One
+    violation ends the privilege for the rest of the run: the probe exists to let a
+    repair be checked, and a run that has already used it to touch the evaluator has
+    shown the convenience is not free."""
+
     audit: list[Event] = field(default_factory=list)
     """Append-only trace. Nothing removes entries; truncation happens at render time."""
 
