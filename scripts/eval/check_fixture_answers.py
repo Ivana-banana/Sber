@@ -1,122 +1,275 @@
-"""Guard: every answer a fixture checker expects must be present in that fixture's environment.
+"""Guard: a fixture must be solvable and must survive a fresh checkout.
 
 Why this exists. Two extra forensics fixtures (`forensics-ssh-bruteforce`,
 `forensics-webshell-chain`) shipped without their log files: `*.log` was ignored by
 `.gitignore` when the fixtures were committed. Nothing failed loudly — the tasks simply
-became unsolvable, and both candidate arms scored 0/3 on them for reasons that had
-nothing to do with the agent. That cost a full measurement of two tasks and was found
-only by reading traces.
+became unsolvable, both candidate arms scored 0/3 on them for reasons that had nothing
+to do with the agent, and `local_task_extra/validation/reference-results.tsv` still said
+`PASS reward=1`, because the reference solution writes the answer as a constant and never
+reads the evidence. The defect was found by reading traces, days later.
 
-The check is deliberately narrow, because a broad one is noise. It looks only at answers
-a checker states verbatim:
+Two independent checks, because the first one alone missed the way it happened:
 
-* `key=value` lines of `tests/expected*` files (the forensic report form), and
-* string values of a dict named `expected*` in `tests/check.py`.
+1. **Reachability.** Every answer a checker states verbatim must appear somewhere under
+   `environment/`. Verbatim answers are the `key=value` lines of `tests/expected*` files
+   and the string values of dict literals in `tests/*.py`. A value that appears in no
+   evidence file cannot be derived by any agent.
+2. **Tracking.** Every file under a fixture tree must be tracked by git. This is what
+   actually broke: the file existed on the author's disk, `.gitignore` swallowed it, and
+   the fixture was already unsolvable when it reached the repository.
 
-A value that appears nowhere under `environment/` cannot be derived by any agent, so it
-is reported as unreachable. The reverse does not hold: a value being present does not
-make a task solvable, and tasks whose answer is computed at runtime (code fixes, CTF
-flags) state no verbatim answer at all and are therefore invisible here.
+What this does **not** prove. A present value does not make a task solvable, and a task
+whose answer is computed at run time (a hash, a sum, a code fix, a CTF flag) states no
+verbatim answer at all and is invisible to check 1 — the report says how many fixtures
+that covers instead of pretending they were verified. Reachability is also blind to a
+`Dockerfile` that copies an explicit file list: the evidence can be in the repository and
+still be absent from the image.
 
-Usage: python3 scripts/eval/check_fixture_answers.py [tasks-root ...]
-Exit code 1 if some expected answer is unreachable, 0 otherwise.
+Usage: python3 scripts/eval/check_fixture_answers.py [--show-values] [tasks-root ...]
+Exit 1 if an answer is unreachable or a fixture file is untracked, 2 if nothing was
+checked at all, 0 otherwise.
 """
 
 from __future__ import annotations
 
 import ast
+import json
+import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-DEFAULT_ROOTS = ("local_task/tasks", "local_task_extra/tasks", "local_task")
+DEFAULT_ROOTS = ("local_task", "local_task_extra/tasks")
+ANSWER_NAMES = ("expected", "exp", "want", "answer", "golden")
+# Two characters collide with everything: `ok`, `no`, a one-letter verdict. Reporting
+# them as reachable would be luck, not evidence, so they are left out of check 1.
 MIN_LENGTH = 3
+WORD = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
 
 
-def _read(path: Path) -> str:
+class Warned(list):
+    """Problems that must be visible but do not decide the exit code on their own."""
+
+
+def read_text(path: Path, warnings: Warned) -> str:
     try:
-        return path.read_text(errors="replace")
-    except OSError:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        warnings.append(f"unreadable, treated as empty: {path} ({exc.strerror})")
         return ""
 
 
-def expected_from_report(text: str) -> set[str]:
-    """Right-hand sides of the `key=value` lines of an expected deliverable."""
-    values: set[str] = set()
+def key_value_answers(text: str) -> set[str]:
+    """Right-hand sides of `key=value` lines, ignoring prose that merely contains `=`."""
+    answers: set[str] = set()
     for line in text.splitlines():
-        line = line.strip()
-        if line.count("=") >= 1 and not line.startswith("="):
-            values.add(line.split("=", 1)[1].strip())
-    return values
+        key, sep, value = line.strip().partition("=")
+        key, value = key.strip(), value.strip()
+        if not sep or not value or not key:
+            continue
+        if not key[0].isalpha() and key[0] != "_":
+            continue
+        if any(c not in WORD and c not in ".-" for c in key):
+            continue
+        answers.add(value)
+    return answers
 
 
-def expected_from_checker(source: str) -> set[str]:
-    """String values of a dict the checker binds to a name containing `expected`."""
-    values: set[str] = set()
+def json_answers(text: str) -> set[str]:
+    try:
+        loaded = json.loads(text)
+    except ValueError:
+        return set()
+    answers: set[str] = set()
+    stack = [loaded]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            answers.add(item.strip())
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return answers
+
+
+def checker_answers(source: str, warnings: Warned, where: Path) -> set[str]:
+    """String values of dict literals a checker compares the deliverable against.
+
+    The dict is recognised by the name it is bound to, and the four forensics checkers
+    in this repository use four different ones (`expected` once, `exp` three times), so
+    the list below is wider than a single spelling. Anonymous dict literals are left
+    alone on purpose: in `local_task/fix-sqli-login/tests` they carry attack payloads
+    that are meant to be absent from the environment, and counting them would turn a
+    healthy fixture red.
+    """
     try:
         tree = ast.parse(source)
-    except SyntaxError:
-        return values
+    except SyntaxError as exc:
+        warnings.append(f"unparsable checker, no answers taken from it: {where} ({exc.msg})")
+        return set()
+
+    named: set[int] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Dict):
+        target = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        elif isinstance(node, ast.AnnAssign):
+            target = node.target
+        if isinstance(target, ast.Name) and isinstance(node.value, ast.Dict):
+            if any(part in target.id.lower() for part in ANSWER_NAMES):
+                named.add(id(node.value))
+
+    answers: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict) or not node.values:
             continue
-        names = [t.id.lower() for t in node.targets if isinstance(t, ast.Name)]
-        if not any("expected" in name for name in names):
+        if id(node) not in named:
             continue
-        for item in node.value.values:
-            if isinstance(item, ast.Constant) and isinstance(item.value, str):
-                values.add(item.value.strip())
-    return values
+        values = [v.value for v in node.values if isinstance(v, ast.Constant) and isinstance(v.value, str)]
+        if len(values) == len(node.values):
+            answers.update(v.strip() for v in values)
+    return answers
 
 
-def environment_text(task: Path) -> str:
+def expected_answers(task: Path, warnings: Warned) -> set[str]:
+    tests = task / "tests"
+    if not tests.is_dir():
+        return set()
+    answers: set[str] = set()
+    for path in sorted(tests.rglob("*")):
+        if not path.is_file():
+            continue
+        name = path.name.lower()
+        if name.startswith("expected"):
+            text = read_text(path, warnings)
+            answers |= json_answers(text) if name.endswith(".json") else key_value_answers(text)
+        elif path.suffix == ".py":
+            answers |= checker_answers(read_text(path, warnings), warnings, path)
+    return {a for a in answers if len(a) >= MIN_LENGTH}
+
+
+def evidence(task: Path, warnings: Warned) -> str:
+    """Text of every file under `environment/`, newline-joined.
+
+    The separator is not cosmetic: concatenating the files directly invents matches
+    across the seam, and the report would then claim a value appears in a file when it
+    appears in no file.
+    """
     env = task / "environment"
     if not env.is_dir():
         return ""
-    return "".join(_read(f) for f in sorted(env.rglob("*")) if f.is_file())
+    return "\n".join(read_text(f, warnings) for f in sorted(env.rglob("*")) if f.is_file())
 
 
-def unreachable(task: Path) -> list[str]:
-    tests = task / "tests"
-    if not tests.is_dir():
-        return []
-    values: set[str] = set()
-    for path in sorted(tests.iterdir()):
-        if not path.is_file():
-            continue
-        if path.name.startswith("expected"):
-            values |= expected_from_report(_read(path))
-        elif path.name == "check.py":
-            values |= expected_from_checker(_read(path))
-    haystack = environment_text(task)
-    return sorted(v for v in values if len(v) >= MIN_LENGTH and v not in haystack)
+def reachable(value: str, haystack: str) -> bool:
+    """True when the value appears as a whole token, not inside a longer one.
+
+    `198.51.100.44` must not be satisfied by `198.51.100.440`, and `deploy` must not be
+    satisfied by the word `deployment` in a README.
+    """
+    start = haystack.find(value)
+    while start != -1:
+        before = haystack[start - 1] if start else ""
+        after = haystack[start + len(value) : start + len(value) + 1]
+        if before not in WORD and after not in WORD:
+            return True
+        start = haystack.find(value, start + 1)
+    return False
+
+
+def show(value: str, reveal: bool) -> str:
+    if reveal:
+        return repr(value)
+    return f"{value[:2]}…{value[-1:]} ({len(value)} chars)"
 
 
 def tasks_under(root: Path) -> list[Path]:
     if not root.is_dir():
         return []
-    return [p for p in sorted(root.iterdir()) if (p / "task.toml").is_file()]
+    found = []
+    for path in sorted(root.iterdir()):
+        if (path / "task.toml").is_file():
+            found.append(path)
+    return found
+
+
+def untracked_files(root: Path) -> list[Path] | None:
+    """Files under `root` that git does not track, or None when git cannot answer."""
+    try:
+        listed = subprocess.run(
+            ["git", "ls-files", "-z", "--", str(root)],
+            cwd=root if root.is_dir() else root.parent,
+            capture_output=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    tracked = {
+        (root / name).resolve()
+        for name in listed.stdout.decode("utf-8", "replace").split("\0")
+        if name
+    }
+    if not tracked:
+        return None
+    on_disk = {p.resolve() for p in root.rglob("*") if p.is_file()}
+    return sorted(on_disk - tracked)
 
 
 def main(argv: list[str]) -> int:
-    roots = [Path(a) for a in argv[1:]] or [ROOT / r for r in DEFAULT_ROOTS]
+    reveal = "--show-values" in argv
+    args = [a for a in argv[1:] if not a.startswith("--")]
+    roots = [Path(a) for a in args] or [ROOT / r for r in DEFAULT_ROOTS]
+
+    warnings = Warned()
     seen: set[Path] = set()
     checked = 0
+    stateless = 0
     broken = 0
+
     for root in roots:
+        if not root.is_dir():
+            warnings.append(f"no such tasks root, skipped: {root}")
+            continue
+        for path in sorted(root.iterdir()):
+            if path.is_dir() and (path / "tests").is_dir() and not (path / "task.toml").is_file():
+                warnings.append(f"looks like a task but has no task.toml, skipped: {path}")
         for task in tasks_under(root):
             resolved = task.resolve()
             if resolved in seen:
                 continue
             seen.add(resolved)
             checked += 1
-            missing = unreachable(task)
+            answers = expected_answers(task, warnings)
+            if not answers:
+                stateless += 1
+                continue
+            haystack = evidence(task, warnings)
+            missing = sorted(a for a in answers if not reachable(a, haystack))
             if missing:
                 broken += 1
                 print(f"UNREACHABLE {task.name}")
                 for value in missing:
-                    print(f"    {value!r} appears in no file under environment/")
-    print(f"checked {checked} fixtures, {broken} with an unreachable expected answer")
+                    print(f"    {show(value, reveal)} appears in no file under environment/")
+
+        untracked = untracked_files(root)
+        if untracked is None:
+            warnings.append(f"git could not list tracked files under {root}, tracking unchecked")
+        else:
+            for path in untracked:
+                broken += 1
+                print(f"UNTRACKED {path} — present on disk, absent from a fresh checkout")
+
+    for line in warnings:
+        print(f"warning: {line}")
+    verifiable = checked - stateless
+    print(
+        f"checked {checked} fixtures: {verifiable} state a verbatim answer and were verified, "
+        f"{stateless} state none and cannot be verified this way"
+    )
+    if not checked:
+        print("nothing was checked — wrong tasks root?")
+        return 2
     return 1 if broken else 0
 
 
