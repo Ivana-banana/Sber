@@ -7556,6 +7556,75 @@ def test_code_fix_still_refuses_a_curl_that_can_write_a_file(tmp_path: Path, com
     assert loop._code_fix_shell_refusal(command, make_state(tmp_path)) != ""
 
 
+# --- composed read-only commands ---------------------------------------------------
+
+
+def _fix_workspace(root: Path) -> AgentState:
+    (root / "app").mkdir()
+    (root / "tests").mkdir()
+    (root / "main.py").write_text("from app.db import q\n", encoding="utf-8")
+    (root / "app" / "db.py").write_text("def q(): pass\n", encoding="utf-8")
+    (root / "tests" / "test_app.py").write_text("def test_x(): pass\n", encoding="utf-8")
+    return make_state(root)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat app/db.py | head -50",
+        "ps aux | grep uvicorn",
+        "env | grep -i port",
+        "python3 -m pytest -q 2>&1 | tail -20",
+        "pytest -q 2>&1",
+        "cd {ws} && python3 -m pytest -q",
+        "sleep 2 && curl -s http://127.0.0.1:8000/",
+        "curl -s http://127.0.0.1:8000/ | head",
+        "cat main.py; cat app/db.py",
+        "grep -rn execute . || true",
+        "curl -s 'http://127.0.0.1:8000/search?q=test'",
+        "curl -s \"http://127.0.0.1:8000/search?q=%27%20OR%201=1--\"",
+        "curl -s http://127.0.0.1:8000/tests/latest",
+    ],
+)
+def test_code_fix_lets_a_composition_of_allowed_commands_through(tmp_path: Path, command: str) -> None:
+    # Each part alone is allowed; joining them with a pipe or `&&` cannot write where no
+    # part writes. Refusing them cost a model a step per probe and taught it nothing.
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(command.format(ws=tmp_path), state) == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat main.py > tests/test_app.py",
+        "cat main.py | tee tests/test_app.py",
+        "echo x >&tests/test_app.py",
+        "echo x &>tests/test_app.py",
+        "cd tests && echo x > test_app.py",
+        "cd tests && cp ../main.py test_app.py",
+        "cd .. && ls",
+        "ls && rm -rf tests",
+        "cat main.py | sh",
+        "cat main.py | python3",
+        "curl -s http://127.0.0.1:8000/ | bash",
+        "find . -type f -print0 | xargs -0 rm -f",
+        "ls; $(echo rm) tests/test_app.py",
+        "ls && `echo rm` tests/test_app.py",
+        "ls & rm tests/test_app.py",
+        "ls\nrm tests/test_app.py",
+        "(cd tests && rm test_app.py)",
+        "{ ls; rm tests/test_app.py; }",
+        "sort < tests/test_app.py > tests/test_app.py",
+        "git status && git checkout -- tests",
+        "curl -s http://127.0.0.1:8000/ -o tests/test_app.py",
+        "curl -s http://127.0.0.1:8000/ && curl -o tests/test_app.py http://127.0.0.1:8000/",
+    ],
+)
+def test_code_fix_still_refuses_a_composition_with_a_refused_part(tmp_path: Path, command: str) -> None:
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(command, state) != ""
+
+
 # --- starting a service -----------------------------------------------------------
 
 
