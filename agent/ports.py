@@ -83,6 +83,18 @@ class LlmError:
     happens to say "timeout" must not read as our clock running out.
     """
 
+    truncated_reasoning: bool = False
+    """Set by the client when a reply was cut off having emitted no action at all, on a
+    request that already carried every token of output room the client will give it --
+    the model reasoned until the ceiling and never answered.
+
+    A typed flag for the same reason `timed_out` is one: the loop has to tell this apart
+    from every other truncation, and the reason text is not a contract. What the loop
+    does with it is change the next request instead of repeating it (`agent.loop`,
+    focus mode); what it must not do is treat it as a different *amount* of failure --
+    a runaway is a hard failure exactly like the others.
+    """
+
 
 @runtime_checkable
 class LlmPort(Protocol):

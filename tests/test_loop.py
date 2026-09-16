@@ -372,6 +372,33 @@ def test_a_bare_length_truncation_no_longer_lifts_the_clamp(tmp_path: Path) -> N
     assert state.budget.allow_long_llm is False
 
 
+def test_a_reasoning_runaway_is_not_by_itself_a_verdict_about_the_endpoint(
+    tmp_path: Path,
+) -> None:
+    """The runaway flag changes the next request; it does not change the call ceiling.
+
+    Those are two different readings of one reply and they have different owners. Whether
+    the endpoint reasons before answering is `agent.llm`'s sticky verdict, and on a real
+    client it is already set by the time a runaway comes back -- so a loop that also
+    inferred it from the flag would be guessing where it has an answer. Pinned because
+    the two live one line apart (`F4-7b-regression-4080` is what the guessing costs).
+    """
+    state = make_state(tmp_path)
+    llm = StubLlm(replies=[
+        LlmError(
+            "reply truncated by length at style native_tools",
+            retryable=False,
+            output_tokens=limits.LLM_THINKING_MAX_OUTPUT_TOKENS,
+            truncated_reasoning=True,
+        ),
+        action("list_dir", path=str(tmp_path)),
+    ])
+
+    run(state, llm, FakeVerify())
+
+    assert state.budget.allow_long_llm is False
+
+
 def test_a_plain_endpoint_error_does_not_lift_the_clamp(tmp_path: Path) -> None:
     state = make_state(tmp_path)
     llm = StubLlm(replies=[LlmError("connection refused", retryable=True)] * 4)

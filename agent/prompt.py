@@ -235,16 +235,94 @@ def history_base(observations: list[str], base: int) -> int:
     return max(base, len(observations) - limits.OBSERVATION_RELAY_KEEP)
 
 
-def build_messages(system: str, observations: list[str], base: int = 0) -> list[Message]:
+def focus_base(observations: list[str], base: int, evidence: int | None) -> int:
+    """First observation a *focused* request relays. Sibling of `history_base`.
+
+    Narrow, but never narrow past the evidence. The window is the last
+    `limits.FOCUS_RELAY_KEEP` observations, walked back far enough to include the newest
+    one that came from a tool -- `evidence`, which the caller owns because only it knows
+    which entries are results and which are its own notes.
+
+    The walk-back is what makes the window worth sending, and it was bought with two
+    findings against the count-only version (review, 16.09):
+
+    * a runaway appends its own `endpoint error` line, and a step past the early
+      checkpoint prepends a hint. Both are the loop talking to itself, and a window of
+      two relayed exactly those two -- so the request said "write your best answer now"
+      and "do not reason" with not one observed fact left in it. That is the fabrication
+      path `agent.loop`'s own `grounded` guard exists to close, reopened from the side;
+    * a reply with extra read-only calls, a detector signal, a refused `finish` and a red
+      verifier each append a second entry to the same step, so "the last two" was never a
+      reliable way to keep the last result either.
+
+    Everything after `evidence` travels with it: those are the notes that explain what
+    happened since, and they are one-liners. The size that matters -- the several large
+    tool outputs further back -- is still what gets dropped, and `base` still bounds the
+    walk-back, so a focused request can never reach behind the anchored history.
+    """
+    window = max(base, len(observations) - limits.FOCUS_RELAY_KEEP)
+    if evidence is None:
+        # Nothing has been observed yet. There is no evidence to protect, and the loop's
+        # own checkpoint hint already says "go and look" rather than "write your best"
+        # on a run in that state.
+        return window
+    return max(base, min(window, evidence))
+
+
+FOCUS_NOTICE = (
+    "[фокус] Предыдущий ответ был обрезан по длине без действия. Не рассуждай: "
+    "сразу верни один короткий вызов инструмента для следующего шага "
+    "(если результат уже записан — finish с командой проверки)."
+)
+"""The one line a focused request adds, and it is a suffix rather than an observation.
+
+It belongs to the request and not to the history on purpose. An observation is what the
+run saw; this is what the run is asking for, it is true of exactly one call, and an
+entry appended to `observations` would travel on every later request, be counted by the
+repeat detectors and be re-read by the server for the rest of the task. As a suffix it
+costs one message once.
+
+Last of all the user messages. (Not literally the last message on the lower rungs of
+`agent.llm`'s ladder: `json_object` and the text rungs append a system line restating
+the schema. That line is the same on every call, so the focus line is still the newest
+thing in the request that is about this call.) The checkpoint hint (`agent.loop`) can be
+in the same request -- the runaway and the deadline are independent -- and the order is
+deliberate: the checkpoint says *what* is worth writing now, the focus line says *how*
+to answer at all. The second is useless without the first, so the first arrives as
+history and the second closes the request.
+
+Russian, like the other lines the loop addresses to the model: the system contract is
+English for its token cost, but these are per-call sentences whose cost is measured in
+one call, not in every call of every task.
+"""
+
+
+def build_messages(
+    system: str, observations: list[str], base: int = 0, *, focus: bool = False
+) -> list[Message]:
     """The full request: one system message and the observation history from `base`.
 
     Observations are already bounded and already redacted by `agent.tools`; this
     function only decides how many of them travel. It is a window and not a summary, so
     nothing here can silently drop the error the model needs to read -- and `base` comes
     from `history_base`, so what travels grows by one message a step until a re-lay.
+
+    `focus` closes the request with `FOCUS_NOTICE` and does nothing else. The narrowing
+    that goes with it is `focus_base`, computed by the caller and arriving here as `base`
+    like any other: one place decides what travels, whether or not this is a focused
+    request, so the two cannot narrow the same history twice and disagree about it.
+
+    A focused request never moves the caller's anchor. The request *after* it is the
+    request that would have been sent anyway, and the run goes back to extending. What
+    focus costs the server's prefix cache is two prefills and no more: the focused
+    request diverges right after the system block, and the full request behind it then
+    finds the cache holding the focused one. Both are paid once, against a call the model
+    was answering with nothing -- and the first of the two is the short one.
     """
     messages: list[Message] = [{"role": "system", "content": system}]
     if base:
         messages.append({"role": "user", "content": OMISSION_NOTICE})
     messages.extend({"role": "user", "content": text} for text in observations[base:])
+    if focus:
+        messages.append({"role": "user", "content": FOCUS_NOTICE})
     return messages

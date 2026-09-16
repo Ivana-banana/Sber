@@ -108,6 +108,16 @@ def run(
     # Consecutive calls that failed in a way that says the endpoint cannot be used. A
     # call that merely timed out is counted separately -- see `_llm_failure_kind`.
     llm_failures = 0
+    # Whether the NEXT request is a focused one: a narrowed history plus one line asking
+    # for an action and no reasoning (`prompt.FOCUS_NOTICE`). Set only by a reply that
+    # reasoned past the raised output ceiling without emitting anything, and only when
+    # the call that did it was not itself focused.
+    focus_next = False
+    # Index in `observations` of the newest entry that is a tool result rather than
+    # something this loop said to itself. Only the narrowing of a focused request reads
+    # it, and it reads it so that the narrowing cannot drop the last observed fact: the
+    # difference between asking the model to act on what it saw and asking it to invent.
+    last_evidence: int | None = None
     # Successful tool results carrying content. Zero means the run has observed nothing,
     # so anything it writes would be invented rather than reported.
     grounded = 0
@@ -186,9 +196,24 @@ def run(
         # fitting its budget, so every other request extends the previous one and the
         # server pays for the new tail alone.
         history_base = prompt.history_base(observations, history_base)
+        # Focus is consumed here, before the reply is read: whatever comes back, the next
+        # request is an ordinary one unless a fresh runaway asks for another. That is what
+        # makes a focus loop impossible rather than merely unlikely.
+        focused, focus_next = focus_next, False
+        base = history_base
+        if focused:
+            # Narrowed for this call only -- `history_base` keeps its anchor, so the next
+            # ordinary request is the one that would have been sent anyway.
+            base = prompt.focus_base(observations, history_base, last_evidence)
+            state.record("budget", "focus", "focused retry after a truncated reasoning reply")
         reply = llm.complete_structured(
-            prompt.build_messages(system, observations, history_base),
+            prompt.build_messages(system, observations, base, focus=focused),
             schema=prompt.ACTION_SCHEMA,
+            # The same ceiling on a focused call as on any other. The raised output
+            # budget is `agent.llm`'s and is sticky, and the model needs the room: what
+            # ran away was the prompt, not the space to answer in. Asking for less would
+            # truncate the answer we are trying to get; asking for more buys a longer
+            # runaway.
             max_output_tokens=limits.LLM_MAX_OUTPUT_TOKENS,
             timeout_s=max(1.0, state.budget.llm_timeout_s()),
         )
@@ -214,6 +239,27 @@ def run(
                     stop_reason = "llm-unusable"
                     summary = f"endpoint unusable after {llm_failures} failed calls: {reply.reason}"
                     break
+                if reply.truncated_reasoning and not focused:
+                    # The model reasoned to the ceiling and emitted nothing. Repeating the
+                    # request buys the same non-answer -- measured four times in a row on
+                    # the 35B stand -- so the next one is narrowed instead.
+                    #
+                    # Counted as the hard failure it is, and only once: the focused call
+                    # replaces the second of the three logical calls the counter allows,
+                    # it does not add a fourth. Worst case is therefore exactly today's
+                    # worst case -- runaway, focused runaway, one more failure,
+                    # `llm-unusable` -- which on that stand is 4 endpoint calls of ~70 s
+                    # once the endpoint is already known to reason (the first logical call
+                    # pays two, the raised retry and the thinking-off retry; the rest one
+                    # each), or 5 from cold. ~280-350 s, unchanged either way. What the
+                    # focus buys for those seconds is a request the model has not already
+                    # failed to answer; the second of the three is also the cheapest of
+                    # them, since its history is `limits.FOCUS_RELAY_KEEP` long.
+                    #
+                    # Decided here, audited where the request is actually built: the clock
+                    # or the step cap can end the run in between, and a trace must not
+                    # claim a retry nobody sent.
+                    focus_next = True
             else:
                 # A call that ran out of wall clock with nothing delivered says the
                 # endpoint is slow, not broken, and the two must not end the run the same
@@ -423,6 +469,11 @@ def run(
         observations.append(
             f"[step {step}] {tool} -> {'ok' if result.ok else 'FAIL'}\n{body}{echo}".rstrip()
         )
+        # Evidence, whether or not the action succeeded: a failed tool result is what the
+        # model has to react to. Anything a focused request adds after this index -- the
+        # batch's own entry, a refusal, a red verifier, a checkpoint hint -- travels with
+        # it, because all of those are one-liners and this is the observation that costs.
+        last_evidence = len(observations) - 1
 
         if result.ok and tool == prompt.WRITE_FILE:
             exact = _verify_exact_write(state, verify, args, playbook=playbook)
