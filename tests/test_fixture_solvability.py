@@ -122,3 +122,69 @@ def test_zero_taxonomy_defaults_to_the_dev_side() -> None:
     assert module.dev_side_default({"hello-file", "bye-file", "find-sqli-login"}) is None
     # So must a mixed run: narrowing it would silently drop the public half.
     assert module.dev_side_default({"hello-file", "fix-cache-key-scope"}) is None
+
+
+def load_vocabulary_check():
+    spec = importlib.util.spec_from_file_location(
+        "check_fixture_vocabulary", ROOT / "scripts" / "check_fixture_vocabulary.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def fixture_package(root: Path, name: str, checker: str, instruction: str = "") -> None:
+    task = root / name
+    (task / "tests").mkdir(parents=True)
+    (task / "environment").mkdir(parents=True)
+    (task / "task.toml").write_text(f'[task]\nname = "local/{name}"\n')
+    (task / "tests" / "check.py").write_text(checker)
+    if instruction:
+        (task / "instruction.md").write_text(instruction)
+
+
+def test_a_playbook_line_repeating_a_checker_literal_is_caught(tmp_path: Path) -> None:
+    """The C7 rule: a prompt may repeat the task's own words, never the checker's."""
+    check = load_vocabulary_check()
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    fixture_package(tasks, "audit-made-up", "expected = {'location': 'app/views.py:118'}\n")
+    vocab = check.vocabulary((tasks,))
+    assert "app/views.py:118" in vocab
+
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    (agent_dir / "playbooks.py").write_text(
+        'AUDIT = "report the finding as app/views.py:118"\n'
+    )
+    hits = check.scan(vocab, agent_dir)
+    assert hits and "app/views.py:118" in hits[0]
+
+
+def test_the_honest_form_of_the_same_line_passes(tmp_path: Path) -> None:
+    check = load_vocabulary_check()
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    fixture_package(tasks, "audit-made-up", "expected = {'location': 'app/views.py:118'}\n")
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    (agent_dir / "playbooks.py").write_text(
+        'AUDIT = "repeat the location format the task asks for"\n'
+    )
+    assert check.scan(check.vocabulary((tasks,)), agent_dir) == []
+
+
+def test_an_experiment_note_in_a_docstring_is_not_a_hit(tmp_path: Path) -> None:
+    """Attribute docstrings are where fixture names legitimately live (PEP 258)."""
+    check = load_vocabulary_check()
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    fixture_package(tasks, "audit-made-up", "expected = {'location': 'app/views.py:118'}\n")
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    (agent_dir / "limits.py").write_text(
+        'BRIEF_MAX = 8\n"""Chosen after app/views.py:118 in audit-made-up scored zero."""\n'
+    )
+    assert check.scan(check.vocabulary((tasks,)), agent_dir) == []
