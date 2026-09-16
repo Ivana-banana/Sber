@@ -23,7 +23,7 @@ the deliverable.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -2188,6 +2188,35 @@ def _code_fix_shell_word_is_workspace_root(word: str, workspace: Path) -> bool:
     return target == workspace
 
 
+_CURL_WRITING_LONG = (
+    "--output", "--remote-name", "--remote-header-name", "--output-dir", "--dump-header",
+    "--cookie-jar", "--config", "--trace", "--libcurl", "--stderr", "--etag-save",
+    "--hsts", "--alt-svc", "--create-dirs", "--upload-file",
+)
+_CURL_WRITING_SHORT = frozenset("oODcKTJ")
+
+
+def _curl_can_write(arguments: Sequence[str]) -> bool:
+    """Whether this curl invocation can put bytes into a local file.
+
+    A plain HTTP probe of the service writes only to stdout, and after a restart it is
+    the direct way to see that the port answers. Anything that names an output, a
+    header/cookie dump, a config file, an upload or a `file:` URL is still refused, as
+    is a `%output{}` write-out; so is an option cluster we cannot read letter by letter.
+    """
+    for word in arguments:
+        lowered = word.lower()
+        if "file:" in lowered or "%output{" in lowered:
+            return True
+        if word.startswith("--"):
+            if word.split("=", 1)[0].startswith(_CURL_WRITING_LONG):
+                return True
+        elif word.startswith("-") and len(word) > 1:
+            if _CURL_WRITING_SHORT.intersection(word[1:]):
+                return True
+    return False
+
+
 def _code_fix_shell_has_broad_workspace_mutation(command: str, state: AgentState) -> bool:
     try:
         raw_words = shlex.split(command)
@@ -2200,6 +2229,8 @@ def _code_fix_shell_has_broad_workspace_mutation(command: str, state: AgentState
     words = _code_fix_shell_unwrap_simple_wrappers(raw_words)
     executable = PurePosixPath(words[0]).name if words else ""
     if executable not in _BROAD_MUTATORS:
+        return False
+    if executable == "curl" and raw_words[0] == "curl" and not _curl_can_write(words[1:]):
         return False
     if executable in {
         "cmake",

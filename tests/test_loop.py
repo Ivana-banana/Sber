@@ -7521,3 +7521,36 @@ def test_a_background_job_without_redirected_output_is_refused_at_once(tmp_path:
 )
 def test_backgrounding_with_redirected_output_or_no_background_is_not_refused(command: str) -> None:
     assert loop._background_holds_pipe(command) is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "curl -s http://127.0.0.1:8000/healthz",
+        "curl -sS -X POST http://localhost:8000/api/login -H 'Content-Type: application/json' -d '{\"u\": \"a\"}'",
+        "curl -si http://127.0.0.1:8000/items/1",
+    ],
+)
+def test_code_fix_lets_a_curl_probe_of_the_service_through(tmp_path: Path, command: str) -> None:
+    # After the stale-service hint the model has to see that the port answers again.
+    # A plain HTTP probe writes nothing locally; refusing it left only pytest to find out.
+    assert loop._code_fix_shell_refusal(command, make_state(tmp_path)) == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "curl -o tests/fixture.py http://127.0.0.1:8000/x",
+        "curl -sSo tests/fixture.py http://127.0.0.1:8000/x",
+        "curl --output=tests/fixture.py http://127.0.0.1:8000/x",
+        "curl -O http://127.0.0.1:8000/fixture.py",
+        "curl -K payload.conf",
+        "curl -T payload.txt file:///tmp/x/tests/fixture.py",
+        "curl -c tests/jar http://127.0.0.1:8000/",
+        "curl -D tests/headers http://127.0.0.1:8000/",
+        "curl -w '%output{tests/f}' http://127.0.0.1:8000/",
+        "CURL_HOME=. curl http://127.0.0.1:8000/",
+    ],
+)
+def test_code_fix_still_refuses_a_curl_that_can_write_a_file(tmp_path: Path, command: str) -> None:
+    assert loop._code_fix_shell_refusal(command, make_state(tmp_path)) != ""
