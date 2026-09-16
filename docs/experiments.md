@@ -4135,3 +4135,90 @@ thinking на длинной истории); reward=1, но это новый �
   наблюдение к открытому вопросу о `max_recovery_passes = 1`.
 - Ограничения: n=3 на одном стенде; разница токенов/времени с кандидатом-9 не парная (другой день,
   тот же стенд); решаемость фиксов ревью на extra измеряется следующим шагом.
+
+### EXTRA-pair-q36 (2026-09-17) — extra 18×3 для кандидата-9 и ветки ревью, одинаковые условия: 37/54 = 37/54
+
+- Стенд c (`q36-iq3xxs`, ctx 16384), `--tasks-root local_task_extra/tasks --repeats 3
+  --timeout-scale 1.0 --reuse-images`, `AGENT_TRACE_TOOLS=1 AGENT_TRACE_BUDGET=1`, один и тот же
+  `run_suite.py` (с прогревом H2) для обоих архивов, кандидат-9 первым, ревью вторым, без
+  пауз (`build/logs/extra_queue.sh`). Архивы: `build/afk-treat9.zip` (`83f48e63…`, 9a8673c) и
+  `build/review.zip` (`48aac622…`, ветка ревью 9c2a828). results.tsv:
+  `build/eval-EXTRA-9a8673c` `17a3984c2079fc0e43c6bbd83ff88664f26396f311ed4de658128ef70c2a4c6f`,
+  `build/eval-EXTRA-review` `8d1be48cf432846979ee198d813688d3f6a49102ad4fa2b75460b64d5b4156a4`.
+- Split dev/holdout — `scripts/eval/extra_split.py` (sha256 имени, стратификация по категории,
+  mut 3/3), зафиксирован до чтения логов; holdout-логи не открывались.
+- **Две задачи нерешаемы на этих образах** (`forensics-webshell-chain` dev, `forensics-ssh-bruteforce`
+  holdout): улики не попали в коммит M5 (`docs/research/local-task-fixtures.md`, раздел 17.09);
+  их 0/3 у обоих — класс `task-defect`, знаменатель сравнения — 48.
+
+| задача | side | 9a8673c | ревью | токены 9a / ревью | wall 9a / ревью |
+|---|---|---|---|---|---|
+| audit-hardcoded-token | dev | 1/3 | 1/3 | 41 704 / 37 456 | 62 / 60 |
+| audit-parser-trust-boundary | dev | 0/3 | 0/3 | 61 920 / 50 112 | 79 / 84 |
+| audit-path-normalization | holdout | 1/3 | 2/3 | 113 658 / 80 081 | 417 / 157 |
+| ctf-duplicate-parameter | holdout | 3/3 | 3/3 | 159 818 / 146 743 | 265 / 438 |
+| ctf-header-override | dev | 3/3 | 3/3 | 153 456 / 157 680 | 314 / 478 |
+| ctf-signed-cookie | holdout | 3/3 | 3/3 | 72 410 / 79 790 | 121 / 123 |
+| fix-cache-key-scope | dev | 3/3 | 3/3 | 39 642 / **216 217** | 54 / **265** |
+| fix-redirect-scheme | dev | 3/3 | 3/3 | 100 300 / 150 377 | 396 / **1396** |
+| fix-zip-slip-extract | holdout | 0/3 | 0/3 | 132 527 / 118 712 | 394 / 304 |
+| forensics-sharded-exfil | holdout | 2/3 | 1/3 | 211 697 / 240 124 | 1352 / 1428 |
+| forensics-ssh-bruteforce (дефект) | holdout | 0/3 | 0/3 | 286 842 / 298 579 | 442 / 357 |
+| forensics-webshell-chain (дефект) | dev | 0/3 | 0/3 | 200 767 / 226 738 | 1441 / 1441 |
+| mut-audit-query-gate | holdout | 3/3 | 3/3 | 66 639 / 72 466 | 117 / 128 |
+| mut-fix-inventory-filter | dev | 3/3 | 3/3 | 87 436 / 90 983 | 136 / 109 |
+| mut-fix-session-lookup | holdout | 3/3 | 3/3 | 105 799 / 86 419 | 170 / 110 |
+| mut-forensics-egress-ledger | dev | 3/3 | 3/3 | 55 646 / 50 320 | 188 / 131 |
+| mut-greeting-farewell | holdout | 3/3 | 3/3 | 13 100 / 12 978 | 17 / 13 |
+| mut-salutation-beacon | dev | 3/3 | 3/3 | 14 277 / 12 844 | 16 / 12 |
+| **Σ** | | **37/54** | **37/54** | 1 927 725 / 2 138 398 | 5981 / 7033 |
+
+| категория | 9a8673c | ревью | токены 9a / ревью |
+|---|---|---|---|
+| audit | 2/9 | 3/9 | 217 282 / 167 649 |
+| ctf | 9/9 | 9/9 | 385 684 / 384 213 |
+| fix | 6/9 | 6/9 | 272 469 / **485 306** |
+| forensics (без дефектных 1 задача) | 2/3 | 1/3 | — |
+| mut | 18/18 | 18/18 | 342 897 / 326 010 |
+
+- Без дефектных: **dev 19/24 = 19/24, holdout 18/24 = 18/24** — по solved кандидаты
+  неразличимы и на dev, и на holdout; по токенам ветка ревью дороже на 11 % (на fix-задачах —
+  в 1,8 раза), по времени — на 18 %. Разница на fix-cache-key-scope (216 k против 40 k): после
+  верной правки на 3-м шаге модель девять шагов отвечала текстом «fix already applied» без
+  действия и пять раз получала отказ политики code-fix на собственную проверку
+  (`python3 /app/verify_fix.py`, `python3 -c "…"`); у кандидата-9 та же задача — 4 шага без
+  отказов. Отказы того же правила есть у обоих (fix-redirect-scheme: 9/2/1 у кандидата-9,
+  1/3/4 у ревью) — дефект общий, см. таксономию ниже.
+- Ограничения: n=3, один стенд, 3-битный квант; результат по holdout — только строки
+  results.tsv; forensics в сравнении представлена одной решаемой задачей.
+
+### EXTRA-taxonomy (2026-09-17) — таксономия нулей extra, dev по логам, holdout по строкам
+
+Dev (логи `agent tool:`, `.trace`, `.post`, verifier), оба арма:
+
+| задача | повтор | stop | что было на диске | почему verifier поставил 0 | класс |
+|---|---|---|---|---|---|
+| audit-hardcoded-token | 9a r1, r3; ревью r2, r3 | verified | верный отчёт, `location` = `client.py:7` / `:5` (×2 каждый) | чекер требует `client.py:6` (строка `RELAY_API_TOKEN`) | `format` — `read_range` не показывает номера строк, модель считает их сама и ошибается на ±1 |
+| audit-parser-trust-boundary | 9a r1–r3; ревью r1–r3 | verified | верные две находки, `location` = `ingest.py:4`, `hooks.py:4` (или `4-5`) | чекер требует `ingest.py:decode_manifest`, `hooks.py:apply_hook` | `format` — соглашение `file:function` против `file:line`; playbook о форме `location` молчит |
+| forensics-webshell-chain | все 6 | budget | deliverable отсутствует; 5 рассуждений по 8192 токенов на 256-байтовой улике | ответа в уликах нет | `task-defect` (улики утеряны, восстановлены в `b17a57e`) |
+| find-sqli-login (public, ревью r1) | r1 | budget | пустой `security_report.json` | JSONDecodeError | `format` после `endpoint` (два HTTP 500 на 8192-токенных рассуждениях → json_schema → `write_file` без `content`) |
+
+Holdout (только столбцы results.tsv): audit-path-normalization 9a r2 verified / r3 verify-failed,
+ревью r1 verified; fix-zip-slip-extract 9a verified/stuck/verified, ревью stuck/stuck/verified;
+forensics-sharded-exfil 9a r2 budget, ревью r1, r3 budget; forensics-ssh-bruteforce все `steps`
+(`task-defect`).
+
+**Топ классов.** По нулям dev (без дефектных): `format` — 10 из 10 (5 + 5), все в audit; ни
+`tool-refused`, ни `false-verified` в смысле «агент подтвердил, а файла нет» на dev нулей не
+дали. По стоимости (не нулям) главный класс — **`tool-refused` в code-fix**: политика
+`_code_fix_shell_has_python_script`/`_script_invocation` отклоняет любой `python3 -c "…"` и
+запуск любого локального скрипта (даже `python3 -c "print(1)"`), разрешён только `pytest`;
+на extra-fix-задачах без тестов в `/app` модель пишет собственную проверку и получает отказ:
+fix-redirect-scheme 12 отказов (9a) / 8 (ревью), fix-cache-key-scope 0 / 10, mut-fix-inventory-filter
+6 / 6 — при reward 1, но с кратными токенами; на holdout fix-zip-slip 0/3 у обоих (класс не
+проверялся по логам, воспроизведён на dev как стоимость). Третий класс — `reasoning` обрыв
+рассуждения (8192 токенов без действия) на forensics: на dev виден только на дефектной задаче,
+на holdout — `budget` у sharded-exfil (1 / 2).
+
+Порядок факторов шага 4: F-C политика code-fix для собственных проверок (`tool-refused`),
+F-B1 номера строк в чтениях audit (`format`), F-A `write_file` без ключа `content` (`format`).
