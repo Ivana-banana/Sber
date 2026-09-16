@@ -37,6 +37,18 @@ while [ "$i" -le "$repeats" ]; do
         echo "LEAK: container still present after rm"
     fi
 
+    # The container writes through the mount as root, so the host user cannot delete
+    # what it left behind: a plain `rm -rf` here prints "Permission denied" for every
+    # unpacked file, returns success anyway and leaks half a megabyte per repeat into
+    # /tmp. Clear the mount from inside the same image first, then say so if the
+    # directory still survives instead of pretending the cleanup worked.
+    docker run --rm -v "$rundir":/work "$image" \
+        sh -c 'rm -rf /work/unpacked /work/task /work/*.log /work/escape_*.txt' >/dev/null 2>&1
     rm -rf "$rundir"
+    if [ -e "$rundir" ]; then
+        echo "LEAK: $rundir survived cleanup"
+    else
+        echo "confirmed mount removed"
+    fi
     i=$((i + 1))
 done
