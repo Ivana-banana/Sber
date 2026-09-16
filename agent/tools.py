@@ -32,7 +32,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from agent import limits
+from agent import limits, result_progress
 from agent.paths import permits
 from agent.redact import AGENT_CREDENTIAL_ENV_NAMES, redact
 
@@ -909,3 +909,580 @@ def search(
     if truncated:
         body += f"\n… stopped at {max_matches} matches; narrow the pattern"
     return ToolResult(name="search", ok=True, output=redact(body, secrets), truncated=truncated)
+
+
+# --- Who else is still running the code this run changed ---------------------
+#
+# Observation only. Nothing below signals, starts or stops anything: an earlier attempt
+# to restart the service before self-verification was reverted for good reasons -- the
+# restarted process became the agent's own child and was then protected from the next
+# check, a failed restart left the service dead, the matching caught a database and the
+# container's entrypoint, and on a forensics task the same code would have re-executed
+# the process under investigation. What survives that review is the half that cannot
+# break anything: read procfs, say what is running, and let the model decide.
+#
+# The fact worth saying is narrow. Measured over three code-fix episodes on the 30B
+# stand: the model edited the handler, ran the project's own tests, and they passed --
+# against a server started at container entry without reload, which was still serving
+# the pre-edit module. The run reported itself solved and the grader, which restarts
+# the service itself, scored zero. A check that could not have exercised the change is
+# not evidence, and the only way to know is to compare when a process started with when
+# the file changed.
+#
+# Two rules decide whether a process is running changed code, and both are narrow on
+# purpose, because the cost of a wrong yes is a refused `finish` on a correct run:
+#
+#   1. the command line names the changed file itself;
+#   2. the command line names an *entry point* -- an existing source file, reached
+#      either as a path or as a `module:attr` / `package.module` token -- and the
+#      changed file lives under that entry point's directory. That is the shape of
+#      `uvicorn main:app` started from `/app` with `routers/auth.py` edited: nothing in
+#      the command line mentions the router, but `main.py` sits beside it.
+#
+# A process is deliberately *not* matched because its command line names a directory
+# that holds a changed file. That rule looked reasonable and matched `mysqld
+# --datadir=/app` -- a database that has never imported a line of the application.
+
+PROC_ROOT = Path("/proc")
+"""Where the process table lives. Every function below takes `proc_root` and falls back
+to this, so a test can hand over a synthetic table instead of the machine's own."""
+
+TCP_LISTEN = "0A"
+"""`/proc/net/tcp` state column for a listening socket."""
+
+DELETED_MARKER = " (deleted)"
+"""What procfs appends to a link whose target is gone. Such a path names nothing."""
+
+CONFIG_SUFFIXES = frozenset(
+    {
+        ".bash", ".cfg", ".conf", ".ini", ".json", ".properties",
+        ".sh", ".sql", ".toml", ".xml", ".yaml", ".yml",
+    }
+)
+"""Data and configuration, which are not the code a process is executing.
+
+`agent/result_progress.py` counts these as production *files* and it is right to: a
+repair may well be a changed setting. They are excluded here for a different question.
+Nothing imports `config.yml`, so a running process cannot be "the one serving" it, and
+treating the container's entrypoint script or a database's config file as an entry
+point is exactly how the reverted attempt came to match `mysqld` and `redis-server`.
+"""
+
+PRODUCTION_SUFFIXES = frozenset(result_progress.SOURCE_SUFFIXES) - CONFIG_SUFFIXES
+"""Source suffixes a running program can be executing. Derived, never re-typed."""
+
+GENERIC_DIRECTORIES = frozenset(
+    {
+        "/",
+        "/bin",
+        "/boot",
+        "/dev",
+        "/etc",
+        "/home",
+        "/lib",
+        "/lib64",
+        "/media",
+        "/mnt",
+        "/opt",
+        "/proc",
+        "/root",
+        "/run",
+        "/sbin",
+        "/srv",
+        "/sys",
+        "/tmp",
+        "/usr",
+        "/var",
+    }
+)
+"""Directories too broad to be anyone's project root. Every file on the machine is
+under `/`, so a rule that accepts one of these accepts everything."""
+
+
+@dataclass(frozen=True)
+class ProcessInfo:
+    """One running process, as much of it as procfs would tell us."""
+
+    pid: int
+    ppid: int
+    argv: tuple[str, ...]
+    cwd: Path | None = None
+    """`None` when the link is unreadable, or points at a directory that was removed."""
+
+    started_at: float = 0.0
+    """Wall-clock epoch seconds when the process was exec'd, `0.0` when unknown."""
+
+
+@dataclass(frozen=True)
+class ProcessTable:
+    """Everything one bounded walk of procfs saw, and whether it saw all of it."""
+
+    processes: tuple[ProcessInfo, ...] = ()
+    complete: bool = True
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class ServingProcess:
+    """A process whose command line says it is running code this run has changed."""
+
+    pid: int
+    argv: tuple[str, ...]
+    """At most `limits.SERVICE_SCAN_ARGV_TOKENS` tokens, redacted and single-lined."""
+
+    cwd: Path | None = None
+    started_at: float = 0.0
+    """Wall-clock epoch seconds, `0.0` when procfs did not say. A caller comparing this
+    against a file time must treat `0.0` as unknown and conclude nothing."""
+
+    ports: tuple[int, ...] = ()
+    """Listening TCP ports this pid owns. Empty means *unknown*, never "owns none":
+    `/proc/<pid>/fd` is closed to us for another user's process."""
+
+    reason: str = ""
+    """Why this process was matched, in one short English phrase, for the trace."""
+
+    @property
+    def label(self) -> str:
+        """The command line as a person would name the service: `uvicorn main:app`."""
+        if not self.argv:
+            return f"pid {self.pid}"
+        head = Path(self.argv[0]).name or self.argv[0]
+        return " ".join((head, *self.argv[1:]))
+
+
+@dataclass(frozen=True)
+class ServiceScan:
+    """What one scan found. `known` is about the scan, never about the machine.
+
+    `known=False` means the walk could not be completed -- no procfs, a permission
+    refusal, the process cap or the time budget. The processes it did find are still
+    real and a caller may act on them; what it must not do is read an empty result from
+    an incomplete scan as "nothing is running the changed code".
+    """
+
+    processes: tuple[ServingProcess, ...] = ()
+    known: bool = True
+    reason: str = ""
+
+
+def _safe_token(value: str, secrets: Sequence[str]) -> str:
+    """One argv token, fit to travel into an observation and a trace.
+
+    An option *value* is dropped, not redacted: `--password=...`, `--api-key=...` and
+    `--dsn=postgres://user:pw@host/db` are ordinary ways to start a service, and the
+    agent's own `redact` only knows the credentials it was given, not the machine's.
+    What the model needs from a command line is which program is running and what it
+    was pointed at, and that survives the cut.
+    """
+    head, separator, _ = value.partition("=")
+    if value.startswith("-") and separator:
+        value = f"{head}=…"
+    return redact(_one_line(value), secrets)[: limits.SERVICE_SCAN_TOKEN_CHARS]
+
+
+def _one_line(value: str) -> str:
+    """Collapse control characters so one token cannot break a one-event-per-line log."""
+    out: list[str] = []
+    for char in value:
+        code = ord(char)
+        if char in "\n\r\t":
+            out.append(" ")
+        elif code < 32 or code == 127:
+            out.append(".")
+        else:
+            out.append(char)
+    return "".join(out)
+
+
+def _is_production_source(path: Path) -> bool:
+    """Whether this path is application code rather than a test, a report or a setting.
+
+    The repo already defines production source in `agent/result_progress.py`; this
+    mirrors that definition -- excluded directories, test-marked names -- and subtracts
+    configuration and data, which no process imports.
+    """
+    name = path.name.lower()
+    if any(marker in name for marker in result_progress.TEST_NAME_MARKERS):
+        return False
+    if any(part in result_progress.EXCLUDED_DIRS for part in path.parts):
+        return False
+    return path.suffix.lower() in PRODUCTION_SUFFIXES
+
+
+def production_sources(paths: Iterable[Path]) -> tuple[Path, ...]:
+    """Existing production source files among `paths`, resolved and deduplicated."""
+    found: dict[Path, None] = {}
+    for path in paths:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if resolved in found or not _is_production_source(resolved):
+            continue
+        try:
+            if not resolved.is_file():
+                continue
+        except OSError:
+            continue
+        found[resolved] = None
+    return tuple(found)
+
+
+def _clock_ticks() -> float:
+    try:
+        ticks = os.sysconf("SC_CLK_TCK")
+    except (AttributeError, OSError, ValueError):
+        return 100.0
+    return float(ticks) if ticks and ticks > 0 else 100.0
+
+
+def _boot_time(proc_root: Path) -> float:
+    """Epoch second the kernel booted, or `0.0` if procfs does not say."""
+    try:
+        content = (proc_root / "stat").read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return 0.0
+    for line in content.splitlines():
+        if line.startswith("btime "):
+            try:
+                return float(line.split()[1])
+            except (IndexError, ValueError):
+                return 0.0
+    return 0.0
+
+
+def _read_process(entry: Path, pid: int, boot_time: float, ticks: float) -> ProcessInfo | None:
+    """One `/proc/<pid>` directory, or `None` for anything that cannot be a service.
+
+    A zombie and a kernel thread both have an empty `cmdline`, and neither holds a port
+    or executes code; a process that exits while we are reading it looks the same as a
+    permission refusal, and both mean the same thing here -- not a candidate.
+    """
+    try:
+        raw = (entry / "cmdline").read_bytes()
+    except OSError:
+        return None
+    # Non-UTF-8 argv is ordinary: a command line is bytes, and a mojibake filename is
+    # exactly the kind of thing a forensics fixture contains. Replacing keeps the token
+    # printable; it can only fail to match, never match the wrong file.
+    argv = tuple(part.decode("utf-8", "replace") for part in raw.split(b"\0") if part)
+    if not argv:
+        return None
+
+    ppid, started_at = 0, 0.0
+    try:
+        stat_line = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        stat_line = ""
+    # Field 2 is the command name, parenthesised, and may itself contain spaces and
+    # parentheses -- so the tail is taken after the *last* ')' rather than by splitting.
+    close = stat_line.rfind(")")
+    if close != -1:
+        fields = stat_line[close + 1 :].split()
+        if len(fields) >= 20:
+            if fields[0] == "Z":
+                return None
+            try:
+                ppid = int(fields[1])
+                if boot_time:
+                    started_at = boot_time + float(fields[19]) / ticks
+            except ValueError:
+                ppid, started_at = 0, 0.0
+
+    cwd: Path | None
+    try:
+        target = os.readlink(entry / "cwd")
+    except OSError:
+        cwd = None
+    else:
+        cwd = None if not target or target.endswith(DELETED_MARKER) else Path(target)
+
+    return ProcessInfo(pid=pid, ppid=ppid, argv=argv, cwd=cwd, started_at=started_at)
+
+
+def process_table(
+    *,
+    proc_root: Path | None = None,
+    max_processes: int = limits.SERVICE_SCAN_MAX_PROCESSES,
+    deadline: float | None = None,
+) -> ProcessTable:
+    """Every process procfs will describe, in pid order, bounded by count and clock.
+
+    `deadline` is a `time.monotonic()` instant. Both bounds report themselves through
+    `complete`: a partial walk is never allowed to look like a complete one.
+    """
+    root = PROC_ROOT if proc_root is None else proc_root
+    try:
+        names = sorted((name for name in os.listdir(root) if name.isdigit()), key=int)
+    except OSError as exc:
+        return ProcessTable((), False, f"procfs is not readable: {type(exc).__name__}")
+    boot_time, ticks = _boot_time(root), _clock_ticks()
+    found: list[ProcessInfo] = []
+    complete, reason = True, ""
+    for index, name in enumerate(names):
+        if index >= max_processes:
+            complete, reason = False, f"scan stopped at {max_processes} processes"
+            break
+        if deadline is not None and index % 16 == 0 and time.monotonic() > deadline:
+            complete, reason = False, "scan stopped on its time budget"
+            break
+        info = _read_process(root / name, int(name), boot_time, ticks)
+        if info is not None:
+            found.append(info)
+    return ProcessTable(tuple(found), complete, reason)
+
+
+def _own_tree(pid: int, table: Sequence[ProcessInfo]) -> frozenset[int]:
+    """`pid`, every parent above it and every process below it.
+
+    The agent must never report itself, the runner that launched it, or a server it
+    started as the thing serving stale code: the first two are what is doing the
+    checking, and the third already has the change.
+    """
+    parents = {info.pid: info.ppid for info in table}
+    children: dict[int, list[int]] = {}
+    for info in table:
+        children.setdefault(info.ppid, []).append(info.pid)
+
+    found = {pid}
+    current = parents.get(pid, 0)
+    while current > 0 and current not in found:
+        found.add(current)
+        current = parents.get(current, 0)
+
+    queue = list(children.get(pid, ()))
+    while queue:
+        child = queue.pop()
+        if child in found:
+            continue
+        found.add(child)
+        queue.extend(children.get(child, ()))
+    return frozenset(found)
+
+
+def _holding_directories(targets: Sequence[Path]) -> dict[Path, Path]:
+    """Every directory that can be called the project root of a changed file.
+
+    Maps the directory to the changed file that put it there, so a match can say which
+    edit it is talking about. Bounded by depth and filtered by name, because "the
+    directory holding the change" is `/` for every file on the machine.
+    """
+    found: dict[Path, Path] = {}
+    for target in targets:
+        for depth, parent in enumerate(target.parents):
+            if depth >= limits.SERVICE_SCAN_MAX_DEPTH:
+                break
+            if str(parent) in GENERIC_DIRECTORIES:
+                continue
+            found.setdefault(parent, target)
+    return found
+
+
+def _token_paths(token: str, cwd: Path | None, wanted_names: frozenset[str]) -> list[Path]:
+    """Paths an argv token could be naming, resolved the way the process would see them.
+
+    `main:app`, `--app-dir=/srv/api`, `app.main:app` and `./server.js` are all ordinary
+    ways to name the code a server loads, so each token is reduced to its path-shaped
+    part and offered in both file and dotted-module form.
+
+    The name filter in the middle is not a shortcut, it is the cost bound: resolving a
+    path costs syscalls, a command line is mostly options, ports and log paths, and the
+    whole scan is a fraction of a second for every process on the machine. A token
+    survives only if it could still match -- it names a changed file, or it ends in a
+    source suffix and might therefore be an entry point.
+    """
+    if not token or (token.startswith("-") and "=" not in token):
+        return []
+    head = token.split("=", 1)[1] if token.startswith("-") else token
+    head = head.split(":", 1)[0].strip().strip("'\"")
+    if not head or head in {".", ".."}:
+        return []
+
+    shapes = [head]
+    if "/" not in head and not head.startswith("."):
+        # `main:app`, `app.main:app` and `-m app` name a module, not a file. Both module
+        # shapes are offered: a module is a file, a package is a directory with an
+        # `__init__.py`. Without this the most common service line in the public set --
+        # `uvicorn main:app` from the application root -- matches nothing at all.
+        dotted = head.replace(".", "/")
+        shapes.append(f"{dotted}.py")
+        shapes.append(f"{dotted}/__init__.py")
+
+    targets: list[Path] = []
+    for shape in shapes:
+        candidate = Path(shape)
+        named = candidate.name in wanted_names
+        if not named and candidate.suffix.lower() not in PRODUCTION_SUFFIXES:
+            continue
+        if not candidate.is_absolute():
+            if cwd is None:
+                continue
+            candidate = cwd / shape
+        try:
+            # Symlinks and `..` are resolved on both sides of every comparison: procfs
+            # hands back a fully resolved cwd and the changed paths are resolved too, so
+            # an argv written against a symlinked project root still matches.
+            targets.append(candidate.resolve())
+        except OSError:
+            targets.append(candidate)
+    return targets
+
+
+def _is_entry_point(target: Path) -> bool:
+    """Whether an existing path a command line names could be the code it runs.
+
+    A source file, and nothing else. An extension-less program qualified in the
+    reverted attempt and that is what made `/usr/local/bin/redis-server` and
+    `/usr/sbin/mysqld` look like entry points of the application whose directory they
+    happened to sit near.
+    """
+    if target.suffix.lower() not in PRODUCTION_SUFFIXES:
+        return False
+    try:
+        return target.is_file()
+    except OSError:
+        return False
+
+
+def _serves(
+    process: ProcessInfo,
+    targets: frozenset[Path],
+    directories: Mapping[Path, Path],
+    wanted_names: frozenset[str],
+) -> str:
+    """Why this process would be running changed code, or "" if there is no reason to."""
+    # Every name below comes from the filesystem, so it is single-lined before it can
+    # reach a trace: a file called "auth\n[verify] ok.py" is a legal file name and this
+    # text is rendered one event per line.
+    entries: list[Path] = []
+    for token in process.argv[: limits.SERVICE_SCAN_MAX_ARGV_SCANNED]:
+        for candidate in _token_paths(token, process.cwd, wanted_names):
+            if candidate in targets:
+                return _one_line(f"argv names {candidate.name}")
+            entries.append(candidate)
+    for entry in entries:
+        changed = directories.get(entry.parent)
+        if changed is None or not _is_entry_point(entry):
+            continue
+        return _one_line(f"loads {entry.name} from {entry.parent}, where {changed.name} changed")
+    return ""
+
+
+def _listen_table(*, proc_root: Path | None = None) -> dict[int, int]:
+    """Socket inode -> listening port, for every TCP socket in LISTEN.
+
+    `agent/preflight.py` has a reporting-only twin of this that renders `address:port`
+    for the environment brief. This one keeps the inode, which is the only link back to
+    the process holding the port. Read line by line and capped: in a busy container
+    these files hold one line per established connection.
+    """
+    root = PROC_ROOT if proc_root is None else proc_root
+    ports: dict[int, int] = {}
+    for name in ("tcp", "tcp6"):
+        read = 0
+        try:
+            with (root / "net" / name).open("r", encoding="ascii", errors="replace") as handle:
+                for line in handle:
+                    read += 1
+                    if read > limits.SERVICE_SCAN_MAX_SOCKET_LINES:
+                        break
+                    fields = line.split()
+                    if len(fields) < 10 or fields[3] != TCP_LISTEN:
+                        continue
+                    _, _, port = fields[1].rpartition(":")
+                    try:
+                        ports[int(fields[9])] = int(port, 16)
+                    except ValueError:
+                        continue
+        except OSError:
+            continue
+    return ports
+
+
+def _socket_inodes(pid: int, *, proc_root: Path | None = None) -> frozenset[int]:
+    """Socket inodes held by `pid`, or an empty set when the directory is closed to us.
+
+    Empty is indistinguishable from "holds no socket", so callers must read it as
+    unknown -- never as evidence that a process owns no port.
+    """
+    root = PROC_ROOT if proc_root is None else proc_root
+    entry = root / str(pid) / "fd"
+    try:
+        names = os.listdir(entry)
+    except OSError:
+        return frozenset()
+    inodes: set[int] = set()
+    for name in names[: limits.SERVICE_SCAN_MAX_FDS]:
+        try:
+            target = os.readlink(entry / name)
+        except OSError:
+            continue
+        if target.startswith("socket:[") and target.endswith("]"):
+            try:
+                inodes.add(int(target[len("socket:[") : -1]))
+            except ValueError:
+                continue
+    return frozenset(inodes)
+
+
+def serving_processes(
+    modified: Sequence[Path],
+    *,
+    proc_root: Path | None = None,
+    secrets: Sequence[str] = (),
+    budget_s: float = limits.SERVICE_SCAN_BUDGET_S,
+    max_processes: int = limits.SERVICE_SCAN_MAX_PROCESSES,
+) -> ServiceScan:
+    """Processes whose command line says they are running one of `modified`.
+
+    Read-only and bounded: no signal is sent, no process is started, and the whole walk
+    obeys `budget_s`. Every failure degrades to `known=False`, never to an exception --
+    this runs inside the loop's finish gate and a raise there would cost the task.
+    """
+    deadline = time.monotonic() + max(0.0, budget_s)
+    targets = production_sources(modified)[: limits.SERVICE_SCAN_MAX_MODIFIED]
+    if not targets:
+        return ServiceScan((), True, "no modified production source")
+
+    table = process_table(proc_root=proc_root, max_processes=max_processes, deadline=deadline)
+    if not table.processes:
+        return ServiceScan((), table.complete, table.reason or "no process could be read")
+
+    protected = _own_tree(os.getpid(), table.processes)
+    wanted = frozenset(target.name for target in targets)
+    directories = _holding_directories(targets)
+    resolved = frozenset(targets)
+
+    matched: list[tuple[ProcessInfo, str]] = []
+    complete, reason = table.complete, table.reason
+    for info in table.processes:
+        if info.pid <= 1 or info.pid in protected:
+            continue
+        if time.monotonic() > deadline:
+            complete, reason = False, "scan stopped on its time budget"
+            break
+        found = _serves(info, resolved, directories, wanted)
+        if found:
+            matched.append((info, found))
+            if len(matched) >= limits.SERVICE_SCAN_MAX_MATCHES:
+                break
+
+    ports = _listen_table(proc_root=proc_root) if matched else {}
+    found_processes: list[ServingProcess] = []
+    for info, found in matched:
+        inodes = _socket_inodes(info.pid, proc_root=proc_root) if ports else frozenset()
+        found_processes.append(
+            ServingProcess(
+                pid=info.pid,
+                argv=tuple(
+                    _safe_token(token, secrets)
+                    for token in info.argv[: limits.SERVICE_SCAN_ARGV_TOKENS]
+                ),
+                cwd=info.cwd,
+                started_at=info.started_at,
+                ports=tuple(sorted({port for inode, port in ports.items() if inode in inodes})),
+                reason=found,
+            )
+        )
+    return ServiceScan(tuple(found_processes), complete, reason)

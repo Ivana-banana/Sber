@@ -436,6 +436,106 @@ try the one shape that works. The defect is fixed where it belongs, in
 `agent.llm._unwrap_function_envelope`, which reads the reply this model really sends.
 """
 
+# --- Is anything still running the code we changed? ---------------------------
+
+SERVICE_SCAN_BUDGET_S = 0.5
+"""Wall clock one whole process scan may take, procfs reads included.
+
+The scan runs on `finish`, inside the reserve that belongs to verification, so it is
+priced as part of the check and not as a step of its own. Half a second is about what
+reading four hundred `/proc/<pid>` entries costs on the target image; past that the
+scan stops where it stands and reports itself incomplete, because a bounded blind spot
+is cheaper than an unbounded delay before the deliverable is verified.
+"""
+
+SERVICE_SCAN_MAX_PROCESSES = 2000
+"""How many `/proc/<pid>` entries one scan reads before it stops and says so.
+
+The count is the guard against a pathological process table, not the cost bound --
+`SERVICE_SCAN_BUDGET_S` above is. Measured on the development host, reading an entry
+(cmdline, stat, cwd) and matching it against the changed files costs about 40 us, so
+this ceiling is roughly 80 ms and the clock ends the scan long before it does.
+
+It is deliberately well above the few dozen processes a task container runs: entries
+are visited in pid order, so a cap set near the real population would silently drop the
+newest processes on any busier machine, and "stopped early" is reported as an incomplete
+scan rather than as an answer. Stopping early can only hide a stale service (a hint not
+given), never invent one.
+"""
+
+SERVICE_SCAN_MAX_MODIFIED = 32
+"""Changed production files matched against the process table.
+
+A repair touches one or two files and a refactor still runs behind one service, so this
+bounds the cross product rather than shaping an answer.
+"""
+
+SERVICE_SCAN_MAX_MATCHES = 4
+"""Processes reported as serving changed code before the scan stops looking.
+
+More independent services than this referencing one change is not a picture the hint
+can describe usefully, and the model needs the first one named, not a list.
+"""
+
+SERVICE_SCAN_ARGV_TOKENS = 3
+"""Command-line tokens kept for the hint. `uvicorn main:app` is three; the fourth is
+already an option value, and an option value is where a password travels."""
+
+SERVICE_SCAN_TOKEN_CHARS = 60
+"""Ceiling on one kept token. A very long path is orientation, not evidence."""
+
+SERVICE_SCAN_MAX_ARGV_SCANNED = 12
+"""Tokens of one command line examined while matching.
+
+The entry point of a service is named early -- `uvicorn main:app`, `python manage.py
+runserver`. What follows is options, and scanning them costs a path resolution each.
+"""
+
+SERVICE_SCAN_MAX_DEPTH = 8
+"""Directory levels above a changed file that may be treated as its project root.
+
+`/app/routers/auth.py` must let `uvicorn main:app` started from `/app` match, so the
+walk goes up; it stops before it can reach something so broad that every process on
+the machine appears to load the change. Generic system directories are excluded by
+name regardless of depth.
+"""
+
+SERVICE_SCAN_MAX_FDS = 512
+"""Descriptors of one process examined while looking for its listening sockets."""
+
+SERVICE_SCAN_MAX_SOCKET_LINES = 4000
+"""Lines read from `/proc/net/tcp` and `tcp6`.
+
+In a busy container these files hold one line per established connection and can reach
+megabytes; the listening sockets we are after are a handful. Reading a bounded prefix
+can only cost a port number in the hint, never correctness.
+"""
+
+SERVICE_SCAN_START_MARGIN_S = 1.0
+"""How much later than a process started a file must have changed to count as newer.
+
+`/proc/<pid>/stat` gives the start time in ticks since boot and `/proc/stat` gives the
+boot time as a whole second, so a process start reconstructed from them carries up to a
+second of error; a file mtime does not. The margin is that error. It is spent in the
+safe direction: a service that legitimately restarted itself just after the edit is
+left alone, at the price of not warning about a process started in the same second as
+the change.
+"""
+
+SERVICE_SCAN_MAX_REFUSALS = 1
+"""Times one run may have `finish` refused because a pre-change process serves the code.
+
+Once. The observation says what to do about it; if the model looks and decides the
+process does not matter, that is its call to make, and a gate that keeps saying no to
+a model that has already answered it burns the budget the repair needs. The audit note
+is written either way, so a run that finished over the warning is visible afterwards.
+"""
+
+SERVICE_SCAN_MAX_CHECKS = 2
+"""Scans one run may pay for: the one that can refuse, and the one that records what
+the run finished with anyway."""
+
+
 # --- Diagnostics --------------------------------------------------------------
 
 TRACE_TOOLS_ENV_NAME = "AGENT_TRACE_TOOLS"

@@ -112,6 +112,12 @@ def run(
     # so anything it writes would be invented rather than reported.
     grounded = 0
     blocks_in_a_row = 0
+    # Per-run counters for the stale-service gate: how many scans the run has paid for
+    # and how many `finish` calls it has refused over one. Locals, like every other
+    # per-run counter here -- nothing about this belongs in `AgentState`, which outlives
+    # the loop and is read by the reporter.
+    stale_service_checks = 0
+    stale_service_refusals = 0
     last_verdict: VerifyResult | None = None
     stop_reason = ""
     summary = ""
@@ -265,6 +271,21 @@ def run(
                     f"[step {step}] production source progress is unknown: "
                     f"{source_changes.reason}. Do not treat an artifact alone as a repair."
                 )
+
+            if stale_service_checks < limits.SERVICE_SCAN_MAX_CHECKS:
+                # Could this check have exercised the change at all? A process older
+                # than the edit is running the code as it was before it. Observation
+                # only: nothing here restarts, signals or starts anything.
+                looked = _stale_service(state, source_changes)
+                if looked is not None:
+                    stale_service_checks += 1
+                    kind, detail, hint = looked
+                    if kind:
+                        state.record("verify", kind, detail)
+                    if hint and stale_service_refusals < limits.SERVICE_SCAN_MAX_REFUSALS:
+                        stale_service_refusals += 1
+                        observations.append(f"[step {step}] {hint}")
+                        continue
 
             verify_started = state.start_phase("verify")
             last_verdict = verify(state, deliverable=deliverable, command=command)
@@ -2682,6 +2703,187 @@ def _source_changes(
             (), False, "no production source snapshot was captured before the run"
         )
     return result_progress.changed_sources(state.workspace, state.source_snapshot)
+
+
+# --- The check that could not have seen the change ----------------------------
+#
+# Measured over three code-fix episodes on the 30B stand: in every one the model edited
+# the handler, ran the project's own test suite, and the suite passed -- against a
+# server the container had started at entry, without reload, which was still importing
+# the pre-edit module. Two of those three edits were wrong (a duplicated call line, a
+# stale zero-argument call left beside the new parametrized query) and the run reported
+# itself solved anyway; the grader, which restarts the service before scoring, gave
+# zero. No exit code could have separated those runs from a real repair, and the task's
+# own AGENTS.md warns about the stale process.
+#
+# So the finish gate asks one question the exit code cannot answer: could this check
+# have exercised the change at all? A process that started *before* the file changed is
+# running the old code, and every check that goes through it is measuring the old code.
+#
+# The gate observes and refuses; it never acts. It does not restart anything, and it
+# refuses only once (`limits.SERVICE_SCAN_MAX_REFUSALS`): the model may look at the
+# process and decide it does not matter, and a run that finished over the warning is
+# visible afterwards through the `stale-service` audit note rather than through a
+# second refusal it cannot get past.
+
+
+def _existed_before_run(state: AgentState, path: Path) -> bool:
+    """Whether this path was already on disk when the run started.
+
+    Positive evidence only, from the two snapshots the loop already keeps. A file the
+    run *created* is a report, a note or a patch -- nothing a process started before the
+    run can be executing. A file the run *edited* is the case this gate exists for.
+    """
+    snapshot = state.source_snapshot
+    if snapshot is not None:
+        try:
+            relative = path.relative_to(state.workspace.resolve()).as_posix()
+        except (OSError, ValueError):
+            relative = ""
+        if relative and relative in snapshot.files:
+            return True
+    return bool(state.baseline.get(str(path)))
+
+
+def _modified_production_files(
+    state: AgentState, changes: result_progress.SourceChanges | None
+) -> list[Path]:
+    """Existing production files this run changed, from both oracles the loop keeps.
+
+    Neither alone is complete: `state.artifacts` knows every file written through a tool
+    but nothing about a `sed -i` from the shell, and the source scan sees any edit under
+    the workspace but is bounded and may be incomplete.
+
+    `changes` is the scan the caller already paid for, not a second walk of the same
+    tree: `_source_changes` runs a few lines earlier in the same finish gate, and
+    re-reading the workspace to answer the same question would double a cost that is
+    charged against the verifier reserve. `None` -- the playbook that does not track
+    source progress -- simply leaves the artifacts oracle to answer alone.
+    """
+    found: dict[Path, None] = {}
+
+    def keep(candidate: Path) -> None:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            return
+        found.setdefault(resolved, None)
+
+    snapshot = state.source_snapshot
+    if changes is not None and changes.known and snapshot is not None:
+        for relative in changes.paths:
+            if relative in snapshot.files:  # edited, not created by this run
+                keep(state.workspace / relative)
+
+    for artifact in state.artifacts:
+        if _existed_before_run(state, artifact):
+            keep(artifact)
+
+    return list(found)
+
+
+def _wall_clock(moment: float) -> str:
+    """A wall-clock instant as the model reads it in a log: local time, seconds."""
+    return time.strftime("%H:%M:%S", time.localtime(moment))
+
+
+def _workspace_relative(path: Path, workspace: Path) -> str:
+    """The short name of a path for a message, never an absolute host path.
+
+    Single-lined on the way out: a file name may legally contain a newline, and this
+    text is rendered one event per line and read back by the eval parsers.
+    """
+    try:
+        name = path.relative_to(workspace.resolve()).as_posix()
+    except (OSError, ValueError):
+        name = path.name
+    return name.replace("\r", " ").replace("\n", " ")
+
+
+def _stale_service(
+    state: AgentState, changes: result_progress.SourceChanges | None = None
+) -> tuple[str, str, str] | None:
+    """`(audit name, audit detail, hint for the model)` about pre-change processes.
+
+    `None` means no scan happened at all -- this run has changed nothing a process could
+    be executing, which is the ordinary case on an audit or a forensics task. The caller
+    counts scans against a budget and must not spend one on a question with no subject.
+
+    Otherwise three outcomes, and the empty one is the common one:
+
+    * `("", "", "")`        -- every process that could be running the change was
+      started after it. Nothing is recorded: an audit line per finish saying a machine
+      looked fine would be noise in the one place a reader looks for trouble.
+    * `("stale-service-unknown", reason, "")` -- the scan could not be completed (no
+      procfs, a permission refusal, its own time budget). Nothing is refused, because
+      "we could not look" is not evidence, and the note says the check ran blind.
+    * `("stale-service", detail, hint)` -- a process older than the edit is running it.
+
+    Never raises. A scan that fails inside the finish gate would cost the whole task,
+    so every failure becomes the unknown outcome above.
+    """
+    try:
+        modified = _modified_production_files(state, changes)
+        changed_at: dict[Path, float] = {}
+        for path in tools.production_sources(modified):
+            try:
+                changed_at[path] = path.stat().st_mtime
+            except OSError:
+                continue
+        if not changed_at:
+            return None
+
+        scan = tools.serving_processes(list(changed_at), secrets=state.secrets)
+        timeless = 0
+        stale: list[tuple[tools.ServingProcess, Path, float]] = []
+        for process in scan.processes:
+            if process.started_at <= 0.0:
+                # procfs named the process but not when it started, so nothing can be
+                # concluded about what it loaded. Counted, not guessed at: it is the
+                # same blind spot as an unreadable process table and is reported as one.
+                timeless += 1
+                continue
+            newer = [
+                (path, moment)
+                for path, moment in changed_at.items()
+                if moment - process.started_at > limits.SERVICE_SCAN_START_MARGIN_S
+            ]
+            if newer:
+                path, moment = min(newer, key=lambda item: item[1])
+                stale.append((process, path, moment))
+
+        if not stale:
+            if timeless:
+                return (
+                    "stale-service-unknown",
+                    f"{timeless} process(es) run the changed code; procfs gave no start time",
+                    "",
+                )
+            if not scan.known:
+                return "stale-service-unknown", scan.reason or "process scan was incomplete", ""
+            return "", "", ""
+
+        process, path, moment = stale[0]
+        relative = _workspace_relative(path, state.workspace)
+        ports = ", ".join(f":{port}" for port in process.ports)
+        listens = f", слушает {ports}" if ports else ""
+        others = f" Ещё процессов в том же состоянии: {len(stale) - 1}." if len(stale) > 1 else ""
+        hint = (
+            f"[verify] сервис `{process.label}` (pid {process.pid}{listens}) запущен в "
+            f"{_wall_clock(process.started_at)}, раньше твоей правки {relative} в "
+            f"{_wall_clock(moment)}: любая проверка через него меряет старый код.{others} "
+            "Перезапусти сервис так, как это делает его entrypoint (например, останови "
+            "старый процесс и запусти ту же команду заново в фоне), дождись, пока порт "
+            "снова отвечает, и повтори проверку, затем finish."
+        )
+        detail = (
+            f"pid {process.pid} `{process.label}` started {_wall_clock(process.started_at)} "
+            f"before {relative} changed at {_wall_clock(moment)}"
+            f"{'; ports ' + ports if ports else ''}; {process.reason}"
+        )
+        return "stale-service", detail, hint
+    except Exception as exc:  # noqa: BLE001 -- a raise here would cost the task
+        return "stale-service-unknown", f"process scan failed: {type(exc).__name__}", ""
 
 
 def _error_code(result: tools.ToolResult) -> str:
