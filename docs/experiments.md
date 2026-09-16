@@ -3929,3 +3929,20 @@ thinking на длинной истории); reward=1, но это новый �
   (31 вызов с продлением).
 - Оговорки: n=6; при равном solved на fix-задачах (12/12 против 12/12 у 7e2ee59)
   различие с 7e2ee59 — только incident, и оно объясняется атрибуцией, а не L3/C4.
+
+### AFK-30b-candidate8 (2026-09-16) — кандидат 9c49c73 на 30B, fix-задачи + incident: 8/9
+
+- Стенд `qwen3:30b-a3b` (62 % GPU), `--only fix-sqli-login fix-sqli-search incident-log-forensics`,
+  3 повтора; архив `build/afk-treat8.zip` (sha `e8417ef9…`); results.tsv в
+  `build/afk-30b-treatment8/`.
+
+| Задача | база 8b568ac (F4-30b-paired) | 95ec07b | 044ee05 | **9c49c73** |
+|---|---|---|---|---|
+| fix-sqli-login | 1/3 | 2/3 | 2/3 | 2/3 |
+| fix-sqli-search | 1/3 | 0/3 (ложный verified) | 3/3 | **3/3** |
+| incident-log-forensics | 0/3 | 3/3 | — | **3/3** |
+
+- На медленном стенде кандидат-8 держит 8/9; все нули fix-sqli-login — `budget` c верной
+  диагностикой, но незавершённой правкой (60 ток/с). C3+C4 стабильно закрывают
+  fix-sqli-search (6/6 за два кандидата), которая на этом стенде была 0/6 у всех
+  предыдущих версий. Ложных verified нет.
