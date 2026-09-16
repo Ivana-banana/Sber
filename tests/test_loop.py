@@ -6917,6 +6917,19 @@ def test_write_file_without_a_path_never_reaches_the_filesystem(tmp_path: Path) 
     assert sorted(entry.name for entry in tmp_path.iterdir()) == before
 
 
+def test_write_file_without_a_content_key_is_refused_and_writes_nothing(tmp_path: Path) -> None:
+    # A reply that lost its payload after a truncated or schema-constrained turn: the
+    # old behaviour wrote an empty deliverable over the report and scored 0
+    # (REVIEW-public-q36). `content: ""` still writes an empty file on purpose.
+    target = tmp_path / "report.json"
+    llm = StubLlm(replies=[action("write_file", path=str(target)), action("write_file", path=str(target), content="")])
+
+    outcome = run(make_state(tmp_path), llm, FakeVerify())
+
+    assert any("write_file needs `content`" in text for text in outcome.observations)
+    assert target.exists() and target.read_text(encoding="utf-8") == ""
+
+
 def test_the_loop_hands_the_write_policy_to_the_tool(tmp_path: Path) -> None:
     """Записанные в задаче пути должны доходить до `write_file`, а не оставаться в state.
 
