@@ -120,7 +120,7 @@ Finish when the reproducer and the external check both pass; save status.""",
 
 FORENSICS = Playbook(
     name="forensics",
-    token_count=318,
+    token_count=345,
     body="""\
 Read the primary sources before you write any value; get lines you have read.
 Save the artifacts and their hashes; get a manifest.
@@ -141,6 +141,7 @@ Separate facts from claims; save the alternatives.
 Cross-check the timeline with another parser or artifact; get confirm or conflict.
 Give IOC type, value, source and interval; get a list.
 Quote every value in the report from an observation; never fill a field from memory.
+A forwarded-for chain is attacker-controlled: attribute the client to the address a second source confirms, not to the first hop.
 Give claim, evidence, alternatives and confidence; get a conclusion.
 Lower confidence on gaps, conflict or a single source; save the reason.
 Check the artifact reference of every claim; get an evidence check.""",
