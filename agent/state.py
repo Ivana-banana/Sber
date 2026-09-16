@@ -35,7 +35,7 @@ class Event:
 
     step: int
     kind: str
-    """`phase`, `llm`, `tool`, `verify`, `budget` or `degrade`."""
+    """`phase`, `llm`, `tool`, `verify`, `budget`, `note` or `degrade`."""
 
     name: str
     detail: str
@@ -67,12 +67,13 @@ class ActionRecord:
     """Whether this action produced an observation the run had not already seen."""
 
 
-TRACED_KINDS = frozenset({"thinking", "budget"})
+TRACED_KINDS = frozenset({"thinking", "budget", "note"})
 """Audit kinds `AGENT_TRACE_BUDGET` mirrors to stdout.
 
-The two that explain a run's wall clock and nobody can see from outside: the endpoint
-being recognised as a reasoning model (`thinking`, relayed from `agent.llm`) and the
-loop acting on it or on a detector (`budget`). Tool calls have their own switch.
+The ones that explain a run's wall clock and its plan, and that nobody can see from
+outside: the endpoint being recognised as a reasoning model (`thinking`, relayed from
+`agent.llm`), the loop acting on it or on a detector (`budget`), and what the model
+asked to remember between calls (`note`). Tool calls have their own switch.
 """
 
 TRACE_DETAIL_CHARS = 200
@@ -322,6 +323,20 @@ class AgentState:
     secrets: tuple[str, ...] = field(default=(), repr=False)
     """Values that must not reach an observation, a hash or the trace."""
 
+    notes: list[tuple[int, str]] = field(default_factory=list)
+    """The model's own scratchpad: `(step, text)`, oldest first, bounded by `remember`.
+
+    The one thing in this object the model writes and reads back. Everything else it
+    sends is consumed by the step it arrived in; a reasoning endpoint drops its own
+    reasoning between calls and the prompt keeps only the last observations, so without
+    this list a plan made at step 4 is gone by step 9 -- measured as thirty steps of
+    re-reading the same eight files with no edit ever proposed (JOURNAL, 16.09 05:50).
+
+    Untrusted text, exactly like an observation: it is stored redacted and bounded, it
+    is never parsed, matched or executed, and no branch of the loop reads it to decide
+    what to run.
+    """
+
     event_sink: Callable[[Event], None] | None = field(default=None, repr=False)
     """Optional live diagnostic sink. Exceptions are isolated; synchronous latency is not."""
 
@@ -356,6 +371,49 @@ class AgentState:
             ):
                 return True
         return False
+
+    def remember(self, text: str) -> str:
+        """Keep one note for the next steps. Returns what was stored, "" when nothing was.
+
+        Every bound the scratchpad has lives here rather than at the call sites, because
+        there are two of them -- the step's own action and the read-only batch -- and a
+        bound enforced in one place is a bound.
+
+        In order, and the order is the point:
+
+        * **Redact first.** A secret is replaced while it is still whole; truncating
+          first could cut one in half and leave the half the redactor no longer matches.
+        * **One line.** Control characters and line breaks collapse to spaces, so a note
+          cannot forge a second `[step N]` line, an observation, or a terminal escape in
+          the trace. The model writes a note; it does not write the block.
+        * **Then truncate**, to `NOTE_MAX_CHARS`, never refusing: the action this note
+          rode in on is about to run either way.
+        * **Then evict**, oldest first, until the list fits both `NOTES_MAX_ENTRIES` and
+          `NOTES_MAX_CHARS`. The newest note always survives, whatever the budget.
+
+        An empty or whitespace-only note is not a note, and neither is a repeat of the
+        one already at the end: a model that writes the same sentence every step would
+        otherwise spend the whole budget saying it once per step.
+        """
+        redacted = redact(str(text), self.secrets)
+        plain = "".join(
+            " " if character < " " or character == "\x7f" else character for character in redacted
+        )
+        cleaned = " ".join(plain.split())
+        if not cleaned:
+            return ""
+        cleaned = cleaned[: limits.NOTE_MAX_CHARS]
+        if self.notes and self.notes[-1][1] == cleaned:
+            return ""
+
+        self.notes.append((self.budget.steps_used, cleaned))
+        while len(self.notes) > 1 and (
+            len(self.notes) > limits.NOTES_MAX_ENTRIES
+            or sum(len(entry) for _, entry in self.notes) > limits.NOTES_MAX_CHARS
+        ):
+            del self.notes[0]
+        self.record("note", "kept", cleaned)
+        return cleaned
 
     def record(
         self,

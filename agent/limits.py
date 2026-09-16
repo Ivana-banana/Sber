@@ -120,6 +120,36 @@ observations of `OBSERVATION_BUDGET_CHARS / 4` each add no more text than the si
 widest `read_range` a step may add today.
 """
 
+NOTE_MAX_CHARS = 240
+"""Longest note one action may carry forward, in characters.
+
+Truncated and never refused. A note arrives attached to an action the loop is about to
+run, so rejecting the action over the size of its note would spend a whole step on
+bookkeeping and teach the model nothing it can act on.
+
+About sixty tokens: a `file:line`, a hypothesis and a next step fit; a pasted function
+does not. That is the intent -- the scratchpad is for what the observation history
+cannot keep, not a second copy of file content the history already carries.
+"""
+
+NOTES_MAX_ENTRIES = 8
+"""How many notes travel back to the model.
+
+Eight because the measured failure is a model circling eight router files for thirty
+steps (JOURNAL, 16.09 05:50): the working set it cannot hold between calls has that
+order of size. The oldest leave first, so the block stays a moving plan rather than a
+growing log.
+"""
+
+NOTES_MAX_CHARS = 600
+"""Everything the notes may cost, in characters, before their per-line prefixes.
+
+About 150 tokens, resident on every call once the model starts writing notes, against
+the 8000 characters of observation history the same request already carries. Over the
+budget the oldest notes go, so this is a ceiling and not a trend -- the one property
+that makes a scratchpad safe to add to a prompt paid for on every call.
+"""
+
 MAX_CONSECUTIVE_LLM_FAILURES = 3
 """Logical calls that may fail in a row before the endpoint is declared unusable.
 

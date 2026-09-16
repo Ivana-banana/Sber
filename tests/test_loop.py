@@ -7448,3 +7448,41 @@ def test_a_server_body_mentioning_a_timeout_is_a_hard_failure() -> None:
     assert _llm_failure_kind(LlmError("endpoint returned 400: model timeout parameter invalid", retryable=False)) == HARD_FAILURE
     assert _llm_failure_kind(LlmError("transport timeout: TimeoutError", retryable=True, timed_out=True)) == SLOW_CALL
     assert _llm_failure_kind(LlmError("transport timeout: TimeoutError", retryable=True, timed_out=True, output_tokens=5)) == HARD_FAILURE
+
+
+def test_a_note_from_one_step_is_in_the_prompt_of_the_next(tmp_path: Path) -> None:
+    """S2, the scratchpad: the one thing the model writes that survives its own call.
+
+    The measured failure it answers (JOURNAL, 16.09 05:50) is not missing access but
+    missing memory: a thinking endpoint drops its reasoning between calls and the prompt
+    keeps only the last observations, so a candidate found at step 4 is gone by step 9
+    and the model re-reads the same files instead of editing one.
+    """
+    state = make_state(tmp_path)
+    state.budget.max_steps = 2
+    llm = StubLlm(
+        replies=[
+            action("list_dir", path=str(tmp_path), note="candidate: handler line 13"),
+            action("list_dir", path=str(tmp_path)),
+        ]
+    )
+
+    run(state, llm)
+
+    first, second = llm.calls[0], llm.calls[1]
+    assert not any("NOTES" in message["content"] for message in first)
+    assert second[-1]["content"] == "NOTES (yours, newest last):\n[step 1] candidate: handler line 13"
+
+
+def test_the_budget_trace_prints_the_note_the_model_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The scratchpad is invisible from outside otherwise: it never reaches stdout."""
+    monkeypatch.setenv(limits.TRACE_BUDGET_ENV_NAME, "1")
+    state = make_state(tmp_path)
+    state.budget.max_steps = 1
+    llm = StubLlm(replies=[action("list_dir", path=str(tmp_path), note="watch the router")])
+
+    run(state, llm)
+
+    assert "agent note: step=1 kept watch the router" in capsys.readouterr().out
