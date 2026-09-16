@@ -35,6 +35,21 @@ ACTIONS = [
     {"tool": "finish", "path": "calc.py", "verify": "python3 check.py", "summary": "add returned a difference; fixed the sign"},
 ]
 
+SERVER_ERROR = {"__status__": 500}
+
+DEGRADED = [
+    {"tool": "list_dir", "path": "."},
+    SERVER_ERROR,
+    {"tool": "read_range", "path": "calc.py", "start_line": 1},
+    # A reply that lost its payload: the write_file action arrives with a path and no
+    # content key at all. Seen in production (REVIEW-public-q36) right after an endpoint
+    # 500, where it truncated the report file to zero bytes and scored the task 0. The
+    # deliverable must survive this, so the probe ends here on purpose: the run is
+    # graded on whether the fixture is still intact, not on whether it was repaired.
+    {"tool": "write_file", "path": "calc.py"},
+    {"tool": "finish", "path": "calc.py", "verify": "python3 check.py", "summary": "done"},
+]
+
 
 def log(msg):
     print("[stub %7.2fs] %s" % (time.monotonic() - START, msg), flush=True)
@@ -77,8 +92,19 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": {"message": "tools parameter is not supported by this build"}})
             return
 
-        table = escape_actions(self.server.escape_dir) if mode == "escape" else ACTIONS
+        if mode == "escape":
+            table = escape_actions(self.server.escape_dir)
+        elif mode == "degraded":
+            table = DEGRADED
+        else:
+            table = ACTIONS
         action = table[min(n - 1, len(table) - 1)] if mode != "shape" else table[min(n - 2, len(table) - 1)]
+
+        if action.get("__status__"):
+            log("request #%d: replying %d, the endpoint fails mid-run" % (n, action["__status__"]))
+            self._send(action["__status__"], {"error": {"message": "upstream failure"}})
+            return
+
         arguments = json.dumps(action)
         log("request #%d -> %s" % (n, action["tool"]))
 
@@ -118,7 +144,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, required=True)
-    ap.add_argument("--mode", choices=["script", "hang", "shape", "escape", "flat"],
+    ap.add_argument("--mode", choices=["script", "hang", "shape", "escape", "flat", "degraded"],
                     default="script")
     ap.add_argument("--escape-dir", default="/root/airi",
                     help="directory outside the workspace the escape probe aims at")

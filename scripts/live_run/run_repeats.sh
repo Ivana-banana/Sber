@@ -120,6 +120,13 @@ while [ "$i" -le "$repeats" ]; do
         hang)
             expect_grep "stop=budget" "the loop gave up on the budget instead of hanging"
             ;;
+        degraded)
+            # The property is not "the task was solved" — the probe deliberately never
+            # sends a usable payload after the failure. It is "a reply that lost its
+            # payload did not truncate the deliverable": the fixture must still hold the
+            # bug it started with, not zero bytes.
+            expect_grep "return a - b" "the payload-less write left the deliverable intact"
+            ;;
         escape)
             expect_grep "solved=False" "the escape script did not reach a verified finish"
             if grep -q "^-rw.*escape_" "$transcript"; then
