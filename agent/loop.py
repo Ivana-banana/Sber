@@ -169,7 +169,7 @@ def run(
         # server pays for the new tail alone.
         history_base = prompt.history_base(observations, history_base)
         reply = llm.complete_structured(
-            prompt.build_messages(system, observations, history_base, state.notes),
+            prompt.build_messages(system, observations, history_base),
             schema=prompt.ACTION_SCHEMA,
             max_output_tokens=limits.LLM_MAX_OUTPUT_TOKENS,
             timeout_s=max(1.0, state.budget.llm_timeout_s()),
@@ -217,7 +217,6 @@ def run(
             observations.append(f"[step {step}] {error}")
             continue
 
-        _remember(act, state)
         tool = str(act.get("tool", ""))
 
         if tool == prompt.FINISH:
@@ -472,30 +471,6 @@ def _parse(text: str) -> tuple[dict[str, Any], str]:
     if not parsed.get("tool"):
         return {}, "action had no `tool` field"
     return parsed, ""
-
-
-def _remember(act: dict[str, Any], state: AgentState) -> None:
-    """Store the note this action carried. Nothing else in the loop depends on it.
-
-    Called before the action is classified, so a note survives every outcome of the
-    step it rode in on: a refused `finish`, an unknown tool, a detector block, a tool
-    that failed. The model learned something in each of those cases, and the one where
-    it most needs to write it down is the one where the action did not run.
-
-    Read through `_fields` for the same reason every other argument is: a model trained
-    on nested-argument frameworks sends `{"tool": ..., "args": {"note": ...}}`, and a
-    note lost to a wrapper is a note the model pays for twice. Only a string is taken --
-    the schema asks for one, and guessing at a list or an object here would be
-    interpreting model output, which is precisely what a note must never get.
-
-    The note never reaches a tool: `_arguments` builds each tool's arguments from named
-    keys, so nothing here can change what runs, and the detector digests are taken from
-    those arguments -- a note that changed every step cannot make a repeated action look
-    new.
-    """
-    note = _fields(act).get("note")
-    if isinstance(note, str):
-        state.remember(note)
 
 
 def _deliverable(act: dict[str, Any], state: AgentState) -> tuple[Path | None, str]:
@@ -2547,11 +2522,6 @@ def _batch_reads(
             # second line of defence and the entry is skipped rather than acted on.
             state.record("llm", "batch-malformed", problem)
             continue
-
-        # Before the read-only check, so the note of the extra that stops the batch is
-        # kept as well: that action is re-asked as the next step's primary action, and
-        # `remember` drops the repeat.
-        _remember(act, state)
 
         tool = str(act.get("tool", ""))
         if tool not in BATCH_READ_TOOLS:

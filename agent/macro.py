@@ -60,13 +60,7 @@ SOLVER_SCHEMA: dict[str, object] = {
 }
 """Flat, for the reason `prompt.ACTION_SCHEMA` is flat: a nested free-form object is
 what small models fill with invented keys, and it is what breaks under `strict: true`
-on the json_schema rung of `agent.llm`'s ladder.
-
-Deliberately without the `note` field the action schema gained for the micro loop: the
-scratchpad exists because a plan has to survive a dozen calls, and this controller makes
-two. What the second call needs from the first is the execution note the repair brief
-already carries verbatim, so a note here would be a field paid for on every call and
-read by nobody."""
+on the json_schema rung of `agent.llm`'s ladder."""
 
 SYSTEM = """\
 You are an autonomous local executor. You get one attempt to solve the task by writing

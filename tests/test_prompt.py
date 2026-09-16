@@ -87,46 +87,10 @@ def test_the_action_schema_carries_no_field_for_reasoning() -> None:
     # M15 lists "reason step by step and return only JSON" among the formulations
     # that break small models. The split is the fix, so a narration field would
     # quietly undo it.
-    #
-    # `note` is not one: it asks for what to carry to the next step, not for the
-    # thinking behind this one, and unlike H03's `hypothesis` it is read back to the
-    # model rather than dropped. The distinction is kept by this list staying exactly
-    # as it was.
     fields = set(prompt.ACTION_SCHEMA["properties"])  # type: ignore[arg-type]
 
     assert not fields & {"thought", "thinking", "reasoning", "scratchpad"}
     assert prompt.ACTION_SCHEMA["required"] == ["tool"]
-
-
-def test_the_schema_offers_the_note_field_and_never_requires_it() -> None:
-    """The regression guard of the whole scratchpad: a model may ignore it entirely.
-
-    Optional in the schema means optional on every rung of `agent.llm`'s ladder, since
-    all four send this one object -- as `tools[0].function.parameters`, as the
-    `json_schema`, or dumped into a system line. An endpoint that never emits `note`
-    therefore behaves exactly as it did before the field existed.
-    """
-    properties = prompt.ACTION_SCHEMA["properties"]  # type: ignore[index]
-
-    assert properties["note"] == {  # type: ignore[index]
-        "type": "string",
-        "description": "optional: what to remember for later steps",
-    }
-    assert "note" not in prompt.ACTION_SCHEMA["required"]  # type: ignore[operator]
-
-
-def test_the_note_field_is_described_in_exactly_one_prompt_line() -> None:
-    """Every line here is paid on every call of every task, so the contract is one line.
-
-    And it is worded as a field rather than in the `name(args) - what` shape of the tool
-    lines: a line that reads like a tool signature gets called as one, and `{"tool":
-    "note"}` costs a step to be told that tool does not exist.
-    """
-    lines = [line for line in prompt.SYSTEM_SKELETON.splitlines() if "note" in line]
-
-    assert len(lines) == 1
-    assert "remember" in lines[0]
-    assert "note(" not in lines[0]
 
 
 def test_the_skeleton_names_no_public_task() -> None:
@@ -150,12 +114,7 @@ def test_the_skeleton_stays_the_size_it_was_measured_at() -> None:
     # tokens, the same order as `replace_text`); the token budget accepted in
     # docs/research/verdict-system-prompt-evidence.md is 700, so ~291 tokens is well
     # within it. Raise this only for a real new tool contract, never for prose.
-    #
-    # 1320 -> 1410 for the `note` field: one line, 92 characters, ~23 Qwen2.5 tokens
-    # on every call, and a new field of the action contract rather than prose. The
-    # schema itself grows by 84 characters of compact JSON, paid in the request body on
-    # the two structured rungs and in a system line on the two text ones.
-    assert len(prompt.SYSTEM_SKELETON) <= 1410
+    assert len(prompt.SYSTEM_SKELETON) <= 1320
     assert prompt.SYSTEM_SKELETON.count("\n") <= 31
 
 

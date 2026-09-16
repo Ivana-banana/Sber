@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent import limits
 from agent.state import AgentState, Budget
 
 
@@ -103,32 +102,3 @@ def test_repeats_last_action_looks_only_at_the_current_epoch(tmp_path: Path) -> 
 def test_repeats_last_action_is_false_on_an_empty_history(tmp_path: Path) -> None:
     state = make_state(tmp_path)
     assert state.repeats_last_action("write_file", {"path": "/x"}, "") is False
-
-
-def test_a_note_is_stored_redacted_bounded_and_on_one_line(tmp_path: Path) -> None:
-    """The scratchpad is model text we keep across calls, so it obeys the trace's rules.
-
-    Same three rules the rest of this file guards for observations: a secret never
-    survives, the size is ours to decide and not the model's, and what is kept is
-    exactly what will be read back -- one line, so a note cannot forge the block it
-    lives in.
-    """
-    state = make_state(tmp_path)
-    state.secrets = ("sk-do-not-keep",)
-    state.budget.start_step()
-
-    stored = state.remember("saw sk-do-not-keep\nand a second line " + "x" * 400)
-
-    assert "sk-do-not-keep" not in stored
-    assert "\n" not in stored
-    assert len(stored) == limits.NOTE_MAX_CHARS
-    assert state.notes == [(1, stored)]
-    assert [event.kind for event in state.audit] == ["note"]
-
-
-def test_a_note_that_says_nothing_is_not_recorded(tmp_path: Path) -> None:
-    state = make_state(tmp_path)
-
-    assert state.remember(" \n ") == ""
-    assert state.notes == []
-    assert state.audit == [], "an ignored note must not leave a trace entry either"
