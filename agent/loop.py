@@ -2473,6 +2473,8 @@ def _code_fix_shell_has_configured_git_execution(command: str, state: AgentState
 
 def _code_fix_shell_refusal(command: str, state: AgentState) -> str:
     """Reject an explicit shell mutation aimed at the evaluator, not source edits."""
+    if _background_server(command):
+        return ""
     try:
         workspace_text = str(state.workspace.resolve()).lower()
     except OSError:
@@ -2520,6 +2522,62 @@ def _code_fix_shell_refusal(command: str, state: AgentState) -> str:
     )
 
 
+_SERVER_EXECUTABLES = frozenset({"uvicorn", "gunicorn", "hypercorn", "daphne", "waitress-serve"})
+_PYTHON = re.compile(r"python(3(\.\d+)?)?$")
+_BACKGROUND_SERVER = re.compile(
+    r"^nohup ([^;&|<>$`(){}\\\n'\"]+?) *> */tmp/[\w.-]+ +2>&1( +</dev/null)? *&$"
+)
+
+
+def _is_server(words: Sequence[str]) -> bool:
+    """Whether an argv starts a known long-running Python web server.
+
+    Deliberately short: these are the launchers whose command line says "serve until
+    killed" with no doubt, directly or through `python -m`. Anything else is not
+    guessed at.
+    """
+    if not words:
+        return False
+    name = PurePosixPath(words[0]).name
+    rest = list(words[1:])
+    if _PYTHON.match(name) and len(rest) >= 2 and rest[0] == "-m":
+        name, rest = rest[1], rest[2:]
+    if name in _SERVER_EXECUTABLES:
+        return True
+    return name == "flask" and bool(rest) and rest[0] == "run"
+
+
+def _foreground_server(command: str) -> bool:
+    """A single simple command that runs a server in the foreground.
+
+    It never returns: `run_shell` waits out its whole timeout (up to 120 s) and then
+    kills it, so the model pays two minutes for a service that is gone afterwards.
+    """
+    if _code_fix_shell_operator_flags(command)[0]:
+        return False
+    try:
+        return _is_server(shlex.split(command))
+    except ValueError:
+        return False
+
+
+def _background_server(command: str) -> bool:
+    """`nohup SERVER >/tmp/LOG 2>&1 [</dev/null] &` and nothing more.
+
+    The one compound shape code-fix lets through: a known server argv with no shell
+    syntax in it, its output in a file under /tmp, backgrounded alone. It cannot write
+    into the workspace, and without it a model told to restart a service has no command
+    that is both allowed and not killed by the tool timeout.
+    """
+    found = _BACKGROUND_SERVER.match(command.strip())
+    if not found:
+        return False
+    try:
+        return _is_server(shlex.split(found.group(1)))
+    except ValueError:
+        return False
+
+
 _LONE_AMPERSAND = re.compile(r"(?<![&>|<])&(?![&>])")
 _STDOUT_REDIRECT = re.compile(r"(?:^|[^0-9&])>(?!&)|&>|1>(?!&)")
 _QUOTED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
@@ -2553,6 +2611,16 @@ def _execute(
 
     if tool == prompt.RUN_SHELL:
         command = str(args["command"])
+        if _foreground_server(command):
+            return tools.ToolResult(
+                name=tool,
+                ok=False,
+                detail=(
+                    "refused: a server in the foreground never exits, so this tool would "
+                    "wait out its timeout and then kill it. Start it in the background: "
+                    f"`nohup {command} >/tmp/server.log 2>&1 &`, then check the port."
+                ),
+            )
         if _background_holds_pipe(command):
             return tools.ToolResult(
                 name=tool,

@@ -7554,3 +7554,55 @@ def test_code_fix_lets_a_curl_probe_of_the_service_through(tmp_path: Path, comma
 )
 def test_code_fix_still_refuses_a_curl_that_can_write_a_file(tmp_path: Path, command: str) -> None:
     assert loop._code_fix_shell_refusal(command, make_state(tmp_path)) != ""
+
+
+# --- starting a service -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "uvicorn main:app --host 0.0.0.0 --port 8000",
+        "/app/.venv/bin/uvicorn main:app --port 8000",
+        "python -m uvicorn main:app",
+        "gunicorn -b 0.0.0.0:5000 app:app",
+        "flask run --host 0.0.0.0",
+    ],
+)
+def test_a_server_in_the_foreground_is_refused_before_it_eats_the_tool_timeout(
+    tmp_path: Path, command: str
+) -> None:
+    llm = StubLlm(replies=[action("run_shell", command=command)])
+    started = time.monotonic()
+
+    outcome = run(make_state(tmp_path), llm, playbook=playbooks.GENERAL)
+
+    assert time.monotonic() - started < 5
+    shells = [text for text in outcome.observations if "run_shell" in text]
+    assert shells and "nohup" in shells[0] and "FAIL" in shells[0], shells
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "nohup uvicorn main:app --host 0.0.0.0 --port 8000 >/tmp/server.log 2>&1 &",
+        "nohup /app/.venv/bin/uvicorn main:app --port 8000 > /tmp/app.log 2>&1 </dev/null &",
+        "nohup python -m flask run --port 5000 >/tmp/flask.log 2>&1 &",
+    ],
+)
+def test_code_fix_lets_a_server_start_in_the_background(tmp_path: Path, command: str) -> None:
+    assert loop._code_fix_shell_refusal(command, make_state(tmp_path)) == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "nohup uvicorn main:app >tests/test_api.py 2>&1 &",
+        "nohup uvicorn main:app >/tmp/x.log 2>&1 & cp a tests/b",
+        "nohup sh -c 'cp a tests/b' >/tmp/x.log 2>&1 &",
+        "nohup uvicorn $(cp a tests/b) >/tmp/x.log 2>&1 &",
+        "nohup python evil.py >/tmp/x.log 2>&1 &",
+    ],
+)
+def test_code_fix_still_refuses_anything_else_in_the_background(tmp_path: Path, command: str) -> None:
+    assert loop._code_fix_shell_refusal(command, make_state(tmp_path)) != ""
