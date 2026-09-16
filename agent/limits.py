@@ -75,6 +75,32 @@ need to hand it a quarter of an hour."""
 MAX_STEPS = 30
 """Hard cap on act/observe iterations. The loop counts them, the model cannot."""
 
+STEP_EXTENSION = 15
+"""Extra steps the loop may grant itself once, at the cap, when time is clearly left.
+
+Measured on the Qwen3.6-35B-A3B stand: a call costs 2-4 s, so an episode spends all
+thirty steps in 90-130 s and stops with 400+ s of a 600 s budget unused. Both zeros of
+the six-repeat candidate run ended that way (`stop=steps`), and the failed code-fix
+episode had located the vulnerable handler and simply not edited it yet. Buying steps
+with time the run will otherwise not spend is the cheapest thing that changes that
+outcome; the tokens it costs are accepted.
+
+Half of `MAX_STEPS`, not another thirty: the extension exists to let a run that is
+close finish, not to double the price of a run that is lost. It is granted once and
+`Budget.may_act` ends the run at the raised cap exactly as it ended it at the old one.
+"""
+
+STEP_EXTENSION_MIN_SPARE_FRACTION = 0.5
+"""How much of the task budget must still be spendable at the cap for the extension.
+
+A fraction of the run's own budget and not a constant, so the guard reads the same way
+on every deadline. On a slow endpoint the step cap and the clock arrive together --
+spendable time there is near zero and nothing is granted, which is the fast-path change
+having no effect on the arm it was not measured on. On a 120 s budget the reserve alone
+is 30 s, so this asks for 60 s of spendable time at step 30; an endpoint that could
+reach the cap that early does not exist on any stand we have measured.
+"""
+
 OBSERVATION_BUDGET_CHARS = 8000
 """How much observation history travels back to the model, in characters.
 

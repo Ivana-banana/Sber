@@ -116,7 +116,7 @@ def run(
     stop_reason = ""
     summary = ""
 
-    while state.budget.may_act():
+    while state.budget.may_act() or _extend_steps(state):
         step = state.budget.start_step()
 
         if state.budget.past_early_deadline() and not state.artifacts:
@@ -156,10 +156,20 @@ def run(
                     "список findings — это утверждение, что прочитанный код безопасен."
                 )
             elif playbook.name == "code-fix":
-                checkpoint += (
-                    " Для code-fix запиши минимальную правку production source/config и "
-                    "проверку поведения; README, отчёт или тест сами по себе не являются "
-                    "исправлением."
+                # Replaces the sentence above instead of extending it, which is the one
+                # place this branch differs from the audit tail. For a code-fix the
+                # deliverable *is* the edit, and "write your best attempt with
+                # write_file now" points at the wrong tool: the measured episode had
+                # read the vulnerable handler eleven times and never issued
+                # `replace_text`. Anchor and restart are the two things 5 of 5 failed
+                # edits got wrong (`EDIT_ECHO_CONTEXT_LINES`, code-fix playbook).
+                checkpoint = (
+                    "[бюджет] запас шагов и времени на исходе, а правки на диске нет. "
+                    "Лучший вариант здесь — сама правка: примени сейчас replace_text к тому "
+                    "уязвимому выражению, которое ты уже нашёл, взяв якорем всё выражение "
+                    "целиком вместе с вызовом, который использует значение. Потом перезапусти "
+                    "сервис так, как это делает его entrypoint, и повтори репро-проверку; не трать "
+                    "шаги на повторное чтение файлов, которые уже прочитаны."
                 )
             observations.append(checkpoint)
 
@@ -453,6 +463,36 @@ def run(
 
 
 # --- pieces small enough to read in one sitting -------------------------------
+
+
+def _extend_steps(state: AgentState) -> bool:
+    """At the step cap, buy steps once with time the run would otherwise not spend.
+
+    Measured on the Qwen3.6-35B-A3B stand (16.09): a call costs 2-4 s, so an episode
+    exhausts `MAX_STEPS` in 90-130 s and stops with 400+ s of a 600 s budget unused.
+    Both zeros of the six-repeat candidate run ended that way, and one of them had
+    located the vulnerable handler and simply not edited it yet. On a slow endpoint the
+    cap and the clock arrive together, so the threshold below is never met and this
+    changes nothing -- which is the point: it is a fast-path fix and must stay one.
+
+    Two questions, neither of which the model answers. The budget says whether there is
+    time worth spending (`Budget.may_extend_steps`), and the action history says whether
+    the run is still moving (`AgentState.shows_progress`). A run circling over files it
+    has already read fails the second and gets nothing: the extension exists to let a
+    run that is close finish, not to pay for more laps of the same loop.
+    """
+    if not state.budget.may_extend_steps() or not state.shows_progress():
+        return False
+    granted = state.budget.extend_steps()
+    if not granted:
+        return False
+    state.record(
+        "budget",
+        "steps-extended",
+        f"+{granted} steps at the cap: {state.budget.spendable_s():.0f}s of "
+        f"{state.budget.total_s:.0f}s still spendable and the run is still moving",
+    )
+    return True
 
 
 def _parse(text: str) -> tuple[dict[str, Any], str]:
@@ -2828,11 +2868,20 @@ def _finalise(
             exit_code=0 if verdict.ok else 1,
         )
 
+    summary = summary or (verdict.detail if verdict else "")
+    if state.budget.steps_extended:
+        # The `stop_reason` vocabulary is read by the eval parsers and does not move: a
+        # run that spent the extension and still hit the cap is `steps`, exactly as it
+        # was before. That the cap it hit was the raised one belongs in the free text,
+        # where a results row shows it as a note instead of as a new failure class.
+        note = f"{stop_reason} (extended once, +{state.budget.steps_extension_granted} steps)"
+        summary = f"{note}: {summary}" if summary else note
+
     return Outcome(
         solved=False,
         stop_reason=stop_reason,
         deliverable=deliverable,
-        summary=summary or (verdict.detail if verdict else ""),
+        summary=summary,
         verdict=verdict,
         observations=tuple(observations),
     )

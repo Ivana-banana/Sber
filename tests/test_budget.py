@@ -257,3 +257,61 @@ def test_llm_timeout_is_never_negative() -> None:
 def test_llm_timeout_on_a_short_task_still_respects_the_checkpoint() -> None:
     budget, _ = make_budget(60.0)
     assert budget.llm_timeout_s() == budget.early_deadline_s
+
+
+# --- the one-time step extension ---------------------------------------------
+#
+# Measured on the Qwen3.6-35B-A3B stand: a call costs 2-4 s, so the step cap arrives in
+# 90-130 s of a 600 s budget and the run stops with 400+ s unused. The budget owns the
+# clock half of that decision -- whether there is time worth spending -- and nothing
+# else; whether the run is moving is read from the action history by the loop.
+
+
+def at_the_cap(total_s: float = 600.0) -> tuple[Budget, FakeClock]:
+    """A budget standing exactly at its step cap, which is where the question arises."""
+    budget, clock = make_budget(total_s)
+    for _ in range(budget.max_steps):
+        budget.start_step()
+    return budget, clock
+
+
+def test_the_step_extension_needs_the_cap_to_be_reached_first() -> None:
+    budget, _ = make_budget(600.0)
+    assert not budget.may_extend_steps(), "there are still steps left to spend"
+    assert budget.extend_steps() == 0
+    assert budget.max_steps == limits.MAX_STEPS
+
+
+def test_the_step_extension_is_granted_at_the_spare_threshold() -> None:
+    budget, clock = at_the_cap()
+    spare = 600.0 * limits.STEP_EXTENSION_MIN_SPARE_FRACTION
+    clock.advance(600.0 - budget.verify_reserve_s - spare)
+
+    assert budget.spendable_s() == spare
+    assert budget.may_extend_steps()
+    assert budget.extend_steps() == limits.STEP_EXTENSION
+    assert budget.max_steps == limits.MAX_STEPS + limits.STEP_EXTENSION
+
+
+def test_one_second_below_the_threshold_changes_nothing() -> None:
+    # The slow-endpoint arm: the cap and the clock arrive together and the run ends as
+    # it always did. A fast-path fix that also fires on the slow path is not one.
+    budget, clock = at_the_cap()
+    spare = 600.0 * limits.STEP_EXTENSION_MIN_SPARE_FRACTION
+    clock.advance(600.0 - budget.verify_reserve_s - spare + 1.0)
+
+    assert not budget.may_extend_steps()
+    assert budget.extend_steps() == 0
+    assert budget.max_steps == limits.MAX_STEPS
+    assert not budget.may_act()
+
+
+def test_the_step_checkpoint_fraction_ignores_the_extension() -> None:
+    # `past_early_deadline` keys off the cap before the extension: producing starts at
+    # 0.4 of the original thirty, not of the raised forty-five.
+    budget, _ = at_the_cap()
+    budget.extend_steps()
+
+    assert budget.base_max_steps == limits.MAX_STEPS
+    budget.steps_used = int(limits.MAX_STEPS * limits.EARLY_DELIVERABLE_STEP_FRACTION)
+    assert budget.past_early_deadline()

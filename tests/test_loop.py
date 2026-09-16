@@ -601,18 +601,24 @@ def test_a_loop_that_goes_in_circles_is_told_so_and_bounded_by_the_caps(
 
 
 def test_the_step_cap_ends_a_model_that_never_finishes(tmp_path: Path) -> None:
+    # A model that keeps writing new files is making progress by every observable
+    # measure, so on a clock with time to spare it earns the one step extension
+    # (`tests/test_loop_steps.py`) -- and then stops at the raised cap exactly as it
+    # used to stop at the original one. The cap is still what ends this run.
+    cap = limits.MAX_STEPS + limits.STEP_EXTENSION
     llm = StubLlm(
         replies=[
             action("write_file", path=str(tmp_path / f"f{index}.txt"), content=f"{index}")
-            for index in range(limits.MAX_STEPS + 5)
+            for index in range(cap + 5)
         ]
     )
     state = make_state(tmp_path)
 
     outcome = run(state, llm, FakeVerify())
 
-    assert state.budget.steps_used == limits.MAX_STEPS
+    assert state.budget.steps_used == cap
     assert outcome.stop_reason == "steps"
+    assert "extended once" in outcome.summary
 
 
 def test_the_loop_never_starts_a_step_inside_the_verifier_reserve(tmp_path: Path) -> None:

@@ -11,7 +11,9 @@ has been proven. Here that shows up as `usage_reported` and as the fact that not
 in this module can decide a task is solved -- only the verifier can.
 
 The budget is enforced by code. The model never gets to extend a deadline, raise the
-step cap or spend the verifier reserve; those are read-only facts to it.
+step cap or spend the verifier reserve; those are read-only facts to it. The one-time
+step extension below is not an exception to that: it is granted by this module, from
+the clock and the action history, and a model that asks for more steps still gets none.
 """
 
 from __future__ import annotations
@@ -124,6 +126,14 @@ class Budget:
     looping, not a model thinking, and treating the two alike cost 250 s of wall clock on
     the fast 7B for the same zero (`F4-7b-regression-4080`)."""
 
+    steps_extension_granted: int = 0
+    """Steps the one-time extension added to `max_steps`; 0 until it is granted.
+
+    Kept as the size of the grant and not as a flag, because two things need it: the
+    once-only rule, and `base_max_steps`, which is the cap the early checkpoint keys off
+    and must not move when the extension raises the real one.
+    """
+
     def __post_init__(self) -> None:
         if self.started_at == 0.0:
             self.started_at = self.clock()
@@ -188,7 +198,59 @@ class Budget:
         """
         if self.elapsed_s() >= self.early_deadline_s:
             return True
-        return self.steps_used >= self.max_steps * limits.EARLY_DELIVERABLE_STEP_FRACTION
+        # The pre-extension cap on purpose. The checkpoint is "stop exploring, produce
+        # something checkable", and the step at which that becomes true is a fact about
+        # the run's shape, not about how many steps are left; keying it off a cap that
+        # can grow would move the checkpoint later exactly on the runs that reached it.
+        return self.steps_used >= self.base_max_steps * limits.EARLY_DELIVERABLE_STEP_FRACTION
+
+    @property
+    def base_max_steps(self) -> int:
+        """The step cap before any extension. What the early checkpoint measures against."""
+        return self.max_steps - self.steps_extension_granted
+
+    @property
+    def steps_extended(self) -> bool:
+        """Whether this run has already spent its one step extension."""
+        return self.steps_extension_granted > 0
+
+    def may_extend_steps(self) -> bool:
+        """Whether the clock still justifies the one-time step extension at the cap.
+
+        Two facts, both owned here. The run is out of steps and not out of time: at
+        least `limits.STEP_EXTENSION_MIN_SPARE_FRACTION` of the whole budget is still
+        spendable outside the verifier reserve. And the extension has not been granted
+        before -- it is one grant per run, so `may_act` ends the run at the raised cap
+        just as it ended it at the original one.
+
+        A cap somebody lowered below `limits.MAX_STEPS` on purpose is never raised here.
+        The extension answers one measured situation -- the *default* cap arriving in
+        90-130 s of a 600 s budget on a fast endpoint -- and a caller that asked for a
+        two-step run asked for a two-step run.
+
+        It deliberately says nothing about whether the run is *getting* anywhere: that
+        is read from the action history (`AgentState.shows_progress`), and the caller
+        needs both answers before it may grant anything.
+        """
+        if self.steps_extension_granted:
+            return False
+        if self.base_max_steps < limits.MAX_STEPS:
+            return False
+        if self.steps_used < self.max_steps:
+            return False
+        return self.spendable_s() >= self.total_s * limits.STEP_EXTENSION_MIN_SPARE_FRACTION
+
+    def extend_steps(self) -> int:
+        """Raise the cap once by `limits.STEP_EXTENSION`; return the steps granted, or 0.
+
+        The rule lives in `may_extend_steps` and is re-checked here, so no caller can
+        grant an extension the policy would have refused.
+        """
+        if not self.may_extend_steps():
+            return 0
+        self.steps_extension_granted = limits.STEP_EXTENSION
+        self.max_steps += limits.STEP_EXTENSION
+        return limits.STEP_EXTENSION
 
     def may_recover(self) -> bool:
         """Whether a directed retry after a red verifier is still allowed.
@@ -356,6 +418,34 @@ class AgentState:
             ):
                 return True
         return False
+
+    def shows_progress(self) -> bool:
+        """Whether the recent window looks like work rather than like standing still.
+
+        Read from the detector window alone, so nothing new is bookkept for it and the
+        answer is exactly as honest as the evidence the detectors already act on.
+
+        Two shapes count. A state-changing action inside the window: `advance_state_epoch`
+        runs on a write, an edit or a mutating shell, and the record of that action
+        carries the new epoch, so an epoch that differs across the window is a change
+        that happened inside it. Or a last observation the run had not already seen --
+        a run reading new things is still working, whatever it has yet to write.
+
+        What does not count is the loop this exists to refuse: eleven `read_range` calls
+        against the file the run has already read return an observation it has seen, in
+        an epoch nothing moved, and the window then says so. Nor does a success that has
+        gone stale -- a run whose last `ACTION_HISTORY` steps all went to refused
+        actions, malformed replies or endpoint errors executed nothing at all, and the
+        window it left behind is a fact about an older run.
+        """
+        window = self.actions[-limits.ACTION_HISTORY :]
+        if not window:
+            return False
+        if self.budget.steps_used - window[-1].step >= limits.ACTION_HISTORY:
+            return False
+        if window[-1].state_epoch != window[0].state_epoch:
+            return True
+        return window[-1].novel
 
     def record(
         self,
