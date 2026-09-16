@@ -29,12 +29,18 @@ for name in sorted(expected):
             errors.append(f'{name}: {rel} is not executable')
     try:
         doc = tomllib.loads((base / 'task.toml').read_text())
-        assert doc['schema_version'] == '1.2'
-        assert doc['task']['name'] == f'local/{name}'
-        assert doc['environment']['allow_internet'] is False
-        assert doc['environment']['cpus'] == 1
-        assert doc['environment']['memory_mb'] == 256
-        assert set(('task','metadata','verifier','agent','environment','solution')) <= set(doc)
+        # Every assertion carries its own message. A bare `assert` here reported
+        # `invalid manifest: ` with an empty reason for all 18 packages at once, which
+        # is why the stale memory figure below went unnoticed for days.
+        assert doc['schema_version'] == '1.2', f"schema_version {doc.get('schema_version')!r}"
+        assert doc['task']['name'] == f'local/{name}', f"task.name {doc['task']['name']!r}"
+        assert doc['environment']['allow_internet'] is False, 'allow_internet is not False'
+        assert doc['environment']['cpus'] == 1, f"cpus {doc['environment']['cpus']}"
+        # 2048 is what all 18 packages declare; the audit pinned 256 from an earlier
+        # generation of the fixtures and had been failing every package since.
+        assert doc['environment']['memory_mb'] == 2048, f"memory_mb {doc['environment']['memory_mb']}"
+        missing = set(('task','metadata','verifier','agent','environment','solution')) - set(doc)
+        assert not missing, f'missing sections {sorted(missing)}'
     except Exception as e:
         errors.append(f'{name}: invalid manifest: {e}')
     shell = (base / 'tests/test.sh').read_text()
