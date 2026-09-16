@@ -2500,14 +2500,23 @@ def _batch_reads(
     and one LLM call either way -- that is the whole point, and it is also why nothing
     here touches the token budget.
 
+    Two things the batch deliberately does not do (critic, 16.09). It does not write
+    its extras into the detector window: `state.actions` holds `ACTION_HISTORY` = 6
+    records, and four reads per step would push the primary actions out of it, blinding
+    the repeat and stuck detectors to exactly the loop this exists to break. Extras are
+    audited (`tool` events, the `batch` note) and fingerprinted for duplicates inside
+    the batch, nothing more. And it does not add one history entry per extra: the whole
+    batch is one observation of at most `BATCH_OBSERVATION_MAX_CHARS`, so it takes one
+    of the `OBSERVATION_RELAY_KEEP` slots and the primary's own observation survives.
+
     Returns how many of the executed extras came back with content, which is what the
     early-deliverable checkpoint counts as grounding.
     """
-    # An equal share of the budget one observation is allowed, so the whole batch adds
-    # no more text than the widest single `read_range` a step may add today.
-    share = limits.OBSERVATION_BUDGET_CHARS // limits.BATCH_READONLY_MAX
+    share = limits.BATCH_OBSERVATION_MAX_CHARS // limits.BATCH_READONLY_MAX
     executed = 0
     grounded = 0
+    seen: set[tuple[str, str]] = set()
+    parts: list[str] = []
 
     for index, raw in enumerate(extras[: limits.BATCH_READONLY_MAX], start=2):
         if state.budget.spendable_s() <= 0:
@@ -2537,9 +2546,11 @@ def _batch_reads(
             state.record("llm", "batch-bad-action", problem)
             continue
 
-        if _already_observed(state, tool, detectors.args_digest(args)):
+        digest = detectors.args_digest(args)
+        if (tool, digest) in seen or _already_observed(state, tool, digest):
             state.record("budget", "batch-repeat", f"{tool} already ran in this epoch")
             continue
+        seen.add((tool, digest))
 
         act_started = state.start_phase("act")
         try:
@@ -2569,13 +2580,6 @@ def _batch_reads(
             duration_s=result.duration_s,
             exit_code=result.exit_code,
         )
-        state.observe(
-            tool,
-            args,
-            body,
-            ok=result.ok,
-            error_code="" if result.ok else _error_code(result),
-        )
         executed += 1
         if result.ok and body.strip():
             grounded += 1
@@ -2585,9 +2589,11 @@ def _batch_reads(
         head = (room * 2) // 3
         clipped, _ = tools.clip(body, head=head, tail=room - head)
         # Hard-cut after `clip`: its truncation marker can add a few characters back,
-        # and the bound on what one step may add is the point of the share.
-        observations.append(f"{header}{clipped[:room]}".rstrip())
+        # and the bound on what one batch may add is the point of the share.
+        parts.append(f"{header}{clipped[:room]}".rstrip())
 
+    if parts:
+        observations.append("\n".join(parts)[: limits.BATCH_OBSERVATION_MAX_CHARS])
     state.record("budget", "batch", f"executed {executed} of {len(extras)} extra calls")
     return grounded
 

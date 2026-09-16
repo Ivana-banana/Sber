@@ -104,6 +104,15 @@ prefill again almost immediately.
 """
 
 BATCH_READONLY_MAX = 4
+BATCH_OBSERVATION_MAX_CHARS = 4000
+"""Total text one step's batch of read-only extras may add to the history.
+
+Less than the widest single observation (`TOOL_OUTPUT_HEAD_BYTES + TOOL_OUTPUT_TAIL_BYTES`
+= 6000) on purpose: the batch travels as ONE history entry next to the primary action's
+own, so with `OBSERVATION_RELAY_KEEP` = 4 it occupies one relay slot, not four, and the
+primary observation the model must react to (a failed write, a refused finish, a
+checkpoint hint) is never pushed out by its own extras (critic, 16.09).
+"""
 """Extra read-only calls from one reply that may run inside that reply's step.
 
 A reasoning model answers a code-fix step with three to six `read_range` calls at

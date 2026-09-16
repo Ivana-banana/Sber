@@ -48,7 +48,19 @@ def make_file(directory: Path, name: str, *, size: int = 40) -> Path:
 
 
 def tools_run(state: AgentState) -> list[str]:
-    return [record.tool for record in state.actions]
+    """Every tool that ran, primary and batch alike, from the audit trail.
+
+    `state.actions` is the detector window and deliberately holds only primary actions:
+    a batch of reads must not push the primaries out of it (critic, 16.09).
+    """
+    return [event.name for event in state.audit if event.kind == "tool"]
+
+
+def batch_entry(outcome: loop.Outcome) -> str:
+    """The one history entry a step's batch produces ('' when there was none)."""
+    entries = [text for text in outcome.observations if text.startswith("[step ") and "." in text.split("]")[0]]
+    assert len(entries) <= 1, entries
+    return entries[0] if entries else ""
 
 
 def step_markers(outcome: loop.Outcome) -> list[str]:
@@ -81,9 +93,10 @@ def test_a_batch_of_reads_runs_inside_one_step(tmp_path: Path) -> None:
     assert state.budget.steps_used == 1, "a reply is one step, however many calls it carried"
     assert len(llm.calls) == 1, "the extras cost no second call and no extra tokens"
     assert tools_run(state) == ["read_range"] * 5
-    assert step_markers(outcome) == [
-        "[step 1]", "[step 1.2]", "[step 1.3]", "[step 1.4]", "[step 1.5]"
-    ]
+    assert step_markers(outcome) == ["[step 1]", "[step 1.2]"], "one batch, one history entry"
+    entry = batch_entry(outcome)
+    assert all(f"[step 1.{k}]" in entry for k in (2, 3, 4, 5))
+    assert len(state.actions) == 1, "extras stay out of the detector window"
     assert batch_notes(state) == ["executed 4 of 4 extra calls"]
 
 
@@ -95,7 +108,7 @@ def test_a_batch_longer_than_the_cap_is_cut_at_the_cap(tmp_path: Path) -> None:
 
     run(state, llm, FakeVerify())
 
-    assert len(state.actions) == 1 + limits.BATCH_READONLY_MAX
+    assert len(tools_run(state)) == 1 + limits.BATCH_READONLY_MAX
     assert batch_notes(state) == [f"executed {limits.BATCH_READONLY_MAX} of 6 extra calls"]
 
 
@@ -213,7 +226,7 @@ def test_a_repeat_of_an_earlier_step_is_skipped_inside_the_batch(tmp_path: Path)
     run(state, llm, FakeVerify())
 
     assert batch_notes(state) == ["executed 0 of 1 extra calls"]
-    assert len(state.actions) == 2
+    assert len(tools_run(state)) == 2
 
 
 def test_the_batch_respects_the_observation_budget_on_large_files(tmp_path: Path) -> None:
@@ -224,17 +237,17 @@ def test_the_batch_respects_the_observation_budget_on_large_files(tmp_path: Path
 
     outcome = run(state, llm, FakeVerify())
 
-    extras = [text for text in outcome.observations if text.startswith("[step 1.")]
-    assert len(extras) == limits.BATCH_READONLY_MAX
-    share = limits.OBSERVATION_BUDGET_CHARS // limits.BATCH_READONLY_MAX
-    assert all(len(text) <= share for text in extras)
-    assert sum(len(text) for text in extras) <= limits.OBSERVATION_BUDGET_CHARS
+    entry = batch_entry(outcome)
+    assert all(f"[step 1.{k}]" in entry for k in range(2, 2 + limits.BATCH_READONLY_MAX))
+    share = limits.BATCH_OBSERVATION_MAX_CHARS // limits.BATCH_READONLY_MAX
+    assert len(entry) <= limits.BATCH_OBSERVATION_MAX_CHARS
+    assert limits.BATCH_OBSERVATION_MAX_CHARS < limits.TOOL_OUTPUT_HEAD_BYTES + limits.TOOL_OUTPUT_TAIL_BYTES
     # The bound to beat: what one wide `read_range` may put in the history today.
     primary = max(len(text) for text in outcome.observations if text.startswith("[step 1]"))
     assert primary > share, "the fixture is big enough for the clipping to matter"
     # Clipping keeps both ends, and the end is where `read_range` puts the path and
     # line range. A window the model cannot locate is not an observation.
-    assert all("[read_range source=" in text for text in extras)
+    assert entry.count("[read_range source=") == limits.BATCH_READONLY_MAX
 
 
 def test_a_read_only_batch_does_not_advance_the_state_epoch(tmp_path: Path) -> None:
@@ -442,5 +455,27 @@ def test_a_real_multi_call_reply_reaches_the_loop_as_one_batched_step(tmp_path: 
 
     assert state.budget.steps_used == 1
     assert tools_run(state) == ["read_range"] * 3
-    assert step_markers(outcome) == ["[step 1]", "[step 1.2]", "[step 1.3]"]
+    assert step_markers(outcome) == ["[step 1]", "[step 1.2]"]
+    assert "[step 1.3]" in batch_entry(outcome)
     assert state.budget.total_tokens == 52, "one reply is one call, billed once"
+
+
+def test_a_batch_does_not_blind_the_repeat_detectors(tmp_path: Path) -> None:
+    # The critic's probe (16.09): a primary that fails the same way every step, with
+    # four fresh reads riding along. Before the fix the reads filled the six-record
+    # detector window and the failing primary was never seen twice in a row.
+    files = [make_file(tmp_path, f"r{index}.py") for index in range(4)]
+    missing = tmp_path / "does-not-exist.py"
+    state = make_state(tmp_path)
+    state.budget.max_steps = 8
+    llm = StubLlm(replies=[batched(read(missing), *(read(path) for path in files))] * 8)
+
+    outcome = run(state, llm, FakeVerify())
+
+    # The repeat detector saw the failing primary twice in a row and refused the copies:
+    # with extras in the window it never did (the critic's measured probe).
+    refusals = [text for text in outcome.observations if "repeating it will not produce" in text]
+    assert refusals, "the failing primary must be recognised as a repeat"
+    assert all(record.tool == "read_range" for record in state.actions)
+    assert len(state.actions) <= limits.ACTION_HISTORY
+    assert tools_run(state).count("read_range") < 8 * 5, "refused copies do not run, nor do their extras"
