@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import re
 import signal
 import stat
@@ -1042,6 +1043,13 @@ class ServingProcess:
     reason: str = ""
     """Why this process was matched, in one short English phrase, for the trace."""
 
+    command: str = ""
+    """The full command line, shell-quoted, when every token is safe to show; "" when
+    any token looks like a credential or a URL with one, or when procfs gave none. The
+    restart hint quotes it verbatim: on the measured 30B stand the model stopped the
+    service it was told about and never started it again, because "run the same command
+    again" left it to reconstruct the command from the entrypoint (16.09)."""
+
     @property
     def label(self) -> str:
         """The command line as a person would name the service: `uvicorn main:app`."""
@@ -1537,6 +1545,38 @@ def serving_processes(
                 started_at=info.started_at,
                 ports=tuple(sorted({port for inode, port in ports.items() if inode in inodes})),
                 reason=found,
+                command=_relaunch_command(info.argv, secrets),
             )
         )
     return ServiceScan(tuple(found_processes), complete, reason)
+
+
+_SECRET_OPTION_MARKERS = ("pass", "secret", "token", "key", "dsn", "url", "auth", "cred")
+
+
+def _relaunch_command(argv: Sequence[str], secrets: Sequence[str]) -> str:
+    """The command line as one shell-quotable string, or "" when it must not travel.
+
+    Refused whenever a token carries a URL with credentials or follows an option whose
+    name suggests a secret (`--requirepass hunter2`, `--dsn=...`): the model's prompt
+    and the trace must not become the place a service password is written down. The
+    agent's own endpoint credential is redacted as everywhere else.
+    """
+    if not argv or len(argv) > limits.SERVICE_SCAN_MAX_ARGV_SCANNED:
+        return ""
+    previous = ""
+    for token in argv:
+        lowered = token.lower()
+        if "://" in token or "@" in token:
+            return ""
+        if previous.startswith("-") and any(marker in previous.lower() for marker in _SECRET_OPTION_MARKERS):
+            return ""
+        if token.startswith("-") and "=" in token and any(
+            marker in lowered.split("=", 1)[0] for marker in _SECRET_OPTION_MARKERS
+        ):
+            return ""
+        if "\n" in token or "\x00" in token:
+            return ""
+        previous = token
+    quoted = " ".join(shlex.quote(token) for token in argv)
+    return redact(quoted, secrets)[: limits.SERVICE_SCAN_TOKEN_CHARS * 8]

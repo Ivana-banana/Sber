@@ -2931,6 +2931,14 @@ def _stale_service(
         listens = f", слушает {ports}" if ports else ""
         others = f" Ещё процессов в том же состоянии: {len(stale) - 1}." if len(stale) > 1 else ""
         cwd_note = f" (`{process.cwd}`)" if process.cwd else ""
+        relaunch = ""
+        if process.command:
+            where = f"cd {process.cwd} && " if process.cwd else ""
+            relaunch = (
+                f" Готовая команда: `{where}nohup {process.command} "
+                ">/tmp/service-restart.log 2>&1 &` — после неё проверь, что порт снова "
+                "отвечает, прежде чем гонять тесты."
+            )
         hint = (
             f"[verify] сервис `{process.label}` (pid {process.pid}{listens}) запущен в "
             f"{_wall_clock(process.started_at)}, раньше твоей правки {relative} в "
@@ -2939,6 +2947,7 @@ def _stale_service(
             "убивай, никаких pkill/killall), затем запусти ту же команду заново в фоне "
             f"из его каталога{cwd_note} так, как это делает entrypoint проекта, дождись, "
             "пока порт снова отвечает, повтори проверку и только потом finish."
+            f"{relaunch}"
         )
         detail = (
             f"pid {process.pid} `{process.label}` started {_wall_clock(process.started_at)} "

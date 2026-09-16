@@ -1203,3 +1203,15 @@ def test_process_scan_cannot_have_a_forged_line_injected_through_a_file_name(tmp
 
     assert scan.processes, "the process is still reported"
     assert "\n" not in scan.processes[0].reason
+
+
+def test_relaunch_command_is_quoted_and_refused_for_credentials() -> None:
+    from agent.tools import _relaunch_command
+
+    assert _relaunch_command(["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"], []) == \
+        "uvicorn main:app --host 0.0.0.0 --port 8000"
+    assert _relaunch_command(["python3", "-m", "app", "a b"], []) == "python3 -m app 'a b'"
+    assert _relaunch_command(["redis-server", "--requirepass", "hunter2"], []) == ""
+    assert _relaunch_command(["app", "--dsn=postgres://u:p@h/db"], []) == ""
+    assert _relaunch_command(["app", "--database-url", "postgres://h/db"], []) == ""
+    assert _relaunch_command([], []) == ""
