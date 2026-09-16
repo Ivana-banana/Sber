@@ -7685,7 +7685,7 @@ def test_a_probe_that_changes_the_evaluator_is_undone_and_ends_the_privilege(
 @pytest.mark.parametrize(
     "command, added",
     [
-        ("python3 -c \"open('tests/' + 'test_b.py', 'w').write('def test_b(): pass')\"", "test_b.py"),
+        ("python3 -c \"open('te' + 'sts/te' + 'st_b.py', 'w').write('def test_b(): pass')\"", "test_b.py"),
         # sqlite writes a file wherever it is told to
         ("python3 -c \"import sqlite3; sqlite3.connect('te' + 'sts/new.db').execute('create table t(x)')\"", "new.db"),
     ],
