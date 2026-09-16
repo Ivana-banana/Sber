@@ -7631,4 +7631,33 @@ def test_a_harmless_probe_runs_and_keeps_the_privilege(tmp_path: Path) -> None:
     assert state.python_probes_disabled is False
 
 
+def test_code_audit_reads_carry_line_numbers_and_fix_reads_do_not(tmp_path: Path) -> None:
+    # An audit report cites file:line; without numbers in the read the model counted
+    # lines itself and was off by one on every extra audit task (EXTRA-taxonomy).
+    source = tmp_path / "client.py"
+    source.write_text("a = 1\n\nTOKEN = 'x'\n", encoding="utf-8")
+    state = make_state(tmp_path)
+
+    audit = loop._execute(
+        "read_range", {"path": str(source), "start_line": 1}, state, playbook=playbooks.CODE_AUDIT
+    )
+    fix = loop._execute(
+        "read_range", {"path": str(source), "start_line": 1}, state, playbook=playbooks.CODE_FIX
+    )
+
+    assert audit.ok and fix.ok
+    assert audit.output.startswith("1: a = 1\n2: \n3: TOKEN = 'x'\n\n[read_range source=")
+    assert "end_line=3" in audit.output
+    assert fix.output.startswith("a = 1\n\nTOKEN = 'x'\n\n[read_range source=")
+
+
+def test_numbered_reads_start_at_the_window_and_keep_the_cut_marker() -> None:
+    output = "def f():\n    pass\n… [window cut at line 41] …\n[read_range source=/x start_line=40 end_line=41 eof=no truncated=yes]"
+    numbered = loop._number_read_lines(output, 40)
+    assert numbered == (
+        "40: def f():\n41:     pass\n… [window cut at line 41] …\n"
+        "[read_range source=/x start_line=40 end_line=41 eof=no truncated=yes]"
+    )
+
+
 # --- composed read-only commands ---------------------------------------------------

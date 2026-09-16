@@ -29,6 +29,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 import json
+import dataclasses
 import os
 import re
 import shlex
@@ -2663,6 +2664,35 @@ def _code_fix_shell_refusal(command: str, state: AgentState) -> str:
     )
 
 
+_READ_FOOTER = "\n[read_range source="
+
+
+def _number_read_lines(output: str, start_line: int) -> str:
+    """Prefix each line of a `read_range` body with its number: `6: RELAY_API_TOKEN = …`.
+
+    Only the code-audit playbook gets this. An audit report cites a location, and the
+    plain body left the model to count lines itself: on the extra set every
+    file:line it wrote was off by one (`client.py:7` and `:5` for line 6,
+    EXTRA-taxonomy). A fix task keeps the plain body, because there the model copies
+    text back into `replace_text` and a prefix would break the anchor. The footer and
+    the window-cut marker stay as they are.
+    """
+    cut = output.rfind(_READ_FOOTER)
+    body, footer = (output, "") if cut < 0 else (output[:cut], output[cut:])
+    numbered: list[str] = []
+    number = start_line
+    for line in body.split("\n"):
+        if line.startswith("… [window cut at line "):
+            numbered.append(line)
+            continue
+        numbered.append(f"{number}: {line}")
+        number += 1
+    if body.endswith("\n") and numbered and numbered[-1] == f"{number - 1}: ":
+        numbered.pop()
+        return "\n".join(numbered) + "\n" + footer
+    return "\n".join(numbered) + footer
+
+
 def _execute(
     tool: str,
     args: dict[str, object],
@@ -2727,12 +2757,17 @@ def _execute(
         return result
     if tool == prompt.READ_RANGE:
         target = Path(str(args["path"]))
-        result = tools.read_range(target, start_line=int(args["start_line"]), secrets=secrets)
+        start_line = int(args["start_line"])
+        result = tools.read_range(target, start_line=start_line, secrets=secrets)
         if result.ok:
             try:
                 state.read_paths.add(target.resolve())
             except OSError:
                 pass
+            if playbook.name == "code-audit":
+                result = dataclasses.replace(
+                    result, output=_number_read_lines(result.output, start_line)
+                )
         return result
     if tool == prompt.LIST_DIR:
         return tools.list_dir(Path(str(args["path"])), secrets=secrets)
