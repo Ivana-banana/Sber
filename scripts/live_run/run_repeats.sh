@@ -2,15 +2,28 @@
 # container (`--rm`, never reused) and a fresh host mount directory, so neither
 # process/port state nor host-side artefacts survive from one repeat to the next.
 # Invoked as:
-#   sh scripts/live_run/run_repeats.sh <mode> <port> <budget_s> <label> <repeats>
+#   sh scripts/live_run/run_repeats.sh <mode> <port> <budget_s> <label> <repeats> [archive.zip]
 # Run from the repo root, inside the environment that has the target image pulled.
+#
+# Without the sixth argument the archive is built from this checkout. With it, that exact
+# archive is gated instead — a candidate is assembled on one branch and must be provable
+# on the bytes that would be uploaded, not on a rebuild of somebody else's tree.
 set -u
-mode=$1; port=$2; budget=$3; label=$4; repeats=$5
+mode=$1; port=$2; budget=$3; label=$4; repeats=$5; archive=${6:-}
 
 image=secureintelligent/acp@sha256:1324d7bb140422a9929f5bc538f55ec0480d2731742effee02bf67604130c8a3
 
 repo=$(cd "$(dirname "$0")/../.." && pwd)
-python3 "$repo/scripts/build_submission.py" >/dev/null
+if [ -z "$archive" ]; then
+    python3 "$repo/scripts/build_submission.py" >/dev/null
+    archive="$repo/build/submission.zip"
+fi
+if [ ! -f "$archive" ]; then
+    echo "no such archive: $archive" >&2
+    exit 2
+fi
+echo "archive: $archive"
+sha256sum "$archive" 2>/dev/null || shasum -a 256 "$archive"
 
 # Every LEAK below used to be prose on stdout with a zero exit code, so anything reading
 # the status of this script saw a clean run. A gate that cannot fail is not a gate.
@@ -19,7 +32,7 @@ status=0
 i=1
 while [ "$i" -le "$repeats" ]; do
     rundir=$(mktemp -d)
-    cp "$repo/build/submission.zip" "$rundir/submission.zip"
+    cp "$archive" "$rundir/submission.zip"
     cp "$repo/scripts/live_run/run_in_container.sh" "$repo/scripts/live_run/stub_endpoint.py" "$rundir/"
 
     echo "=== repeat $i rundir=$rundir ==="
