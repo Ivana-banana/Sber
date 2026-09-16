@@ -523,6 +523,15 @@ the change.
 """
 
 SERVICE_SCAN_MAX_REFUSALS = 1
+SERVICE_RESTART_MIN_SPARE_S = 90.0
+"""Spendable seconds a run must still have for a stale-service refusal to be worth it.
+
+Refusing a finish costs the model the steps to stop the service, start it again, wait
+for the port and re-run its check -- three or four actions. Inside the verifier reserve
+the loop cannot even grant one more step, so a refusal there ends the run on `budget`
+without the model's own verify command ever running (critic, 16.09). Below this margin
+the finish goes through and the finding is only audited.
+"""
 """Times one run may have `finish` refused because a pre-change process serves the code.
 
 Once. The observation says what to do about it; if the model looks and decides the

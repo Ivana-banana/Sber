@@ -171,11 +171,13 @@ def run(
                 # edits got wrong (`EDIT_ECHO_CONTEXT_LINES`, code-fix playbook).
                 checkpoint = (
                     "[бюджет] запас шагов и времени на исходе, а правки на диске нет. "
-                    "Лучший вариант здесь — сама правка: примени сейчас replace_text к тому "
-                    "уязвимому выражению, которое ты уже нашёл, взяв якорем всё выражение "
-                    "целиком вместе с вызовом, который использует значение. Потом перезапусти "
-                    "сервис так, как это делает его entrypoint, и повтори репро-проверку; не трать "
-                    "шаги на повторное чтение файлов, которые уже прочитаны."
+                    "Лучший вариант здесь — сама правка production-кода: если уязвимое "
+                    "выражение уже найдено, примени к нему replace_text сейчас, взяв якорем "
+                    "всё выражение целиком вместе с вызовом, который использует значение; "
+                    "если ещё не найдено — найди его одним search и правь. README, отчёт или "
+                    "тест сами по себе не являются исправлением. Потом перезапусти сервис так, "
+                    "как это делает его entrypoint, и повтори репро-проверку; не перечитывай "
+                    "уже прочитанные файлы."
                 )
             observations.append(checkpoint)
 
@@ -282,10 +284,19 @@ def run(
                     kind, detail, hint = looked
                     if kind:
                         state.record("verify", kind, detail)
-                    if hint and stale_service_refusals < limits.SERVICE_SCAN_MAX_REFUSALS:
+                    if (
+                        hint
+                        and stale_service_refusals < limits.SERVICE_SCAN_MAX_REFUSALS
+                        and state.budget.spendable_s() >= limits.SERVICE_RESTART_MIN_SPARE_S
+                    ):
                         stale_service_refusals += 1
                         observations.append(f"[step {step}] {hint}")
                         continue
+                    if hint:
+                        # Too late to act on it: a refusal now would end the run inside
+                        # the reserve with the model's check never run. Audited, not
+                        # enforced.
+                        state.record("verify", "stale-service-late", "no spare time for a restart")
 
             verify_started = state.start_phase("verify")
             last_verdict = verify(state, deliverable=deliverable, command=command)
@@ -2868,13 +2879,15 @@ def _stale_service(
         ports = ", ".join(f":{port}" for port in process.ports)
         listens = f", слушает {ports}" if ports else ""
         others = f" Ещё процессов в том же состоянии: {len(stale) - 1}." if len(stale) > 1 else ""
+        cwd_note = f" (`{process.cwd}`)" if process.cwd else ""
         hint = (
             f"[verify] сервис `{process.label}` (pid {process.pid}{listens}) запущен в "
             f"{_wall_clock(process.started_at)}, раньше твоей правки {relative} в "
             f"{_wall_clock(moment)}: любая проверка через него меряет старый код.{others} "
-            "Перезапусти сервис так, как это делает его entrypoint (например, останови "
-            "старый процесс и запусти ту же команду заново в фоне), дождись, пока порт "
-            "снова отвечает, и повтори проверку, затем finish."
+            f"Останови только этот процесс: `kill {process.pid}` (ничего другого не "
+            "убивай, никаких pkill/killall), затем запусти ту же команду заново в фоне "
+            f"из его каталога{cwd_note} так, как это делает entrypoint проекта, дождись, "
+            "пока порт снова отвечает, повтори проверку и только потом finish."
         )
         detail = (
             f"pid {process.pid} `{process.label}` started {_wall_clock(process.started_at)} "

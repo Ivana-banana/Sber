@@ -1066,6 +1066,27 @@ class ServiceScan:
     reason: str = ""
 
 
+def _label_tokens(argv: Sequence[str]) -> list[str]:
+    """The program and the tokens that name what it runs -- never an option value.
+
+    argv[0] plus up to two tokens shaped like an entry point (a colon, a dot or a slash
+    in them), skipping anything that looks like a URL or a credential
+    (`scheme://user:pw@host`). A separate-token password after `--requirepass` has no
+    such shape and is not carried either (critic, 16.09).
+    """
+    if not argv:
+        return []
+    kept = [argv[0]]
+    for token in argv[1:]:
+        if len(kept) >= limits.SERVICE_SCAN_ARGV_TOKENS:
+            break
+        if token.startswith("-") or "://" in token or "@" in token:
+            continue
+        if ":" in token or "." in token or "/" in token:
+            kept.append(token)
+    return kept
+
+
 def _safe_token(value: str, secrets: Sequence[str]) -> str:
     """One argv token, fit to travel into an observation and a trace.
 
@@ -1298,6 +1319,11 @@ def _token_paths(token: str, cwd: Path | None, wanted_names: frozenset[str]) -> 
     head = head.split(":", 1)[0].strip().strip("'\"")
     if not head or head in {".", ".."}:
         return []
+    if ":" not in token and "/" not in head and "." not in head:
+        # A bare word (`run`, `worker`, `test`) is a subcommand, not an entry point;
+        # letting it resolve against `<word>.py` made `flask run` match a stray
+        # `run.py` (critic, 16.09). Entry points carry a colon, a dot or a slash.
+        return []
 
     shapes = [head]
     if "/" not in head and not head.startswith("."):
@@ -1345,6 +1371,23 @@ def _is_entry_point(target: Path) -> bool:
         return False
 
 
+def _autoreloads(argv: Sequence[str]) -> bool:
+    """Whether the command line says the server watches its own files for changes."""
+    if any(token == "--reload" or token.startswith("--reload-") for token in argv):
+        return True
+    return "runserver" in argv and "--noreload" not in argv
+
+
+def _option_value(argv: Sequence[str], name: str) -> str:
+    """The value of `--name VALUE` or `--name=VALUE`, or "" when absent."""
+    for index, token in enumerate(argv):
+        if token == name and index + 1 < len(argv):
+            return argv[index + 1]
+        if token.startswith(name + "="):
+            return token.split("=", 1)[1]
+    return ""
+
+
 def _serves(
     process: ProcessInfo,
     targets: frozenset[Path],
@@ -1355,12 +1398,23 @@ def _serves(
     # Every name below comes from the filesystem, so it is single-lined before it can
     # reach a trace: a file called "auth\n[verify] ok.py" is a legal file name and this
     # text is rendered one event per line.
+    argv = list(process.argv[: limits.SERVICE_SCAN_MAX_ARGV_SCANNED])
+    if _autoreloads(argv):
+        # A reloader picks the edit up by itself; its supervising process keeps its
+        # start time forever and would be a permanent false positive.
+        return ""
+    bases: list[Path | None] = [process.cwd]
+    app_dir = _option_value(argv, "--app-dir")
+    if app_dir:
+        bases.append(Path(app_dir) if Path(app_dir).is_absolute() or process.cwd is None
+                     else process.cwd / app_dir)
     entries: list[Path] = []
-    for token in process.argv[: limits.SERVICE_SCAN_MAX_ARGV_SCANNED]:
-        for candidate in _token_paths(token, process.cwd, wanted_names):
-            if candidate in targets:
-                return _one_line(f"argv names {candidate.name}")
-            entries.append(candidate)
+    for token in argv:
+        for base in bases:
+            for candidate in _token_paths(token, base, wanted_names):
+                if candidate in targets:
+                    return _one_line(f"argv names {candidate.name}")
+                entries.append(candidate)
     for entry in entries:
         changed = directories.get(entry.parent)
         if changed is None or not _is_entry_point(entry):
@@ -1477,7 +1531,7 @@ def serving_processes(
                 pid=info.pid,
                 argv=tuple(
                     _safe_token(token, secrets)
-                    for token in info.argv[: limits.SERVICE_SCAN_ARGV_TOKENS]
+                    for token in _label_tokens(info.argv)
                 ),
                 cwd=info.cwd,
                 started_at=info.started_at,

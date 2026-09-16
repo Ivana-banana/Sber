@@ -314,6 +314,10 @@ class Budget:
         return self.input_tokens + self.output_tokens
 
 
+EDIT_TOOLS = frozenset({"write_file", "replace_text"})
+"""The two tools whose success is a change to the deliverable; see `shows_progress`."""
+
+
 @dataclass
 class AgentState:
     """Everything one run carries between steps."""
@@ -420,32 +424,26 @@ class AgentState:
         return False
 
     def shows_progress(self) -> bool:
-        """Whether the recent window looks like work rather than like standing still.
+        """Whether the recent window contains an accepted edit -- the one shape of
+        progress a step extension may feed.
 
-        Read from the detector window alone, so nothing new is bookkept for it and the
-        answer is exactly as honest as the evidence the detectors already act on.
-
-        Two shapes count. A state-changing action inside the window: `advance_state_epoch`
-        runs on a write, an edit or a mutating shell, and the record of that action
-        carries the new epoch, so an epoch that differs across the window is a change
-        that happened inside it. Or a last observation the run had not already seen --
-        a run reading new things is still working, whatever it has yet to write.
-
-        What does not count is the loop this exists to refuse: eleven `read_range` calls
-        against the file the run has already read return an observation it has seen, in
-        an epoch nothing moved, and the window then says so. Nor does a success that has
-        gone stale -- a run whose last `ACTION_HISTORY` steps all went to refused
-        actions, malformed replies or endpoint errors executed nothing at all, and the
-        window it left behind is a fact about an older run.
+        Read from the detector window alone, so nothing new is bookkept for it. Only a
+        successful `write_file` or `replace_text` counts. Not a novel read: thirty
+        `read_range` calls over different windows of one file are each novel and are
+        exactly the loop this exists to refuse. Not a state-changing shell either: a
+        `pytest` re-run advances the epoch and prints a fresh timing every time, and a
+        run that tests the same unchanged code thirty times is standing still (critic,
+        16.09). A success that has gone stale does not count: a window whose last record
+        is `ACTION_HISTORY` steps old describes an older run.
         """
         window = self.actions[-limits.ACTION_HISTORY :]
         if not window:
             return False
         if self.budget.steps_used - window[-1].step >= limits.ACTION_HISTORY:
             return False
-        if window[-1].state_epoch != window[0].state_epoch:
-            return True
-        return window[-1].novel
+        return any(
+            record.ok and record.tool in EDIT_TOOLS for record in window
+        )
 
     def record(
         self,

@@ -280,21 +280,25 @@ def test_a_stuck_run_needs_both_answers_before_anything_is_granted(tmp_path: Pat
     assert state.budget.max_steps == limits.MAX_STEPS
 
 
-def test_progress_is_a_state_change_in_the_window_or_a_new_last_observation(
-    tmp_path: Path,
-) -> None:
+def test_progress_is_an_accepted_edit_in_the_window(tmp_path: Path) -> None:
+    # Novel reads and re-run tests are not progress (critic, 16.09): thirty different
+    # windows of one file are each novel, and pytest prints a fresh timing every time.
     state = make_state(tmp_path)
     args = {"path": str(tmp_path / "app.py"), "start_line": 1}
 
     state.observe("read_range", args, "line one")
-    assert state.shows_progress() is True, "the first observation is new"
+    assert state.shows_progress() is False, "a new read is not an edit"
 
-    state.observe("read_range", args, "line one")
-    assert state.shows_progress() is False, "the same file, the same bytes, nothing moved"
+    state.advance_state_epoch()
+    state.observe("run_shell", {"command": "python -m pytest -q"}, "1 failed in 0.17s")
+    assert state.shows_progress() is False, "a re-run test suite is not an edit"
 
     state.advance_state_epoch()
     state.observe("write_file", {"path": str(tmp_path / "out.txt")}, "wrote 3 bytes")
-    assert state.shows_progress() is True, "a state-changing action landed in the window"
+    assert state.shows_progress() is True, "an accepted edit landed in the window"
+
+    state.observe("replace_text", {"path": str(tmp_path / "app.py")}, "replaced", ok=False)
+    assert state.shows_progress() is True, "the earlier accepted edit still counts inside the window"
 
 
 def test_an_old_success_is_not_evidence_that_the_run_is_still_moving(
@@ -430,7 +434,7 @@ def test_the_code_fix_checkpoint_carries_the_anchor_and_the_restart(tmp_path: Pa
 def test_the_code_fix_checkpoint_stops_the_re_reading(tmp_path: Path) -> None:
     checkpoint = checkpoints(code_fix_run(tmp_path))[-1]
 
-    assert "не трать" in checkpoint.lower()
+    assert "не перечитывай" in checkpoint.lower()
     assert "прочитан" in checkpoint
 
 

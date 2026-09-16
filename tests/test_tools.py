@@ -1182,7 +1182,7 @@ def test_process_scan_drops_option_values_from_the_command_line(tmp_path: Path) 
 
     scan = tools.serving_processes([changed], proc_root=proc)
 
-    assert scan.processes[0].label == "python3 main.py --dsn=…"
+    assert scan.processes[0].label == "python3 main.py"
     assert "pw" not in scan.processes[0].label
 
 
