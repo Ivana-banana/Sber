@@ -96,6 +96,12 @@ def resolve_workspace(
 
     image_workdir = Path(limits.IMAGE_WORKDIR)
     if image_workdir.is_dir() and image_workdir.resolve() != agent_dir.resolve():
+        # The base image ships `/app` with nothing but `.venv` in it, so the directory
+        # exists under every task built from it. Holding only hidden entries, it is the
+        # base image's and not the task's; a directory the task names elsewhere wins.
+        named = paths.workspace_candidates(instruction, agent_dir) if _only_hidden(image_workdir) else []
+        if named:
+            return named[0], f"named by the task text ({len(named)} candidate(s)); {limits.IMAGE_WORKDIR} holds only hidden entries"
         return image_workdir, f"image workdir {limits.IMAGE_WORKDIR}"
 
     # cwd before the task text, and only skipped when it is our own install directory.
@@ -117,6 +123,14 @@ def resolve_workspace(
         return named[0], f"named by the task text ({len(named)} candidate(s))"
 
     return cwd, "runner cwd (no better candidate)"
+
+
+def _only_hidden(directory: Path) -> bool:
+    """Whether every entry of `directory` is a dot-entry (an empty one included)."""
+    try:
+        return all(entry.name.startswith(".") for entry in directory.iterdir())
+    except OSError:
+        return False
 
 
 def build_state(argv: Sequence[str], env: Mapping[str, str], cwd: Path) -> AgentState:
