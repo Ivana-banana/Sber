@@ -35,7 +35,9 @@ M4** (`Создание Playbook'ов для Агента с Лицензион�
 **Статический аудит.** `tools/static_fixture_audit.py` (входит в поставку, путь
 относительный, без хардкода) прогнан локально на распакованных 18 пакетах:
 layout, `task.toml` (`schema_version = "1.2"`, `allow_internet = false`, `cpus = 1`,
-`memory_mb = 256`), явный бинарный verifier (`printf '1`/`printf '0` в
+`memory_mb = 256` — **устарело: 04.09.2026 коммит `f418d3a` поднял конверт до
+`memory_mb = 2048` по форме реальных пакетов, аудит поправлен 17.09**), явный бинарный
+verifier (`printf '1`/`printf '0` в
 `/logs/verifier/reward.txt`), отсутствие токенов `apt-get`/`pip install`/`curl`/
 `wget`/`requests.get(`/`socket.create_connection` в `environment/` — все 18/18
 зелёные. Проверка исполняемых битов из скрипта не тронута: она ложно падает при

@@ -25,9 +25,15 @@ that covers instead of pretending they were verified. Reachability is also blind
 `Dockerfile` that copies an explicit file list: the evidence can be in the repository and
 still be absent from the image.
 
-Usage: python3 scripts/eval/check_fixture_answers.py [--show-values] [tasks-root ...]
-Exit 1 if an answer is unreachable or a fixture file is untracked, 2 if nothing was
-checked at all, 0 otherwise.
+Known blind spots, so that a clean run is not read as more than it is: an empty directory
+is not tracked by git and will not survive a checkout either; a file staged but never
+committed counts as tracked; symbolic links are followed; and a value that has to be
+computed (a sum, a hash) is reported as unreachable, because the guard cannot tell it
+apart from a lost one.
+
+Usage: python3 scripts/eval/check_fixture_answers.py [tasks-root ...]
+Exit 1 if an answer is unreachable, a fixture file is untracked, or the guard was blind
+somewhere; 2 if nothing was checked at all; 0 otherwise.
 """
 
 from __future__ import annotations
@@ -40,22 +46,39 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_ROOTS = ("local_task", "local_task_extra/tasks")
-ANSWER_NAMES = ("expected", "exp", "want", "answer", "golden")
+ANSWER_NAMES = frozenset({"expected", "exp", "want", "answer", "golden", "gold"})
+"""Exact names, not substrings. A substring test reads `export`, `unexpected` and
+`experiment` as answer dicts — `unexpected_payloads = {...}` in a code-fix checker would
+turn a healthy fixture red — and still misses `gold` while matching `golden`."""
+
 # Two characters collide with everything: `ok`, `no`, a one-letter verdict. Reporting
 # them as reachable would be luck, not evidence, so they are left out of check 1.
 MIN_LENGTH = 3
 WORD = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+# Characters that continue a token when what follows them is alphanumeric: `deploy-key`
+# does not prove `deploy`, and `admin.example.com` does not prove `admin`, but a value
+# at the end of a sentence (`… from deploy.`) still counts.
+JOINERS = set(".-/:")
 
 
 class Warned(list):
-    """Problems that must be visible but do not decide the exit code on their own."""
+    """Problems that must be visible.
+
+    A line prefixed `BLIND:` means the guard could not look at something it was supposed
+    to look at — an unreadable evidence file, a checker it could not parse, a tasks root
+    git would not answer for. Those decide the exit code: a guard that cannot see must
+    not report clean. Everything else is advisory.
+    """
+
+    def blind(self) -> list[str]:
+        return [line for line in self if line.startswith("BLIND:")]
 
 
 def read_text(path: Path, warnings: Warned) -> str:
     try:
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
-        warnings.append(f"unreadable, treated as empty: {path} ({exc.strerror})")
+        warnings.append(f"BLIND: unreadable, treated as empty: {path} ({exc.strerror})")
         return ""
 
 
@@ -71,6 +94,8 @@ def key_value_answers(text: str) -> set[str]:
             continue
         if any(c not in WORD and c not in ".-" for c in key):
             continue
+        if len(value) > 1 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
         answers.add(value)
     return answers
 
@@ -86,6 +111,10 @@ def json_answers(text: str) -> set[str]:
         item = stack.pop()
         if isinstance(item, str):
             answers.add(item.strip())
+        elif isinstance(item, bool):
+            continue  # `true` is a verdict, not a value to find in the evidence
+        elif isinstance(item, (int, float)):
+            answers.add(str(item))  # `{"exfil_bytes": 7340032}` is an answer too
         elif isinstance(item, dict):
             stack.extend(item.values())
         elif isinstance(item, list):
@@ -106,29 +135,31 @@ def checker_answers(source: str, warnings: Warned, where: Path) -> set[str]:
     try:
         tree = ast.parse(source)
     except SyntaxError as exc:
-        warnings.append(f"unparsable checker, no answers taken from it: {where} ({exc.msg})")
+        warnings.append(f"BLIND: unparsable checker, no answers taken from it: {where} ({exc.msg})")
         return set()
 
     named: set[int] = set()
     for node in ast.walk(tree):
-        target = None
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = node.targets[0]
+        targets: list[ast.expr] = []
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
         elif isinstance(node, ast.AnnAssign):
-            target = node.target
-        if isinstance(target, ast.Name) and isinstance(node.value, ast.Dict):
-            if any(part in target.id.lower() for part in ANSWER_NAMES):
-                named.add(id(node.value))
+            targets = [node.target]
+        if not targets or not isinstance(node.value, ast.Dict):
+            continue
+        if any(isinstance(t, ast.Name) and t.id.lower() in ANSWER_NAMES for t in targets):
+            named.add(id(node.value))
 
     answers: set[str] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Dict) or not node.values:
+        if not isinstance(node, ast.Dict) or id(node) not in named:
             continue
-        if id(node) not in named:
-            continue
-        values = [v.value for v in node.values if isinstance(v, ast.Constant) and isinstance(v.value, str)]
-        if len(values) == len(node.values):
-            answers.update(v.strip() for v in values)
+        # Value by value, not all-or-nothing: a single non-string entry
+        # (`{'ip': '198.51.100.44', 'attempts': 41}`) used to switch the whole fixture
+        # off, and the report then counted it as "states no verbatim answer".
+        for item in node.values:
+            if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                answers.add(item.value.strip())
     return answers
 
 
@@ -146,6 +177,8 @@ def expected_answers(task: Path, warnings: Warned) -> set[str]:
             answers |= json_answers(text) if name.endswith(".json") else key_value_answers(text)
         elif path.suffix == ".py":
             answers |= checker_answers(read_text(path, warnings), warnings, path)
+    for short in sorted(a for a in answers if len(a) < MIN_LENGTH):
+        warnings.append(f"answer too short to look for, not checked: {task.name} {short!r}")
     return {a for a in answers if len(a) >= MIN_LENGTH}
 
 
@@ -170,18 +203,17 @@ def reachable(value: str, haystack: str) -> bool:
     """
     start = haystack.find(value)
     while start != -1:
+        end = start + len(value)
         before = haystack[start - 1] if start else ""
-        after = haystack[start + len(value) : start + len(value) + 1]
-        if before not in WORD and after not in WORD:
+        after = haystack[end : end + 1]
+        beyond_before = haystack[start - 2] if start > 1 else ""
+        beyond_after = haystack[end + 1 : end + 2]
+        cut_left = before in WORD or (before in JOINERS and beyond_before in WORD)
+        cut_right = after in WORD or (after in JOINERS and beyond_after in WORD)
+        if not cut_left and not cut_right:
             return True
         start = haystack.find(value, start + 1)
     return False
-
-
-def show(value: str, reveal: bool) -> str:
-    if reveal:
-        return repr(value)
-    return f"{value[:2]}…{value[-1:]} ({len(value)} chars)"
 
 
 def tasks_under(root: Path) -> list[Path]:
@@ -205,13 +237,14 @@ def untracked_files(root: Path) -> list[Path] | None:
         )
     except (OSError, subprocess.CalledProcessError):
         return None
+    # An empty listing is not "git cannot answer": it means git tracks nothing here, and
+    # a tasks root whose every file is absent from a fresh checkout is the incident in
+    # full. It used to be downgraded to a warning and a zero exit code.
     tracked = {
         (root / name).resolve()
         for name in listed.stdout.decode("utf-8", "replace").split("\0")
         if name
     }
-    if not tracked:
-        return None
     # Byte-code caches are the one thing under a fixture tree that is untracked on
     # purpose: `.gitignore` re-excludes them right after re-including everything else,
     # and running a checker locally creates them. Reporting them would make the guard
@@ -225,9 +258,11 @@ def untracked_files(root: Path) -> list[Path] | None:
 
 
 def main(argv: list[str]) -> int:
-    reveal = "--show-values" in argv
-    args = [a for a in argv[1:] if not a.startswith("--")]
-    roots = [Path(a) for a in args] or [ROOT / r for r in DEFAULT_ROOTS]
+    unknown = [a for a in argv[1:] if a.startswith("--")]
+    if unknown:
+        print(f"unknown option {unknown[0]!r}; usage: check_fixture_answers.py [tasks-root ...]")
+        return 2
+    roots = [Path(a) for a in argv[1:]] or [ROOT / r for r in DEFAULT_ROOTS]
 
     warnings = Warned()
     seen: set[Path] = set()
@@ -258,11 +293,14 @@ def main(argv: list[str]) -> int:
                 broken += 1
                 print(f"UNREACHABLE {task.name}")
                 for value in missing:
-                    print(f"    {show(value, reveal)} appears in no file under environment/")
+                    print(f"    {value!r} appears in no file under environment/")
 
         untracked = untracked_files(root)
         if untracked is None:
-            warnings.append(f"git could not list tracked files under {root}, tracking unchecked")
+            # Not a blind spot but an inapplicable check: a fixture tree copied outside
+            # version control has no tracking to verify. The case that *is* a finding —
+            # git answering with an empty list — is handled inside `untracked_files`.
+            warnings.append(f"not a git repository, tracking unchecked: {root}")
         else:
             for path in untracked:
                 broken += 1
@@ -278,7 +316,10 @@ def main(argv: list[str]) -> int:
     if not checked:
         print("nothing was checked — wrong tasks root?")
         return 2
-    return 1 if broken else 0
+    blind = warnings.blind()
+    if blind:
+        print(f"{len(blind)} blind spots above, so this run does not certify anything")
+    return 1 if broken or blind else 0
 
 
 if __name__ == "__main__":

@@ -23,25 +23,39 @@ logs/
 workspaces/
 submission.zip
 *.log
-# Деревья задач — это улики, а не артефакты прогона: потерянный здесь файл делает
-# задачу нерешаемой молча. Узкие негации ниже покрывали только `environment/**/*.log`,
-# и 17.09.2026 выяснилось, что мимо них проходят `solution/*.log`, `tools/*.log` и любой
-# каталог `logs/` внутри фикстуры — `.gitignore` уже съел улики двух forensics-задач.
-# Поэтому под деревьями задач не игнорируется ничего; кэши исключаются обратно следом.
+# Содержимое пакета задачи — это улики, а не артефакты прогона: потерянный здесь файл
+# делает задачу нерешаемой молча. Прежние негации покрывали только `environment/**/*.log`,
+# и 17.09.2026 выяснилось, что мимо них проходят `solution/*.log` и любой каталог `logs/`
+# внутри фикстуры — `.gitignore` уже съел улики двух forensics-задач.
+# Негация нарочно ограничена четырьмя каталогами пакета: сплошная `!local_task_extra/**`
+# заодно открывала `tools/` и `validation/`, куда `run_reference_suite.sh` пишет полсотни
+# логов прогона, и они начинали висеть в `git status`. Порядок строк ниже значим: блок
+# повторных исключений обязан идти после негаций, иначе кэши вернутся в индекс.
 # Проверяется `scripts/eval/check_fixture_answers.py` (раздел UNTRACKED).
-!local_task/**
-!local_task_extra/**
-local_task/**/__pycache__/
-local_task_extra/**/__pycache__/
-local_task/**/*.py[cod]
-local_task_extra/**/*.py[cod]
-# The blanket re-inclusion above also lifted the secrets rule at the top of this file,
-# because a later pattern wins. A fixture that genuinely needs a credentials file has to
-# be force-added deliberately; nothing may start tracking one by default.
-local_task/**/.env
-local_task/**/.env.*
-local_task_extra/**/.env
-local_task_extra/**/.env.*
+!local_task/*/environment/**
+!local_task/*/tests/**
+!local_task/*/solution/**
+!local_task_extra/tasks/*/environment/**
+!local_task_extra/tasks/*/tests/**
+!local_task_extra/tasks/*/solution/**
+local_task*/**/__pycache__/
+local_task*/**/*.py[cod]
+local_task*/**/.pytest_cache/
+local_task*/**/.ruff_cache/
+local_task*/**/.mypy_cache/
+local_task*/**/.venv/
+local_task*/**/venv/
+local_task*/**/.coverage
+local_task*/**/htmlcov/
+local_task*/**/.DS_Store
+local_task*/**/.idea/
+local_task*/**/.vscode/
+# Негация выше перекрывает и правило секретов из начала файла, потому что побеждает
+# последнее совпавшее правило. Учётные данные не должны начать отслеживаться сами;
+# образец конфигурации — часть улик и возвращается отдельной строкой.
+local_task*/**/.env
+local_task*/**/.env.*
+!local_task*/**/.env.example
 
 # Выгрузки внешних исследований: в Git идёт раскрытая копия из docs/research/,
 # сама выгрузка в корне остаётся локальной. Ни один рабочий .zip не лежит в корне.

@@ -16,14 +16,26 @@ expected = {
     'mut-greeting-farewell', 'mut-salutation-beacon', 'mut-audit-query-gate',
     'mut-fix-session-lookup', 'mut-fix-inventory-filter', 'mut-forensics-egress-ledger',
 }
+if not root.is_dir():
+    raise SystemExit(f'no tasks directory at {root}')
 actual = {p.name for p in root.iterdir() if p.is_dir()}
-assert actual == expected, (actual ^ expected)
+assert actual == expected, f'package set drifted: unexpected {sorted(actual - expected)}, missing {sorted(expected - actual)}'
 errors = []
 for name in sorted(expected):
     base = root / name
-    for rel in ('task.toml', 'instruction.md', 'environment/Dockerfile', 'tests/test.sh', 'solution/solve.sh'):
-        if not (base / rel).is_file():
-            errors.append(f'{name}: missing {rel}')
+    # A package that lost a file is the whole reason this audit exists, so the checks
+    # below must report it instead of dying on it: `stat()` and `read_text()` on a
+    # missing path used to raise outside the try and abandon the remaining packages,
+    # with the errors collected so far never printed.
+    missing_files = [
+        rel
+        for rel in ('task.toml', 'instruction.md', 'environment/Dockerfile', 'tests/test.sh', 'solution/solve.sh')
+        if not (base / rel).is_file()
+    ]
+    for rel in missing_files:
+        errors.append(f'{name}: missing {rel}')
+    if missing_files:
+        continue
     for rel in ('tests/test.sh', 'solution/solve.sh'):
         if not ((base / rel).stat().st_mode & stat.S_IXUSR):
             errors.append(f'{name}: {rel} is not executable')
@@ -36,8 +48,12 @@ for name in sorted(expected):
         assert doc['task']['name'] == f'local/{name}', f"task.name {doc['task']['name']!r}"
         assert doc['environment']['allow_internet'] is False, 'allow_internet is not False'
         assert doc['environment']['cpus'] == 1, f"cpus {doc['environment']['cpus']}"
-        # 2048 is what all 18 packages declare; the audit pinned 256 from an earlier
-        # generation of the fixtures and had been failing every package since.
+        # The envelope of THIS set, not of the schema: the public packages legitimately
+        # declare cpus=2, memory_mb=4096. 2048 was chosen deliberately in f418d3a ("put
+        # the fixtures inside the envelope the real packages declare"); the audit kept
+        # asserting the 256 of the original Manus delivery and had been failing every
+        # package since. If the envelope moves again, it moves here and in the manifests
+        # together — that is what this line is for.
         assert doc['environment']['memory_mb'] == 2048, f"memory_mb {doc['environment']['memory_mb']}"
         missing = set(('task','metadata','verifier','agent','environment','solution')) - set(doc)
         assert not missing, f'missing sections {sorted(missing)}'

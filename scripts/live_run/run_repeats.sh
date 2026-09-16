@@ -12,6 +12,10 @@ image=secureintelligent/acp@sha256:1324d7bb140422a9929f5bc538f55ec0480d2731742ef
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 python3 "$repo/scripts/build_submission.py" >/dev/null
 
+# Every LEAK below used to be prose on stdout with a zero exit code, so anything reading
+# the status of this script saw a clean run. A gate that cannot fail is not a gate.
+status=0
+
 i=1
 while [ "$i" -le "$repeats" ]; do
     rundir=$(mktemp -d)
@@ -35,6 +39,7 @@ while [ "$i" -le "$repeats" ]; do
         echo "confirmed removed"
     else
         echo "LEAK: container still present after rm"
+        status=1
     fi
 
     # The container writes through the mount as root, so the host user cannot delete
@@ -47,8 +52,11 @@ while [ "$i" -le "$repeats" ]; do
     rm -rf "$rundir"
     if [ -e "$rundir" ]; then
         echo "LEAK: $rundir survived cleanup"
+        status=1
     else
         echo "confirmed mount removed"
     fi
     i=$((i + 1))
 done
+
+exit "$status"
