@@ -7606,6 +7606,9 @@ def test_code_fix_still_refuses_a_curl_that_can_write_a_file(tmp_path: Path, com
         "python3 -c 'print(\"a,b\".replace(\",\", \";\"))'",
         "python3 -c 'import m; print(getattr(m, \"f\"))'",
         "python3 -c 'import sqlite3; print(sqlite3.connect(\":memory:\").execute(\"select 1\").fetchone())'",
+        # shell-looking characters inside the quoted payload are Python, not a pipeline
+        "python3 -c 'import m\nassert m.f(1) == 2; print(\"a | b > c\")\n# x -> y; z && w'",
+        "cd {ws} && python3 -c \"from m import f\n# Test cases\ntests = [('https://h.example/test?x=1', True)]\nfor u, ok in tests:\n    assert (f(u) == ok)\n\"",
     ],
 )
 def test_code_fix_lets_a_read_only_python_probe_through(tmp_path: Path, command: str) -> None:
@@ -7635,6 +7638,9 @@ def test_code_fix_lets_a_read_only_python_probe_through(tmp_path: Path, command:
         "python3 {ws}/tests/conftest.py",
         "python3 {ws}/mutate.py",
         "python3 -c 'print(1)' > tests/out.txt",
+        "python3 -c 'print(1)' | tee tests/out.txt",
+        "python3 -c 'print(1)'; rm -r tests",
+        "python3 -c 'print(1)' $(rm -r tests)",
         "python3 -W ignore -c 'print(1)'",
         "cd /etc && python3 -c 'print(1)'",
         "cd {ws} && python3 -c 'print(1)' && rm -r tests",

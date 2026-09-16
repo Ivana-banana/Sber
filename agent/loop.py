@@ -2810,6 +2810,7 @@ def _restore_protected(snapshot: dict[Path, _Guarded], state: AgentState) -> lis
 
 
 _PYTHON_PROBE_MAX_BYTES = 65536
+_SHELL_OPERATOR_CHARS = re.compile(r"[;&|<>`$()]")
 
 _WORKSPACE_CD = re.compile(r"^\s*cd\s+(?P<dir>[^\s;&|<>$`(){}\\'\"]+)\s*&&\s*(?P<rest>.+)$", re.DOTALL)
 
@@ -2846,14 +2847,19 @@ def _python_probe(command: str, state: AgentState) -> bool:
     and undone, and one violation ends the privilege for the run.
     """
     command = _strip_workspace_cd(command, state)
-    if any(_code_fix_shell_operator_flags(command)):
-        return False
     try:
         words = _code_fix_shell_unwrap_simple_wrappers(shlex.split(command))
     except ValueError:
         return False
     if len(words) < 2 or not _code_fix_is_python_executable(words[0], state.workspace):
         return False
+    # Shell operators are judged word by word after quote-aware splitting: a `;`, `|`
+    # or `>` inside the quoted `-c` payload is Python, not a pipeline, while an unquoted
+    # one survives the split as its own word (or glued to a neighbour) and refuses.
+    payload_index = words.index("-c") + 1 if "-c" in words else -1
+    for index, word in enumerate(words):
+        if index != payload_index and _SHELL_OPERATOR_CHARS.search(word):
+            return False
     options = [word for word in words[1:] if word.startswith("-")]
     if any(option not in {"-c", "-B", "-u", "-I", "-S", "-E", "-s"} for option in options):
         return False
@@ -2879,7 +2885,9 @@ def _python_probe(command: str, state: AgentState) -> bool:
             return False
     if state.python_probes_disabled or _PYTHON_SPAWN.search(text):
         return False
-    for token in re.findall(r"[\w./-]+", text):
+    for token in re.findall(r"[\w./:-]+", text):
+        if "://" in token:
+            continue  # a URL in a test value is not a path
         if "/" in token or token.endswith(".py"):
             try:
                 if _is_evaluator_path(Path(token), state) or _is_repository_control_path(Path(token), state):
