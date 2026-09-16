@@ -35,6 +35,13 @@ local_task/**/__pycache__/
 local_task_extra/**/__pycache__/
 local_task/**/*.py[cod]
 local_task_extra/**/*.py[cod]
+# The blanket re-inclusion above also lifted the secrets rule at the top of this file,
+# because a later pattern wins. A fixture that genuinely needs a credentials file has to
+# be force-added deliberately; nothing may start tracking one by default.
+local_task/**/.env
+local_task/**/.env.*
+local_task_extra/**/.env
+local_task_extra/**/.env.*
 
 # Выгрузки внешних исследований: в Git идёт раскрытая копия из docs/research/,
 # сама выгрузка в корне остаётся локальной. Ни один рабочий .zip не лежит в корне.

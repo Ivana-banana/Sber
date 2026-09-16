@@ -212,7 +212,15 @@ def untracked_files(root: Path) -> list[Path] | None:
     }
     if not tracked:
         return None
-    on_disk = {p.resolve() for p in root.rglob("*") if p.is_file()}
+    # Byte-code caches are the one thing under a fixture tree that is untracked on
+    # purpose: `.gitignore` re-excludes them right after re-including everything else,
+    # and running a checker locally creates them. Reporting them would make the guard
+    # red on a developer's machine for a reason that cannot break a fixture.
+    on_disk = {
+        p.resolve()
+        for p in root.rglob("*")
+        if p.is_file() and p.suffix not in (".pyc", ".pyo") and "__pycache__" not in p.parts
+    }
     return sorted(on_disk - tracked)
 
 

@@ -150,10 +150,55 @@ def test_a_fixture_file_git_does_not_track_is_reported(tmp_path: Path, capsys) -
     assert "UNTRACKED" in capsys.readouterr().out
 
 
+def is_ignored(repo: Path, path: str) -> bool:
+    return subprocess.run(["git", "check-ignore", "-q", path], cwd=repo).returncode == 0
+
+
+def test_the_project_ignore_rules_keep_fixture_evidence_and_drop_secrets(tmp_path: Path) -> None:
+    """The rule that caused the incident, pinned from the outside.
+
+    `*.log`, `logs/`, `dist/` and friends are legitimate rules for build output and an
+    ordinary trap for a task fixture, where the same names are evidence. A credentials
+    file must stay ignored anyway: the blanket re-inclusion lifts every earlier rule,
+    including the one at the top of the file.
+    """
+    if not shutil.which("git"):
+        return
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    shutil.copy(Path(__file__).resolve().parent.parent / ".gitignore", repo / ".gitignore")
+
+    for kept in (
+        "local_task/t/environment/case/logs/auth.log",
+        "local_task/t/environment/app/dist/bundle.js",
+        "local_task_extra/tasks/t/environment/evidence/edge.jsonl",
+        "local_task_extra/tasks/t/solution/trace.log",
+        "local_task_extra/tools/audit.log",
+    ):
+        assert not is_ignored(repo, kept), kept
+
+    for dropped in (
+        "local_task_extra/tasks/t/environment/.env",
+        "local_task/t/__pycache__/check.cpython-312.pyc",
+        "build/submission.zip",
+    ):
+        assert is_ignored(repo, dropped), dropped
+
+
 def test_the_repository_fixtures_are_clean(capsys) -> None:
-    """The regression itself: an evidence file lost from a real task must fail here."""
+    """The regression itself: an evidence file lost from a real task must fail here.
+
+    The floors are floors, not the current counts: an exact number would have to be
+    edited every time a fixture is added, and the edit that keeps a stale constant
+    green is exactly how the other fixture auditor in this repository rotted. What
+    must not happen is the guard quietly finding nothing to check.
+    """
     code = main(["check_fixture_answers.py"])
     out = capsys.readouterr().out
 
     assert code == 0, out
-    assert "checked 24 fixtures" in out
+    walked = int(out.split("checked ")[1].split(" ")[0])
+    verified = int(out.split("fixtures: ")[1].split(" ")[0])
+    assert walked >= 24, out
+    assert verified >= 5, out
