@@ -2626,27 +2626,125 @@ def _curl_probe(command: str) -> bool:
     return bool(words) and words[0] == "curl" and not _curl_can_write(words[1:])
 
 
-_PYTHON_MUTATION = re.compile(
+_PYTHON_SPAWN = re.compile(
     r"""(?x)
-    \bopen\s*\([^)]*['"][rwax]*[wax+]        # open(..., 'w' | 'a' | 'x' | 'r+')
-  | \.write(?:_text|_bytes|lines)?\s*\(       # f.write(...), Path.write_text(...)
-  | \b(?:os|shutil|subprocess|ctypes|pty|signal|multiprocessing)\b
-  | \.(?:unlink|rename|replace|touch|mkdir|rmdir|symlink_to|link_to|chmod|truncate)\s*\(
-  | \b(?:exec|eval|compile|__import__|getattr|setattr|delattr|globals|vars)\s*\(
-  | \bbuiltins\b
-  | \bsys\.(?:path|argv)\s*(?:\.|\[|=)
+    \bsubprocess\b | \bctypes\b | \bpty\b | \bbuiltins\b
+  | \bos\.(?:system|popen|exec\w*|spawn\w*|fork|kill|killpg)\b
+  | \bshutil\.rmtree\b
+  | \b(?:exec|eval|compile|__import__)\s*\(
     """
 )
-"""What a Python snippet may not spell to count as a read-only probe.
-
-A denylist, deliberately: the policy's threat model is a careless model, not an
-adversary. Everything here either writes or deletes a file, runs another program, or
-hides which name is being called (`getattr`, `exec`, `builtins`), which is what an
-evaluator mutation would have to go through. Pure reads -- `import`, `importlib.util`
-loaders, `sys.modules` juggling, asserts, prints, `sqlite3` reads -- stay legal.
+"""What a Python probe may not spell up front: spawning another program, hiding a call
+behind `exec`/`eval`, or a recursive delete. Everything else -- reads, `os.path`,
+`str.replace`, `getattr`, sqlite, zipfile -- is decided by effect, not by text: the
+probe runs under `_guard_protected_paths`, which snapshots the evaluator, `.git` and
+`/logs` before the command and restores the evaluator after it if anything changed. A
+text denylist cannot be made tight (a variable file mode, `chr()`-built names, a
+side-effecting import all pass any regex), so it is kept to the cases the snapshot
+cannot undo.
 """
 
+_PROTECTED_SNAPSHOT_MAX_FILES = 400
+_PROTECTED_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024
+_EXTRA_PROTECTED_ROOTS = (Path("/logs"),)
+
+
+def _protected_files(state: AgentState) -> list[Path] | None:
+    """Every file a probe must leave alone; None when there are too many to snapshot."""
+    found: list[Path] = []
+    total = 0
+    roots = [state.workspace, *[root for root in _EXTRA_PROTECTED_ROOTS if root.is_dir()]]
+    for root in roots:
+        try:
+            root = root.resolve()
+        except OSError:
+            continue
+        for current, dirs, files in os.walk(root):
+            here = Path(current)
+            dirs[:] = [d for d in dirs if d not in _INODE_SCAN_SKIP]
+            for name in files:
+                path = here / name
+                if root in [r.resolve() for r in _EXTRA_PROTECTED_ROOTS if r.is_dir()] or (
+                    _is_evaluator_path(path, state) or _is_repository_control_path(path, state)
+                ):
+                    try:
+                        if path.is_symlink() or not path.is_file():
+                            continue
+                        total += path.stat().st_size
+                    except OSError:
+                        continue
+                    found.append(path)
+                    if len(found) > _PROTECTED_SNAPSHOT_MAX_FILES or total > _PROTECTED_SNAPSHOT_MAX_BYTES:
+                        return None
+    return found
+
+
+def _protected_snapshot(state: AgentState) -> dict[Path, bytes] | None:
+    files = _protected_files(state)
+    if files is None:
+        return None
+    snapshot: dict[Path, bytes] = {}
+    for path in files:
+        try:
+            snapshot[path] = path.read_bytes()
+        except OSError:
+            return None
+    return snapshot
+
+
+def _restore_protected(snapshot: dict[Path, bytes], state: AgentState) -> list[str]:
+    """Put the snapshot back; return what had changed (empty when nothing did)."""
+    changed: list[str] = []
+    for path, content in snapshot.items():
+        try:
+            same = path.is_file() and not path.is_symlink() and path.read_bytes() == content
+        except OSError:
+            same = False
+        if same:
+            continue
+        changed.append(str(path))
+        try:
+            if path.is_symlink():
+                path.unlink()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        except OSError:
+            pass
+    after = _protected_files(state) or []
+    for path in after:
+        if path not in snapshot:
+            changed.append(str(path))
+            if not _is_repository_control_path(path, state):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+    return changed
+
+
 _PYTHON_PROBE_MAX_BYTES = 65536
+
+
+_WORKSPACE_CD = re.compile(r"^\s*cd\s+(?P<dir>[^\s;&|<>$`(){}\\'\"]+)\s*&&\s*(?P<rest>.+)$", re.DOTALL)
+
+
+def _strip_workspace_cd(command: str, state: AgentState) -> str:
+    """`cd <dir inside the workspace> && <rest>` -> `<rest>`, else the command unchanged.
+
+    The model prefixes most probes with `cd /app &&`; the directory changes nothing the
+    policy cares about when it lies inside the workspace, and a multi-line `-c` payload
+    defeats the generic part splitter, so the probe strips the prefix itself.
+    """
+    match = _WORKSPACE_CD.match(command)
+    if not match:
+        return command
+    try:
+        root = state.workspace.resolve()
+        target = Path(match["dir"])
+        (target if target.is_absolute() else root / target).resolve().relative_to(root)
+    except (OSError, ValueError):
+        return command
+    return match["rest"]
 
 
 def _python_probe(command: str, state: AgentState) -> bool:
@@ -2656,10 +2754,12 @@ def _python_probe(command: str, state: AgentState) -> bool:
     so on a fix task without a test suite the model's own check -- import the patched
     module, call it, assert -- was refused on every attempt (EXTRA-taxonomy: fix tasks
     spent 6-12 refusals per episode). The policy's job is to keep the evaluator
-    immutable, not to forbid reading the program under repair: a snippet or script whose
-    text contains no write, delete, spawn or name-hiding primitive and names no evaluator
-    path cannot touch the evaluator, so it goes through like a curl probe does.
+    immutable, not to forbid reading the program under repair. A snippet or script that
+    spawns nothing and names no evaluator path goes through like a curl probe does; what
+    it does to the evaluator is checked by effect afterwards (`_guard_protected_paths`)
+    and undone, and one violation ends the privilege for the run.
     """
+    command = _strip_workspace_cd(command, state)
     if any(_code_fix_shell_operator_flags(command)):
         return False
     try:
@@ -2691,12 +2791,12 @@ def _python_probe(command: str, state: AgentState) -> bool:
             text = target.read_text(encoding="utf-8", errors="replace")
         except (OSError, ValueError):
             return False
-    if _PYTHON_MUTATION.search(text):
+    if state.python_probes_disabled or _PYTHON_SPAWN.search(text):
         return False
     for token in re.findall(r"[\w./-]+", text):
         if "/" in token or token.endswith(".py"):
             try:
-                if _is_evaluator_path(Path(token), state):
+                if _is_evaluator_path(Path(token), state) or _is_repository_control_path(Path(token), state):
                     return False
             except (OSError, ValueError):
                 return False
@@ -2812,10 +2912,22 @@ def _execute(
                     "Start it as `nohup CMD >/tmp/CMD.log 2>&1 &`, then check it separately."
                 ),
             )
+        guarded: dict[Path, bytes] | None = None
         if playbook.name == "code-fix" and command.strip() not in state.relaunch_commands:
             refusal = _code_fix_shell_refusal(command, state)
             if refusal:
                 return tools.ToolResult(name=tool, ok=False, detail=refusal)
+            if _python_probe(command, state):
+                guarded = _protected_snapshot(state)
+                if guarded is None:
+                    return tools.ToolResult(
+                        name=tool,
+                        ok=False,
+                        detail=(
+                            "code-fix refused: too many evaluator files to guard a Python "
+                            "probe here; use pytest or a read-only shell command instead."
+                        ),
+                    )
         # A second of slack before the command so a file `cp` writes in the same coarse
         # filesystem tick still counts as touched (mtime >= since), never missed into a
         # false refusal.
@@ -2826,6 +2938,21 @@ def _execute(
             timeout_s=state.budget.tool_timeout_s(),
             secrets=secrets,
         )
+        if guarded is not None:
+            changed = _restore_protected(guarded, state)
+            if changed:
+                state.python_probes_disabled = True
+                shown = ", ".join(redact(item, secrets) for item in changed[:5])
+                return tools.ToolResult(
+                    name=tool,
+                    ok=False,
+                    detail=(
+                        f"code-fix refused: the probe changed evaluator/repository files "
+                        f"({shown}); they were restored, and Python probes are refused for "
+                        "the rest of this run. Keep tests, fixtures, expected answers and "
+                        ".git metadata immutable; edit production source instead."
+                    ),
+                )
         if result.ok:
             state.read_paths.update(_read_paths_from_shell(command, state))
             if _shell_can_change(command):

@@ -365,6 +365,8 @@ class AgentState:
     the run cannot overwrite a module it never opened -- the 14B fix-sqli failure."""
 
     relaunch_commands: set[str] = field(default_factory=set, repr=False)
+    python_probes_disabled: bool = field(default=False, repr=False)
+    """Set once a code-fix Python probe changed a protected file; no more probes then."""
     """Exact shell lines this run itself offered as a service restart (`agent.loop`,
     stale-service hint). The code-fix shell policy refuses compound commands and
     `nohup`, which is every way to background a service, so the one command the hint
