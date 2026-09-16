@@ -555,6 +555,11 @@ left alone, at the price of not warning about a process started in the same seco
 the change.
 """
 
+VACUOUS_VERIFY_MAX_REFUSALS = 2
+"""Finishes refused for a verify command that only reads the deliverable. The refusal
+is a nudge towards a real check; a model that offers the reader a third time is let
+through rather than refused until the step cap with its deliverable already on disk."""
+
 SERVICE_SCAN_MAX_REFUSALS = 1
 SERVICE_RESTART_MIN_SPARE_S = 90.0
 """Spendable seconds a run must still have for a stale-service refusal to be worth it.

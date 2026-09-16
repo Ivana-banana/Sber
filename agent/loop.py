@@ -128,6 +128,7 @@ def run(
     # the loop and is read by the reporter.
     stale_service_checks = 0
     stale_service_refusals = 0
+    vacuous_verify_refusals = 0
     last_verdict: VerifyResult | None = None
     stop_reason = ""
     summary = ""
@@ -298,7 +299,12 @@ def run(
             assert deliverable is not None
             command = str(act.get("verify", "") or "")
             refusal = _cannot_fail(command, deliverable)
-            if refusal and result_contract.exact_file_requirement(state.instruction) is None:
+            if (
+                refusal
+                and result_contract.exact_file_requirement(state.instruction) is None
+                and vacuous_verify_refusals < limits.VACUOUS_VERIFY_MAX_REFUSALS
+            ):
+                vacuous_verify_refusals += 1
                 state.record("verify", "refused", refusal)
                 observations.append(f"[step {step}] {refusal}")
                 continue

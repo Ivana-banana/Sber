@@ -802,6 +802,29 @@ def test_a_verify_command_that_only_reads_the_deliverable_is_refused(tmp_path: P
     assert outcome.solved is True, "the run recovers once it offers a real check"
 
 
+def test_a_reader_check_offered_again_after_two_refusals_is_let_through(tmp_path: Path) -> None:
+    # An oracle replay of every local_task_extra fixture: nine correct deliverables whose
+    # model kept offering `cat` were refused until the step cap. The refusal is a nudge;
+    # past the second one it only burns steps a model could spend rewriting a right answer.
+    target = tmp_path / "incident_report.txt"
+    reader = f"cat {target}"
+    llm = StubLlm(
+        replies=[
+            action("write_file", path=str(target), content="attacker_ip=203.0.113.9\n"),
+            *[action("finish", path=str(target), verify=reader, summary="готово") for _ in range(3)],
+        ]
+    )
+    verify = FakeVerify((True, "command", ""))
+    state = make_state(tmp_path)
+
+    outcome = run(state, llm, verify)
+
+    refused = [text for text in outcome.observations if "только читает" in text]
+    assert len(refused) == limits.VACUOUS_VERIFY_MAX_REFUSALS
+    assert [call[1] for call in verify.calls] == [reader]
+    assert outcome.solved is True
+
+
 def test_a_verify_command_whose_failure_is_swallowed_is_refused(tmp_path: Path) -> None:
     """E031's new false win, and the first one written *after* a red verdict.
 
