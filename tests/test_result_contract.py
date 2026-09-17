@@ -130,3 +130,93 @@ def test_more_supported_content_forms_are_exact_file_contracts(content_clause: s
     instruction = f"Create a file at `/tmp/answer.txt` {content_clause} `x`."
 
     assert exact_file_requirement(instruction) == (Path("/tmp/answer.txt"), b"x")
+
+
+# --- a markdown heading in front of the sentence -----------------------------
+
+
+@pytest.mark.parametrize(
+    "heading",
+    ["# Worker readiness beacon", "## Marker", "###### deploy marker"],
+)
+def test_one_leading_markdown_heading_does_not_hide_an_exact_file_contract(heading: str) -> None:
+    # A heading is the title of the instruction, not a step of it, and it is the
+    # dominant shape: 4 of the 6 public instructions and all 18 extra ones open with
+    # one. Without this the prefix guard read the title as "something happens before
+    # the write" and refused the contract, which costs the whole one-call path on a
+    # class whose public tasks are given 120 s.
+    instruction = (
+        f"{heading}\n\nWrite a file to `/opt/runstate/ready.signal` whose entire "
+        "content is exactly `Salut`."
+    )
+
+    assert exact_file_requirement(instruction) == (Path("/opt/runstate/ready.signal"), b"Salut")
+
+
+def test_only_the_heading_is_skipped_not_a_sentence_of_prose() -> None:
+    # The relaxation is one heading line, not "ignore what comes first". Everything
+    # the prefix guard was protecting -- read this, then write that -- still refuses.
+    instruction = (
+        "# Beacon\n\nRead `/app/input.txt` first. Write a file to `/app/out.txt` "
+        "whose entire content is exactly `Salut`."
+    )
+
+    assert exact_file_requirement(instruction) is None
+
+
+def test_a_second_heading_is_not_skipped() -> None:
+    instruction = (
+        "# Beacon\n\n## Step one\n\nWrite a file to `/app/out.txt` whose entire "
+        "content is exactly `Salut`."
+    )
+
+    assert exact_file_requirement(instruction) is None
+
+
+def test_a_hash_that_is_not_a_markdown_heading_is_not_skipped() -> None:
+    # `#` must open a heading (one to six of them, then a space), so a numbered note
+    # or a shell comment is still prose in front of the write.
+    instruction = (
+        "#1 priority for the release\n\nWrite a file to `/app/out.txt` whose entire "
+        "content is exactly `Salut`."
+    )
+
+    assert exact_file_requirement(instruction) is None
+
+
+# --- the shapes where the answer has to be computed, not copied --------------
+
+
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        # A CTF: the bytes are the thing to find, and the instruction cannot name them.
+        "# Gateway challenge\n\nWrite the flag to /app/flag.txt.",
+        "# Session token\n\nSave the recovered token in `/app/answer.txt`.",
+        "# Beacon\n\nCreate /app/report.json with fields `status` and `checked_at`.",
+        # The value is described, not quoted, so there is nothing to compare against.
+        (
+            "# Gateway challenge\n\nCreate a file at `/app/flag.txt` whose entire "
+            "content is exactly the proof string the service exposes."
+        ),
+        # An investigation in front of the write is still an investigation.
+        (
+            "# Egress ledger\n\nRead the ledger under `/srv/case`. Create a file at "
+            "`/app/answer.env` whose entire content is exactly the largest total."
+        ),
+        # A report: the schema is named, the bytes are not.
+        (
+            "# Session store review\n\nWrite `/app/audit_report.json` describing the "
+            "unsafe deserialization in `/app/gateway.py`, with `category`, `location` "
+            "and `evidence`."
+        ),
+    ],
+)
+def test_a_deliverable_whose_content_must_be_computed_has_no_contract(instruction: str) -> None:
+    # These are the shapes the heading relaxation must not reach. `verify.verify`
+    # applies this contract whatever the playbook is, so a contract invented here
+    # would judge a computed flag or report against bytes copied out of the task --
+    # and reject the right answer. The guards that keep it shut are the ones the
+    # heading skip leaves alone: the content clause must be quoted literal bytes,
+    # and nothing but the title may stand in front of the write.
+    assert exact_file_requirement(instruction) is None
