@@ -169,9 +169,21 @@ def test_each_request_extends_the_one_before_it(tmp_path: Path) -> None:
         previous = messages
 
 
+def _history_over_budget(extra: int = 1) -> list[str]:
+    """Observations that certainly spend `OBSERVATION_BUDGET_CHARS` and leave a re-lay.
+
+    Derived from the constants rather than written as a literal, so raising either one
+    keeps these tests testing the spent-budget path instead of silently moving them to
+    the fast path.
+    """
+    each = 2000
+    count = limits.OBSERVATION_BUDGET_CHARS // each + limits.OBSERVATION_RELAY_KEEP + extra
+    return ["x" * each for _ in range(count)]
+
+
 def test_a_spent_budget_re_lays_the_history_once(tmp_path: Path) -> None:
     """And then extends again, rather than trimming one message per step."""
-    observations = ["x" * 2000 for _ in range(5)]
+    observations = _history_over_budget()
 
     base = prompt.history_base(observations, 0)
 
@@ -189,7 +201,7 @@ def test_the_base_never_walks_backwards(tmp_path: Path) -> None:
 
 
 def test_dropping_observations_is_stated_rather_than_silent() -> None:
-    observations = ["x" * 3000 for _ in range(6)]
+    observations = _history_over_budget()
 
     base = prompt.history_base(observations, 0)
     messages = prompt.build_messages("system text", observations, base)
@@ -199,8 +211,8 @@ def test_dropping_observations_is_stated_rather_than_silent() -> None:
 
 def test_the_omission_notice_says_nothing_that_changes() -> None:
     """A count in this line changed on every call and cost a full prefill to say."""
-    few = ["x" * 3000 for _ in range(6)]
-    many = ["x" * 3000 for _ in range(9)]
+    few = _history_over_budget(1)
+    many = _history_over_budget(4)
 
     first = prompt.build_messages("s", few, prompt.history_base(few, 0))[1]
     second = prompt.build_messages("s", many, prompt.history_base(many, 0))[1]
@@ -224,7 +236,7 @@ def test_an_ordinary_request_is_byte_identical_to_the_one_before_focus_existed()
     Spelled out against the literal message list rather than against `build_messages`
     itself, so the assertion still means something if the default ever changes.
     """
-    observations = ["x" * 3000 for _ in range(6)]
+    observations = _history_over_budget()
     base = prompt.history_base(observations, 0)
 
     messages = prompt.build_messages("system text", observations, base)

@@ -101,7 +101,7 @@ is 30 s, so this asks for 60 s of spendable time at step 30; an endpoint that co
 reach the cap that early does not exist on any stand we have measured.
 """
 
-OBSERVATION_BUDGET_CHARS = 8000
+OBSERVATION_BUDGET_CHARS = 24000
 """How much observation history travels back to the model, in characters.
 
 Was a window of the last eight observations, which was cheap to reason about and
@@ -114,19 +114,51 @@ A budget does not slide. While the kept history fits, every request is a strict
 extension of the one before it and the server pays for the new tail alone. When it no
 longer fits, the history is re-laid once -- one full prefill, then extensions again.
 
-Eight thousand characters is about two thousand tokens, which leaves room beside the
-thousand-token system block inside a 4096-token context. A single observation may be
-6000 bytes (`TOOL_OUTPUT_HEAD_BYTES` plus `TOOL_OUTPUT_TAIL_BYTES`), so the budget is
-not a guarantee that two large observations both fit; it is a bound on the ordinary
-case, and `OBSERVATION_RELAY_KEEP` is what holds the exceptional one.
+A single observation may be 6000 bytes (`TOOL_OUTPUT_HEAD_BYTES` plus
+`TOOL_OUTPUT_TAIL_BYTES`), so the budget is not a guarantee that two large
+observations both fit; it is a bound on the ordinary case, and
+`OBSERVATION_RELAY_KEEP` is what holds the exceptional one.
+
+**Raised from 8000 as an arm, and the old number's own reasoning is why.** Eight
+thousand was about two thousand tokens, chosen to leave room beside the thousand-token
+system block *inside a 4096-token context* -- and 4096 is the ollama default our stand
+happened to run, not anything the competition contract states. The evaluation
+endpoint's window is unknown and the model trains at 32768, so the agent's working
+memory was sized by an artefact of our own measuring rig.
+
+What that cost is observable in a trace rather than inferred. On a public code-fix
+episode the repair landed on call 16 and the tests ran on call 18; calls 19-30 then
+re-read six source files the run had already read, in a six-long cycle, and the episode
+died on the step ceiling without ever attempting a finish. At 8000/4 the history left
+after the budget is spent is four observations, so by call 19 the run could no longer
+recall that it had read those files or made the repair. The same amnesia is the
+mechanism behind both `stuck` and the `reasoning` failure class, and a six-long cycle
+also slips between `EXACT_REPEAT_STOP` and `ALTERNATING_STOP`.
+
+E026 is not evidence against this. It raised the *server* window 4096 -> 16384 and
+recorded "the window does not limit us", but it changed the stand only: this constant
+stayed at 8000, so the same truncated history was sent either way and the run could not
+have shown a gain. The suspicion it claimed to settle is still open.
+
+24000 characters is roughly 6000 tokens, which with the system block and
+`LLM_MAX_OUTPUT_TOKENS` wants about 9k of context. **Do not run this arm on a stand
+below 16384**, or it measures the overflow path instead of the hypothesis. On an
+endpoint that cannot take it, `agent.llm` answers the 400 by lowering the ceiling and
+`agent.loop` narrows to `focus_base`, so the failure mode is degraded, not fatal -- but
+it is still not the thing being measured.
 """
 
-OBSERVATION_RELAY_KEEP = 4
+OBSERVATION_RELAY_KEEP = 8
 """How many observations survive a re-lay.
 
-Four and not one because the verifier reserve can need the error from several steps
-back; four and not more because a re-lay that keeps most of the history spends its
-prefill again almost immediately.
+Not one, because the verifier reserve can need the error from several steps back; not
+most of the history, because a re-lay that keeps nearly everything spends its prefill
+again almost immediately.
+
+Raised from 4 with `OBSERVATION_BUDGET_CHARS`, and for the same reason: four surviving
+observations is less than one read-plan-act-verify cycle, so a re-lay erased the run's
+memory of what it had just tried. Eight covers the cycle that the trace above shows the
+run failing to remember.
 """
 
 FOCUS_RELAY_KEEP = 2
@@ -163,7 +195,7 @@ BATCH_OBSERVATION_MAX_CHARS = 4000
 
 Less than the widest single observation (`TOOL_OUTPUT_HEAD_BYTES + TOOL_OUTPUT_TAIL_BYTES`
 = 6000) on purpose: the batch travels as ONE history entry next to the primary action's
-own, so with `OBSERVATION_RELAY_KEEP` = 4 it occupies one relay slot, not four, and the
+own, so whatever `OBSERVATION_RELAY_KEEP` is it occupies one relay slot, not four, and the
 primary observation the model must react to (a failed write, a refused finish, a
 checkpoint hint) is never pushed out by its own extras (critic, 16.09).
 """
@@ -178,9 +210,9 @@ the step cap and not the clock is what ends such a run, so the fix has to buy st
 rather than seconds.
 
 Four, and only for the three read tools: it covers the observed batch size while
-keeping the one-action-per-step contract for everything that changes state, and four
-observations of `OBSERVATION_BUDGET_CHARS / 4` each add no more text than the single
-widest `read_range` a step may add today.
+keeping the one-action-per-step contract for everything that changes state, and the
+batch is capped by `BATCH_OBSERVATION_MAX_CHARS` at less text than the single widest
+`read_range` a step may add today.
 """
 
 MAX_CONSECUTIVE_LLM_FAILURES = 3
