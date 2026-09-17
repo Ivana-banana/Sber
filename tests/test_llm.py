@@ -989,6 +989,46 @@ def test_a_tool_call_stranded_in_content_is_recovered() -> None:
     )
 
 
+def test_content_arriving_as_a_list_of_parts_is_read_as_text() -> None:
+    # Some OpenAI-compatible proxies -- translators over an Anthropic-shaped backend
+    # among them -- answer with content as a list of parts instead of a string. Read as
+    # empty, a perfectly good action spends the whole ladder and leaves the client on
+    # `text` for the rest of the task. Parts carrying no text (a refusal part) are not
+    # text and contribute nothing.
+    payload = json.dumps(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": '{"action":'},
+                            {"type": "refusal", "refusal": "ignored"},
+                            {"type": "text", "text": ' "ls"}'},
+                        ]
+                    }
+                }
+            ]
+        }
+    ).encode()
+    client, endpoint, _ = make_client([(200, payload)])
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert json.loads(result.text) == {"action": "ls"}
+    assert len(endpoint.bodies) == 1, "a readable reply costs one request, not a ladder"
+
+
+def test_a_plain_completion_reads_a_content_list_too() -> None:
+    payload = json.dumps(
+        {"choices": [{"message": {"content": [{"type": "text", "text": "answer"}]}}]}
+    ).encode()
+    client, _, _ = make_client([(200, payload)])
+    result = client.complete([], max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert result.text == "answer"
+
+
 def test_a_native_call_for_an_unknown_function_is_rejected() -> None:
     payload = json.dumps(
         {
