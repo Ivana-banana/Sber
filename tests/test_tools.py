@@ -485,39 +485,46 @@ def test_search_says_which_files_it_could_not_read_instead_of_only_no_match(tmp_
 
     assert result.ok is False
     assert "no match" in result.detail
-    assert "2 binary or compressed" in result.detail
-    assert "prog" in result.detail and "evidence.log.gz" in result.detail
-    assert "strings" in result.detail and "zcat" in result.detail
+    assert "2 binary/compressed" in result.detail
+    assert "strings" in result.detail
+    assert "zgrep" in result.detail, "one of the two was gzipped"
 
 
-def test_search_names_only_the_first_few_skipped_files(tmp_path: Path) -> None:
+def test_the_skipped_note_is_one_short_clause_and_names_no_files(tmp_path: Path) -> None:
+    # An ordinary /app holds a database file, a few images, a compiled translation and a
+    # rotated log, so this note lands on the end of every fruitless search there. A list
+    # of paths would make that a paragraph of context for a tool that found nothing.
     for index in range(7):
         (tmp_path / f"blob{index}.bin").write_bytes(b"\x00\x01needle\x00")
 
     result = search("needle", tmp_path)
 
-    assert "7 binary or compressed" in result.detail
-    assert "blob0.bin" in result.detail
-    assert "blob6.bin" not in result.detail, "a wall of paths is not a hint"
-    assert "4 more" in result.detail
+    plain = f"no match for 'needle' under {tmp_path}"
+    note = result.detail[len(plain) :]
+    assert result.detail.startswith(plain)
+    assert "7 binary/compressed" in note
+    assert "blob0.bin" not in note
+    assert "zgrep" not in note, "nothing here was gzipped"
+    assert len(note) <= 90, note
 
 
-def test_the_skipped_count_ignores_installed_dependencies(tmp_path: Path) -> None:
-    # /app in the image carries a virtualenv. If its compiled extensions counted, every
-    # search that found nothing would end with a paragraph about files the task never
-    # mentioned -- the note would be noise exactly where searches are routine.
-    vendored = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
-    vendored.mkdir(parents=True)
-    (vendored / "_speedups.so").write_bytes(b"\x7fELF\x00\x02vendored\x00")
-    hidden = tmp_path / ".venv" / "bin"
-    hidden.mkdir(parents=True)
-    (hidden / "python").write_bytes(b"\x7fELF\x00\x02interpreter\x00")
-    (tmp_path / "app.py").write_text("print('hello')\n", encoding="utf-8")
+def test_the_skipped_count_covers_every_file_the_search_opened(tmp_path: Path) -> None:
+    # Counted by what the walk actually reached, not by where the file sits: a CTF that
+    # ships its binary in `vendor/` or `env/` is ordinary, and a count that quietly
+    # dropped those directories would put the silent `no match` right back.
+    for name in ("vendor", "env", "lib"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "chal").write_bytes(b"\x7fELF\x00\x02FLAG{here}\x00")
+    pruned = tmp_path / ".venv" / "bin"
+    pruned.mkdir(parents=True)
+    (pruned / "python").write_bytes(b"\x7fELF\x00\x02interpreter\x00")
+    (tmp_path / "readme.txt").write_text("nothing here\n", encoding="utf-8")
 
-    result = search("absent-pattern", tmp_path)
+    result = search(r"FLAG\{", tmp_path)
 
-    assert result.ok is False
-    assert result.detail == f"no match for 'absent-pattern' under {tmp_path}"
+    assert "3 binary/compressed" in result.detail, (
+        "the three the walk opened; `.venv` is pruned before the count and is not one of them"
+    )
 
 
 def test_a_broken_pattern_fails_without_raising(tmp_path: Path) -> None:

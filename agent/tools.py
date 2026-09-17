@@ -31,7 +31,7 @@ import threading
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from agent import limits, result_progress
 from agent.paths import permits
@@ -44,18 +44,11 @@ KILL_GRACE_S = 5.0
 # Short on purpose: this is slack over the budget, not a second timeout.
 READER_GRACE_S = 0.5
 SKIP_DIRECTORIES = frozenset({".git", "__pycache__", ".venv", "node_modules", ".mypy_cache", ".pytest_cache"})
-INSTALLED_DIRECTORIES = SKIP_DIRECTORIES | frozenset({"venv", "env", "site-packages", "dist-packages", "vendor"})
-"""Directories whose skipped files `search` does not report. They are not pruned here --
-this is only about the note: /app in the image carries a virtualenv, and counting its
-compiled extensions would append a paragraph about dependency binaries to every search
-that found nothing, which is the search a model runs most."""
 SYSTEM_DIRECTORIES = frozenset({"/proc", "/sys", "/dev"})
 """Kernel pseudo-filesystems never walked. A `search("flag{", "/")` would otherwise
 descend into `/proc/<pid>/fd`, whose entries block or stream without end. Matched by
 absolute path, so a task's own subdirectory merely named `dev` is not skipped."""
 MATCH_LINE_CHARS = 200
-SKIPPED_NAMES_SHOWN = 3
-"""How many skipped paths the `no match` note names. A hint, not a listing."""
 
 
 @dataclass(frozen=True)
@@ -917,22 +910,23 @@ def _match_window(line: str, at: int) -> str:
     return f"{head}{text[start : start + MATCH_LINE_CHARS]}{tail}"
 
 
-def _skipped_note(count: int, names: Sequence[str]) -> str:
+def _skipped_note(count: int, compressed: bool) -> str:
     """What to add to `no match` when files were skipped, empty when none were.
 
     Empty and not "0 files skipped" on purpose: the ordinary answer of this tool is
     compared against itself across runs, and a search that skipped nothing must read
     exactly as it always has.
+
+    A count and one way out, no paths. An ordinary /app holds a database file, a few
+    images, a compiled translation and a rotated log, so the note is on the end of every
+    fruitless search there; a list of names would make that a paragraph, and the paths
+    are one `ls` away for a model that wants them. The gzip clause only when a `.gz` was
+    actually among them, for the same reason.
     """
     if not count:
         return ""
-    shown = ", ".join(names)
-    rest = f" and {count - len(names)} more" if count > len(names) else ""
-    return (
-        f"; {count} binary or compressed file(s) were not searched ({shown}{rest}) -- "
-        f"their contents are still readable with run_shell: `strings <file> | grep <pattern>`, "
-        f"or `zcat <file> | grep <pattern>` for a .gz"
-    )
+    gz = ", or zgrep" if compressed else ""
+    return f"; {count} binary/compressed file(s) not searched -- try run_shell: strings <file> | grep{gz}"
 
 
 def search(
@@ -946,10 +940,10 @@ def search(
 
     Binary files are skipped rather than decoded: a match inside an ELF section tells
     the model nothing it can act on and costs a screen of mojibake to say it. When the
-    search then finds nothing, the skip is said out loud with the files it applied to,
-    because `no match` over a tree of binaries is a proof of absence the model has no
-    way to doubt -- and on a CTF or a forensic image the evidence is usually in exactly
-    those files, reachable through `strings` or `zcat` in the shell.
+    search then finds nothing, how many files were skipped is said out loud, because
+    `no match` over a tree of binaries is a proof of absence the model has no way to
+    doubt -- and on a CTF or a forensic image the evidence is usually in exactly those
+    files, reachable through `strings` or `zgrep` in the shell.
 
     A file is as valid a `root` as a directory. It used to walk one, and `os.walk` over
     a file yields nothing at all, so a pattern plainly present in the file the task had
@@ -976,16 +970,14 @@ def search(
 
     hits: list[str] = []
     skipped = 0
-    skipped_names: list[str] = []
+    compressed = False
     truncated = False
     for target in targets:
         relative = target.relative_to(base).as_posix()
         try:
             if _looks_binary(target):
-                if not any(part in INSTALLED_DIRECTORIES for part in PurePosixPath(relative).parts[:-1]):
-                    skipped += 1
-                    if len(skipped_names) < SKIPPED_NAMES_SHOWN:
-                        skipped_names.append(relative)
+                skipped += 1
+                compressed = compressed or target.suffix.lower() == ".gz"
                 continue
             with target.open("r", encoding="utf-8", errors="replace") as handle:
                 for number, line in enumerate(handle, start=1):
@@ -1002,7 +994,7 @@ def search(
             break
 
     if not hits:
-        note = _skipped_note(skipped, skipped_names)
+        note = _skipped_note(skipped, compressed)
         return ToolResult(name="search", ok=False, detail=f"no match for {pattern!r} under {root}{note}")
 
     body = "\n".join(hits)
