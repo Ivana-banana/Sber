@@ -1878,7 +1878,7 @@ def _code_fix_shell_is_read_only(command: str) -> bool:
     if executable in {"mypy", "flake8", "pylint"}:
         return not _code_fix_shell_has_output_option(words[1:])
     if _code_fix_is_python_executable(words[0]):
-        if len(words) < 3 or words[1] != "-m" or words[2] not in {"pytest", "compileall"}:
+        if len(words) < 3 or words[1] != "-m" or words[2] not in _CODE_FIX_READ_ONLY_PYTHON_MODULES:
             return False
         return not _code_fix_shell_has_output_option(words[3:])
     if executable == "git":
@@ -2077,6 +2077,21 @@ def _code_fix_shell_has_startup_hook_assignment(command: str) -> bool:
     return False
 
 
+_CODE_FIX_ALLOWED_PYTHON_MODULES = frozenset({"compileall", "json.tool", "pytest", "unittest"})
+"""`python -m <module>` the code-fix policy runs without calling it a script invocation.
+
+`unittest` is the standard-library test runner and executes test code exactly as
+`pytest`, which has always been allowed, does -- the risk is the one already taken. A
+closed task whose suite is written on it, or an image without pytest, left the model
+with no way to run any check while the refusal advised it to "use a read-only test
+command" (audit-0917 tools.md T-4). `json.tool` pretty-prints and executes nothing."""
+
+_CODE_FIX_READ_ONLY_PYTHON_MODULES = _CODE_FIX_ALLOWED_PYTHON_MODULES - {"json.tool"}
+"""Of those, the ones that write nothing of their own, so an evaluator path among their
+operands is being read and not overwritten. `json.tool` is left out because its second
+positional argument is the file it writes into."""
+
+
 def _code_fix_python_module(words: list[str]) -> str | None:
     """Return a Python -m module, including attached ``-mMODULE`` syntax."""
     for index, word in enumerate(words[1:], start=1):
@@ -2140,7 +2155,7 @@ def _code_fix_shell_has_python_script(
         if any(word == "-c" or word.startswith("-c") for word in words[1:]):
             return True
         module = _code_fix_python_module(words)
-        return module is not None and module not in {"pytest", "compileall"}
+        return module is not None and module not in _CODE_FIX_ALLOWED_PYTHON_MODULES
     return any(
         _code_fix_shell_has_python_script(payload, workspace)
         for payload in _code_fix_shell_c_payloads(command)
@@ -2175,7 +2190,7 @@ def _code_fix_shell_has_script_invocation(
             return True
         module = _code_fix_python_module(words)
         if module is not None:
-            return module not in {"pytest", "compileall"}
+            return module not in _CODE_FIX_ALLOWED_PYTHON_MODULES
         return any(not word.startswith("-") for word in words[1:])
     if executable in {
         "lua",
