@@ -1018,6 +1018,50 @@ def test_content_arriving_as_a_list_of_parts_is_read_as_text() -> None:
     assert len(endpoint.bodies) == 1, "a readable reply costs one request, not a ladder"
 
 
+def test_a_reasoning_part_is_never_read_as_the_answer() -> None:
+    # The parts list is also how a proxy ships reasoning, and some of those parts carry
+    # their prose under `text` too. Joined into the content, a draft action inside the
+    # reasoning is what `_salvage_json` finds first -- the model gets to act on a thought
+    # it did not commit to, which is exactly what `_strip_thinking` exists to prevent.
+    # A part is text when it says it is text.
+    payload = json.dumps(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {
+                                "type": "reasoning",
+                                "text": 'I could {"tool": "read_range", "path": "/etc/shadow"} first',
+                            },
+                            {"type": "text", "text": '{"tool": "list_dir", "path": "/app"}'},
+                        ]
+                    }
+                }
+            ]
+        }
+    ).encode()
+    client, _, _ = make_client([(200, payload)])
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert json.loads(result.text) == {"tool": "list_dir", "path": "/app"}
+
+
+def test_an_unlabelled_part_is_not_taken_for_text() -> None:
+    # A part with no `type` says nothing about itself, and the dialects that exist all
+    # label theirs. Reading it as text would let an unlabelled reasoning part through;
+    # refusing it costs a ladder on a shape no server is known to send, which is what
+    # the reply was worth before any of this. The safer side of the two.
+    payload = json.dumps(
+        {"choices": [{"message": {"content": [{"text": '{"tool": "list_dir"}'}]}}]}
+    ).encode()
+    client, _, _ = make_client([(200, payload)])
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=16)
+
+    assert isinstance(result, LlmError)
+
+
 def test_a_plain_completion_reads_a_content_list_too() -> None:
     payload = json.dumps(
         {"choices": [{"message": {"content": [{"type": "text", "text": "answer"}]}}]}
