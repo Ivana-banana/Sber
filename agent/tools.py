@@ -861,6 +861,30 @@ def _files_under(root: Path) -> Iterable[Path]:
                 yield path
 
 
+def _match_window(line: str, at: int) -> str:
+    """One match line, bounded and centred on the match rather than on the line's start.
+
+    The cut used to be `line[:MATCH_LINE_CHARS]` with no marker, so a match past column
+    200 -- minified JS or HTML, one long JSON string, a line-delimited forensic event
+    (300-800 characters is the normal size of one), a base64 blob, a long configuration
+    value -- reached the model as a screen of padding with a "here is the line" in front
+    of it and nothing in the line. Shifting the window onto the match and marking each
+    side that was cut with a "…" costs the same 200 characters and carries the evidence.
+
+    A line that fits is returned exactly as before, marker and all: this is the tool's
+    ordinary output, and it must not move.
+    """
+    text = line.rstrip()
+    if len(text) <= MATCH_LINE_CHARS:
+        return text
+    # Clamped so the window is always full and always inside the line; a little context
+    # before the match is worth more than centring it exactly.
+    start = max(0, min(at - MATCH_LINE_CHARS // 4, len(text) - MATCH_LINE_CHARS))
+    head = "…" if start else ""
+    tail = "…" if start + MATCH_LINE_CHARS < len(text) else ""
+    return f"{head}{text[start : start + MATCH_LINE_CHARS]}{tail}"
+
+
 def _skipped_note(count: int, names: Sequence[str]) -> str:
     """What to add to `no match` when files were skipped, empty when none were.
 
@@ -933,12 +957,13 @@ def search(
                 continue
             with target.open("r", encoding="utf-8", errors="replace") as handle:
                 for number, line in enumerate(handle, start=1):
-                    if not expression.search(line):
+                    match = expression.search(line)
+                    if match is None:
                         continue
                     if len(hits) >= max_matches:
                         truncated = True
                         break
-                    hits.append(f"{relative}:{number}: {line.rstrip()[:MATCH_LINE_CHARS]}")
+                    hits.append(f"{relative}:{number}: {_match_window(line, match.start())}")
         except OSError:
             continue
         if truncated:
