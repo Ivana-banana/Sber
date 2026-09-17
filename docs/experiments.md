@@ -3,6 +3,34 @@
 Ни одно число из этого файла нельзя переносить в README/отчёт без commit SHA,
 команды и контекста модели. Public задачи не являются оценкой закрытого score.
 
+## A20260917-Codex — файловые инструменты и упаковка
+
+База `bf5de796a6fcaeb0eb40df2ee491035a48c5d3c3` (`eval/review-merge`) плюс
+patch аудита (`git log -1 -- docs/reviews/2026-09-17-codex-audit.md`).
+Исправлены отказы `write_json` на surrogate и
+нечисловых JSON-значениях, неоднозначная замена перекрывающегося якоря, попадание
+посторонних файлов и содержимого симлинков в submission. Кандидат r2b не изменён.
+
+Команда `python3 -m pytest -q`: baseline **1184 passed, 12 skipped / 41,31 с**;
+до фикса **23 новых функциональных теста красные**; итог **1208 passed,
+12 skipped / 41,70 с**, включая ограничение времени на длинный неоднозначный якорь.
+Первоначальные 10 сбоев в песочнице вызваны запретом локальных сокетов, вне неё
+baseline проходит. Стражи хардкода/словаря и `git diff --check` зелёные.
+
+`python3 scripts/build_submission.py --out build/codex-audit-20260917.zip` и
+`python3 scripts/check_submission.py build/codex-audit-20260917.zip`: PASS,
+архив **174030 байт**, SHA-256
+`0ea8a8e89dcfdf96e9c6e887c5a6e7435eab6f015dc793d13d383a732415cba7`.
+Состав: 21 файл, совпадает с tracked runtime. Независимое повторное ревью —
+без блокирующих находок. LLM calls/tokens — **0/0**, solved — **не измерялось**;
+public/extra и offline target-image gate не запускались.
+
+Raw: `build/codex-audit-20260917/`; итоговый лог `sber-audit-final-tests.log`,
+SHA-256 `b8b6c61f1a4ae3bc38e1dc84a6dd1e348b18dfba0098e7cd50cd6ae643c6a9f8`;
+`changes.patch`, SHA-256
+`1393201bebdaf1727ab772932b39ce2c341e1b36ced562c20fdef765a948f200`.
+Подробности: [отчёт аудита](reviews/2026-09-17-codex-audit.md).
+
 ## Сводка
 
 Дополнение 07.09.2026 — **A20260907, диагностический аудит, без нового LLM-прогона**.

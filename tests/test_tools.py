@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -510,6 +511,70 @@ def test_write_json_stays_inside_the_workspace(tmp_path: Path) -> None:
     result = write_json(workspace / ".." / "escape.json", {"x": 1}, workspace=workspace)
     assert result.ok is False
     assert "outside the workspace" in result.detail
+
+
+@pytest.mark.parametrize("data", [{"value": "\ud83d"}, '{"value": "\\ud83d"}'])
+def test_write_json_refuses_unencodable_content_without_changing_file(tmp_path: Path, data) -> None:
+    target = tmp_path / "report.json"
+    original = b'{"value": "previous"}'
+    target.write_bytes(original)
+
+    result = write_json(target, data, workspace=tmp_path)
+
+    assert result.ok is False
+    assert "UTF-8" in result.detail
+    assert target.read_bytes() == original
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("stringified", [False, True])
+def test_write_json_refuses_nonfinite_numbers(tmp_path: Path, value: float, stringified: bool) -> None:
+    target = tmp_path / "report.json"
+    original = b'{"value": 1}'
+    target.write_bytes(original)
+    data = {"value": value}
+
+    result = write_json(target, json.dumps(data) if stringified else data, workspace=tmp_path)
+
+    assert result.ok is False
+    assert "JSON" in result.detail
+    assert target.read_bytes() == original
+
+
+@pytest.mark.parametrize("content, anchor", [("aaa", "aa"), ("ababa", "aba"), ("aaaaa", "aa")])
+def test_replace_text_refuses_overlapping_matches(tmp_path: Path, content: str, anchor: str) -> None:
+    target = tmp_path / "source.txt"
+    target.write_text(content, encoding="utf-8")
+
+    result = replace_text(target, anchor, "replacement", workspace=tmp_path)
+
+    assert result.ok is False
+    assert "ambiguous" in result.detail
+    assert target.read_text(encoding="utf-8") == content
+
+
+def test_replace_text_refuses_large_repetitive_anchors_promptly(tmp_path: Path) -> None:
+    target = tmp_path / "source.txt"
+    original = b"a" * limits.REPLACE_MAX_BYTES
+    target.write_bytes(original)
+    script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from agent.tools import replace_text\n"
+        "target = Path(sys.argv[1])\n"
+        "result = replace_text(target, 'a' * 16384, 'replacement', workspace=target.parent)\n"
+        "assert not result.ok and 'ambiguous' in result.detail\n"
+    )
+
+    completed = subprocess.run(
+        [*python_argv(script), str(target)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")
+    assert target.read_bytes() == original
 
 
 def test_write_file_refusing_unencodable_content_does_not_truncate_the_file(tmp_path: Path) -> None:

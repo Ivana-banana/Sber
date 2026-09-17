@@ -477,11 +477,18 @@ def write_json(
             name="write_json", ok=False, detail="write_json needs a data value: the JSON to write"
         )
     try:
-        text = json.dumps(value, ensure_ascii=False, indent=2)
+        text = json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False)
     except (TypeError, ValueError) as exc:
         return ToolResult(name="write_json", ok=False, detail=f"data is not JSON-serialisable: {exc}")
 
-    payload = text.encode("utf-8")
+    try:
+        payload = text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        return ToolResult(
+            name="write_json",
+            ok=False,
+            detail=redact(f"data is not encodable as UTF-8: {exc}", secrets),
+        )
     started = time.monotonic()
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -528,8 +535,8 @@ def replace_text(
     temporary file and installed atomically with the original mode.
 
     Ambiguity is refused rather than resolved. Replacing the first of several matches
-    is a coin flip the model cannot see the result of, and the count of matches is
-    something it can act on by lengthening the anchor.
+    is a coin flip the model cannot see the result of. Finding a second match,
+    including an overlapping one, is enough to ask for a longer anchor.
     """
     try:
         root = workspace.resolve()
@@ -582,8 +589,8 @@ def replace_text(
             duration_s=time.monotonic() - started,
         )
 
-    found = before.count(old)
-    if found == 0:
+    match_index = before.find(old)
+    if match_index == -1:
         return ToolResult(
             name="replace_text",
             ok=False,
@@ -593,12 +600,12 @@ def replace_text(
             ),
             duration_s=time.monotonic() - started,
         )
-    if found > 1:
+    if before.find(old, match_index + 1) != -1:
         return ToolResult(
             name="replace_text",
             ok=False,
             detail=(
-                f"`old` appears {found} times in {target}; the edit would be ambiguous. "
+                f"`old` appears at least 2 times in {target}; the edit would be ambiguous. "
                 f"Extend it with surrounding lines until it is unique."
             ),
             duration_s=time.monotonic() - started,
@@ -651,7 +658,7 @@ def replace_text(
             except OSError:
                 pass
 
-    line = before[: before.index(old)].count("\n") + 1
+    line = before[:match_index].count("\n") + 1
     # replace_text is the tool the docstring steers a code-fix toward, so an indentation
     # error introduced in `new` breaks the module exactly as a bad write_file would --
     # report it the same way rather than answer only "replaced 1 occurrence".
