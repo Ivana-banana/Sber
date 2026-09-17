@@ -2768,3 +2768,56 @@ task image не запускался, solved count не менялся.
   Этот пробел происхождения артефактов не заменять заявлением о новом прогоне.
 - Вывод: старый extra-split не независимый holdout; сначала восстановить
   результаты финального SHA и eligible, затем новый замороженный набор.
+
+### A20260917-gate-parity — оба кандидата зелёные по всем шести режимам, утренний `escape` не воспроизвёлся
+
+- Date/time (MSK): 2026-09-17, 16:50–17:05
+- Commit / dirty state: рабочий checkout `eval/deep-ablation-queue`, dirty
+  (`JOURNAL.md`, `PLAN.md`, `deep-research-report.md` — чужой WIP, не трогались).
+  Оба архива собраны из **чистых экспортов** `git archive <sha>` во временные каталоги,
+  поэтому результат не зависит от грязного дерева.
+- Upstream SHA: кандидат `fc82507` (= `50c6678`), откат `0c96797`
+- Image tag + digest: `secureintelligent/acp:latest`, image id `1324d7bb1404`, Python 3.12.13
+- Model and sampling params: **модели нет** — stub endpoint из `scripts/live_run/`.
+  Это проверка контракта и поведения, а не решаемости.
+- Hypothesis (one changed factor): красный `escape`, записанный утром на архиве
+  `57c78a83`, — свойство этих байтов и должен воспроизводиться на них повторно.
+- Command:
+  ```sh
+  git archive <sha> | tar -x -C <tmp> && python3 scripts/build_submission.py --out <tmp>/s.zip
+  git show 4363be6:scripts/live_run/gate_archive.sh > <tmp>/scripts/live_run/gate_archive.sh
+  sh scripts/live_run/gate_archive.sh <tmp>/s.zip <expected-sha256>
+  ```
+- Environment/budgets: штатные значения `gate_archive.sh`; машина тихая, модельных
+  прогонов параллельно не шло
+- Raw log path + SHA-256: `<scratchpad>/mainexp/build/gate-165812`, `gate-1659*`,
+  `<scratchpad>/rbexp/build/gate-165927`. **Сырые логи лежат в session scratchpad и
+  в Git не сохранены**; их доступность после сессии не гарантируется.
+- Submission zip SHA-256 + size:
+  кандидат `6b9ba85ccab6cadd4b39cfa4a0246303be7584521408aad52a54052c188c1a3d`, 187100 б;
+  откат `57c78a832192526fa59c656cca073d75f5c73e7f3a5acaa14bd99caad786857b`, 171335 б.
+  Оба пересобрались **побайтово** равными ранее опубликованным значениям.
+- Result:
+
+| архив | script | flat | shape | escape | degraded | hang | повторов |
+|---|---|---|---|---|---|---|---:|
+| `6b9ba85c…` (кандидат) | PASS | PASS | PASS | **PASS** | PASS | PASS | 3 |
+| `57c78a83…` (откат) | PASS | PASS | PASS | **PASS** | PASS | PASS | 1 |
+
+  Дополнительно на кандидате: `python3 -m pytest -q` → **1302 passed, 1 skipped**, 124.60 с;
+  `check_submission.py` → 5 PASS; в целевом образе с `--network none` непустая
+  инструкция даёт `exit 0`, пустая и отсутствующая — `exit 2`; `unzip` сохраняет
+  режим 755, `python3 -m zipfile` даёт 644 (известный нерешённый вопрос к организаторам).
+- Per-task failures: нет
+- Conclusion and next experiment: **утренний `escape` FAIL на `57c78a83` не воспроизвёлся
+  на тех же байтах.** Записи в `BLOCKED.md` и карточке от 17.09, трактующие его как
+  свойство архива и как «регрессию политики shell-пробы», этим прогоном не
+  подтверждаются. Возможные объяснения — флапающий режим `escape` либо иная среда
+  утреннего прогона; различить их этот прогон не может. До выяснения **нельзя
+  использовать `escape` как аргумент при выборе архива**. Следующий шаг — владельцу
+  утреннего прогона повторить `escape` на `57c78a83` у себя и сказать, воспроизводится ли.
+  Ортогонально: гейт не измеряет solved, поэтому выбор архива он не закрывает.
+- Limitations: stub endpoint, не модель; solved не измерен ни для одного архива.
+  Откат прогнан один раз, кандидат три — для откала статистики флапа недостаточно.
+  1302 passed расходится с опубликованным сокомандником 1291; причина не установлена.
+  Зелёный гейт не переносится на закрытый набор и не доказывает решаемость.
