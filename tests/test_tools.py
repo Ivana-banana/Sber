@@ -857,6 +857,52 @@ def test_replace_text_refuses_a_symlink_to_outside_workspace(tmp_path: Path) -> 
     assert outside.read_text(encoding="utf-8") == "value = 1\n"
 
 
+def test_replace_text_matches_an_anchor_across_crlf_lines_and_keeps_the_endings(tmp_path: Path) -> None:
+    # read_range opens files with universal newlines, so on a CRLF file the model is
+    # shown "\n" and copies "\n" -- while replace_text compares the raw bytes, where the
+    # line ends are "\r\n". The anchor could never match, and the refusal talked about
+    # indentation, so the model rewrote indentation for as long as its budget lasted.
+    target = tmp_path / "handler.py"
+    target.write_bytes(b"import os\r\ndef f():\r\n    return 1\r\ntrailer = 2\r\n")
+
+    result = replace_text(target, "def f():\n    return 1", "def f():\n    return 2", workspace=tmp_path)
+
+    assert result.ok is True, result.detail
+    assert target.read_bytes() == b"import os\r\ndef f():\r\n    return 2\r\ntrailer = 2\r\n", (
+        "the replacement keeps the file's own line endings and touches nothing else"
+    )
+    assert "CRLF" in result.output, "say what was matched, so the model is not guessing"
+    assert "line 2" in result.output
+
+
+def test_replace_text_still_refuses_an_ambiguous_anchor_on_a_crlf_file(tmp_path: Path) -> None:
+    target = tmp_path / "twice.py"
+    target.write_bytes(b"def f():\r\n    return 1\r\ndef f():\r\n    return 1\r\n")
+
+    result = replace_text(target, "def f():\n    return 1", "def f():\n    return 2", workspace=tmp_path)
+
+    assert result.ok is False
+    assert "CRLF" in result.detail and "2" in result.detail
+    assert target.read_bytes() == b"def f():\r\n    return 1\r\ndef f():\r\n    return 1\r\n"
+
+
+def test_replace_text_says_nothing_about_line_endings_when_they_are_not_the_problem(tmp_path: Path) -> None:
+    lf = tmp_path / "lf.py"
+    lf.write_text("value = 1\n", encoding="utf-8")
+    crlf = tmp_path / "crlf.py"
+    crlf.write_bytes(b"value = 1\r\n")
+
+    plain = replace_text(lf, "no such line", "x", workspace=tmp_path)
+    absent = replace_text(crlf, "no such line", "x", workspace=tmp_path)
+
+    expected = (
+        f"`old` does not appear in {lf}. Read the file and copy the text to replace "
+        f"exactly, including indentation."
+    )
+    assert plain.detail == expected, "the ordinary refusal is the one every run has seen"
+    assert "CRLF" not in absent.detail, "an anchor that is absent either way is not a newline problem"
+
+
 def test_replace_text_refuses_an_anchor_that_is_not_there(tmp_path: Path) -> None:
     target = tmp_path / "auth.py"
     target.write_text(MODULE, encoding="utf-8")

@@ -543,6 +543,11 @@ def replace_text(
     Ambiguity is refused rather than resolved. Replacing the first of several matches
     is a coin flip the model cannot see the result of, and the count of matches is
     something it can act on by lengthening the anchor.
+
+    On a CRLF file an anchor written with "\n" is matched against the line ends the file
+    actually has, and the replacement is written back with them, because that anchor is
+    what `read_range` handed the model in the first place. The translated form must be
+    unique too; when it is not, the refusal says the endings are the reason.
     """
     try:
         root = workspace.resolve()
@@ -596,13 +601,39 @@ def replace_text(
         )
 
     found = before.count(old)
+    # `read_range` opens a file with universal newlines, so on a CRLF file the model is
+    # shown "\n" and copies "\n" back into the anchor, while this comparison is over the
+    # raw bytes, where the line ends are "\r\n". Such an anchor could never match, and
+    # the refusal below speaks only of indentation -- so the model rewrites indentation
+    # for as long as its budget lasts. Translating the anchor is safe only when it is
+    # unambiguous, which is the same bar the whole tool holds: the CRLF form must occur
+    # exactly once, and neither side may already carry a "\r" of its own.
+    crlf_anchor = False
+    if found == 0 and "\r\n" in before and "\r" not in old and "\r" not in new:
+        as_written = old.replace("\n", "\r\n")
+        if before.count(as_written) == 1:
+            old, new = as_written, new.replace("\n", "\r\n")
+            found, crlf_anchor = 1, True
+
     if found == 0:
+        # Only when the CRLF form is really there: an anchor that is absent either way
+        # is not a line-ending problem, and a wrong hint costs a step to disprove.
+        crlf_found = before.count(old.replace("\n", "\r\n")) if "\r\n" in before and "\r" not in old else 0
+        if crlf_found > 1:
+            hint = (
+                f" This file's lines end with CRLF, and with \\r\\n between them `old` appears "
+                f"{crlf_found} times; extend it with surrounding lines until it is unique."
+            )
+        elif crlf_found:
+            hint = " This file's lines end with CRLF: put \\r\\n between the lines of `old`."
+        else:
+            hint = ""
         return ToolResult(
             name="replace_text",
             ok=False,
             detail=(
                 f"`old` does not appear in {target}. Read the file and copy the text "
-                f"to replace exactly, including indentation."
+                f"to replace exactly, including indentation.{hint}"
             ),
             duration_s=time.monotonic() - started,
         )
@@ -669,10 +700,11 @@ def replace_text(
     # error introduced in `new` breaks the module exactly as a bad write_file would --
     # report it the same way rather than answer only "replaced 1 occurrence".
     note = _python_compile_note(replacement, target)
+    matched = " (matched with CRLF line endings, which the file keeps)" if crlf_anchor else ""
     return ToolResult(
         name="replace_text",
         ok=True,
-        output=f"replaced 1 occurrence at line {line} of {target}{note}",
+        output=f"replaced 1 occurrence at line {line} of {target}{matched}{note}",
         duration_s=time.monotonic() - started,
     )
 
