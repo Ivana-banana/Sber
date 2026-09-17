@@ -540,7 +540,9 @@ def replace_text(
     On a CRLF file an anchor written with "\n" is matched against the line ends the file
     actually has, and the replacement is written back with them, because that anchor is
     what `read_range` handed the model in the first place. The translated form must be
-    unique too; when it is not, the refusal says the endings are the reason.
+    unique too; when it is not, the refusal says the endings are the reason. A file whose
+    lines end with a bare CR is named in the refusal and nothing more: it is rare enough
+    that guessing at it is not worth a write.
     """
     try:
         root = workspace.resolve()
@@ -612,6 +614,11 @@ def replace_text(
         # Only when the CRLF form is really there: an anchor that is absent either way
         # is not a line-ending problem, and a wrong hint costs a step to disprove.
         crlf_found = before.count(old.replace("\n", "\r\n")) if "\r\n" in before and "\r" not in old else 0
+        # A classic-Mac file ends its lines with a lone "\r", which `read_range` also
+        # shows as "\n". Named, not translated: it is a rarer file than a CRLF one, and
+        # this branch has already refused to touch it.
+        bare_cr = "\r" in before and "\r\n" not in before and "\r" not in old and "\n" in old
+        cr_found = before.count(old.replace("\n", "\r")) if bare_cr else 0
         if old.startswith("…") or old.endswith("…"):
             # `search` marks a line it cut with "…", and the hit is the text the model
             # has in front of it when it writes the anchor.
@@ -626,6 +633,8 @@ def replace_text(
             )
         elif crlf_found:
             hint = " This file's lines end with CRLF: put \\r\\n between the lines of `old`."
+        elif cr_found:
+            hint = " This file's lines end with a bare CR: put \\r between the lines of `old`."
         else:
             hint = ""
         return ToolResult(
