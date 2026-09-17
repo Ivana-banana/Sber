@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -26,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from agent import limits, playbooks, result_progress, tools
+from agent import limits, loop, playbooks, prompt, result_progress, tools
 from agent.state import AgentState
 from tests.stub_llm import StubLlm
 from tests.test_loop import FakeVerify, action, make_state, run
@@ -442,3 +443,187 @@ def test_the_hint_names_the_service_read_from_a_synthetic_process_table(
         f"{time.strftime('%H:%M:%S', time.localtime(changed.stat().st_mtime))}; ports :8000; "
         f"loads main.py from {tmp_path.resolve()}, where auth.py changed"
     ]
+
+
+# --- the restart the gate dictates must be a command the gate accepts --------
+#
+# The hint hands the model a ready `nohup … &` line, and the code-fix shell policy
+# refused exactly that line: a lone `&` defeats the part splitter and `nohup` is an
+# opaque runner. On the public set the model retyped it four times per episode for
+# nothing (`build/eval-KT7-public/logs/fix-sqli-login.r2.log`, `.r3.log`). The command
+# under test is never retyped here: it is cut out of the hint the code just produced.
+
+
+RELAUNCH_IN_HINT = re.compile(r"Готовая команда: `(?P<command>[^`]+)`")
+
+
+def offered_relaunch(hint: str) -> str:
+    match = RELAUNCH_IN_HINT.search(hint)
+    assert match is not None, hint
+    return match["command"]
+
+
+def synthetic_stale_service(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    argv: tuple[str, ...] = ("uvicorn", "main:app"),
+) -> tuple[AgentState, str]:
+    """A workspace whose edit is newer than the one process serving it, and its hint."""
+    changed = write_app(tmp_path)
+    proc = write_proc(
+        tmp_path.parent / f"{tmp_path.name}-proc",
+        [FakeProcess(4243, argv, cwd=tmp_path, inodes=(4242,))],
+        listening={4242: 8000},
+    )
+    monkeypatch.setattr(tools, "PROC_ROOT", proc)
+    state = codefix_state(tmp_path)
+    state.artifacts.append(changed)
+    kind, _, hint = loop._stale_service(state)
+    assert kind == "stale-service", kind
+    return state, hint
+
+
+@LINUX_ONLY
+def test_the_restart_command_the_hint_dictates_is_not_refused_by_the_shell_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, hint = synthetic_stale_service(tmp_path, monkeypatch)
+    command = offered_relaunch(hint)
+
+    assert loop._code_fix_shell_refusal(command, state) == "", command
+
+
+@LINUX_ONLY
+@pytest.mark.parametrize(
+    "template",
+    [
+        "cd {cwd} && nohup {argv} >/tmp/service-restart.log 2>&1 &",
+        "nohup {argv} >/tmp/service-restart.log 2>&1 &",
+        "nohup {argv} > /tmp/service-restart.log 2>&1 &",
+        "kill {pid} 2>/dev/null; sleep 1; cd {cwd} && nohup {argv} >/tmp/service-restart.log 2>&1 &",
+        "kill {pid}; cd {cwd} && nohup {argv} >/tmp/restart.log 2>&1 &",
+        "sleep 2; nohup {argv} >/tmp/service-restart.log 2>&1 &",
+    ],
+)
+def test_the_natural_spellings_of_that_same_restart_are_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, template: str
+) -> None:
+    # The model does not copy the hint byte for byte: it drops the `kill` prefix once
+    # the service is already down, adds a settle `sleep`, or spells the redirect with a
+    # space. The argv, the pid and the destination are what the policy checks.
+    state, _ = synthetic_stale_service(tmp_path, monkeypatch)
+    command = template.format(cwd=tmp_path, argv="uvicorn main:app", pid=4243)
+
+    assert loop._code_fix_shell_refusal(command, state) == "", command
+
+
+@LINUX_ONLY
+@pytest.mark.parametrize(
+    "template",
+    [
+        # another program entirely, wearing the accepted shape
+        "cd {cwd} && nohup python3 -m http.server 8000 >/tmp/service-restart.log 2>&1 &",
+        "cd {cwd} && nohup uvicorn other:app >/tmp/service-restart.log 2>&1 &",
+        # the destination is the evaluator, not /tmp
+        "cd {cwd} && nohup {argv} >tests/service-restart.log 2>&1 &",
+        "cd {cwd} && nohup {argv} >/tmp/../{cwd}/tests/x.log 2>&1 &",
+        # somebody else's process
+        "kill 999 2>/dev/null; sleep 1; cd {cwd} && nohup {argv} >/tmp/service-restart.log 2>&1 &",
+        "pkill -f uvicorn; nohup {argv} >/tmp/service-restart.log 2>&1 &",
+        # a second command riding along
+        "cd {cwd} && nohup {argv} >/tmp/service-restart.log 2>&1 & rm -rf tests",
+        "cd {cwd} && nohup {argv} >/tmp/service-restart.log 2>&1 &; rm -rf tests",
+        "cd {cwd} && nohup {argv} >/tmp/service-restart.log 2>&1 & cat tests/test_a.py > /tmp/x",
+        # leaving the workspace
+        "cd /etc && nohup {argv} >/tmp/service-restart.log 2>&1 &",
+    ],
+)
+def test_the_restart_shape_does_not_launder_anything_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, template: str
+) -> None:
+    state, _ = synthetic_stale_service(tmp_path, monkeypatch)
+    command = template.format(cwd=tmp_path, argv="uvicorn main:app")
+
+    assert loop._code_fix_shell_refusal(command, state) != "", command
+
+
+@LINUX_ONLY
+def test_no_relaunch_is_accepted_before_a_stale_service_was_ever_found(
+    tmp_path: Path
+) -> None:
+    # The privilege comes from the scan, not from the spelling: with no hint behind it
+    # the same line is an unexplained background launch and stays refused.
+    write_app(tmp_path)
+    state = codefix_state(tmp_path)
+
+    command = f"cd {tmp_path} && nohup uvicorn main:app >/tmp/service-restart.log 2>&1 &"
+    assert loop._code_fix_shell_refusal(command, state) != ""
+
+
+@LINUX_ONLY
+def test_killing_the_service_first_and_relaunching_it_second_both_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two-step path a model actually takes: stop it, then start it again.
+
+    `kill <pid>` alone was already accepted while every background start was refused, so
+    the model could take the service down and never bring it up (audit-0917 loop.md, L1).
+    The relaunch is judged against the argv the scan read, which outlives the process.
+    """
+    state, hint = synthetic_stale_service(tmp_path, monkeypatch)
+    assert loop._code_fix_shell_refusal("kill 4243", state) == ""
+
+    # The service is gone now: its /proc entry with it.
+    gone = write_proc(tmp_path.parent / f"{tmp_path.name}-gone", [])
+    monkeypatch.setattr(tools, "PROC_ROOT", gone)
+
+    command = offered_relaunch(hint).split("&& ", 1)[-1]
+    assert command.startswith("nohup "), command
+    assert loop._code_fix_shell_refusal(command, state) == "", command
+
+
+@LINUX_ONLY
+def test_the_dictated_restart_really_runs_and_reopens_the_finish_gate(
+    tmp_path: Path, machine: Machine
+) -> None:
+    """End to end, with real processes: stop the service, run the offered line, finish.
+
+    The three things a policy change cannot prove on its own -- that the tool layer runs
+    the accepted command instead of hanging on it, that the job outlives the step, and
+    that the gate which refused the finish now lets it through -- are only visible here.
+    """
+    changed = write_app(tmp_path)
+    service_pid, port = machine.detached(tmp_path)
+    wait_until_an_edit_is_newer(service_pid)
+    changed.write_text("def login():\n    return 'new'\n", encoding="utf-8")
+    state = codefix_state(tmp_path)
+    state.artifacts.append(changed)
+
+    kind, _, hint = loop._stale_service(state)
+    assert kind == "stale-service", kind
+    relaunch = offered_relaunch(hint)
+
+    stopped = loop._execute(
+        prompt.RUN_SHELL, {"command": f"kill {service_pid}"}, state, playbook=playbooks.CODE_FIX
+    )
+    assert stopped.ok, stopped.detail
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        try:
+            os.kill(service_pid, 0)
+        except OSError:
+            break
+        time.sleep(0.02)
+
+    started = time.monotonic()
+    restarted = loop._execute(
+        prompt.RUN_SHELL, {"command": relaunch}, state, playbook=playbooks.CODE_FIX
+    )
+    assert restarted.ok, restarted.detail
+    assert time.monotonic() - started < 10.0, "the step must not wait on the service"
+    assert wait_for_port(port), "the relaunched service never came up"
+    for found in tools.serving_processes([changed]).processes:
+        machine.pids.append(found.pid)
+
+    assert loop._stale_service(state) == ("", "", ""), "the finish gate is still shut"

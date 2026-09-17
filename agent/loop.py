@@ -31,6 +31,7 @@ from typing import Any
 import json
 import dataclasses
 import os
+import posixpath
 import re
 import shlex
 import stat
@@ -2842,13 +2843,97 @@ def _curl_probe(command: str) -> bool:
     return bool(words) and words[0] == "curl" and not _curl_can_write(words[1:])
 
 
+_SERVICE_RELAUNCH = re.compile(
+    r"""^\s*
+    (?: kill \s+ (?: -(?: 9 | 15 | KILL | TERM | SIGKILL | SIGTERM ) \s+ )?
+        (?P<pid>\d+) \s* (?: 2 \s* > \s* /dev/null \s* )? (?: ; | && ) \s* )?
+    (?: sleep \s+ (?P<settle>\d+ (?: \.\d+ )? ) \s* (?: ; | && ) \s* )?
+    (?: cd \s+ (?P<dir>[^\s;&|<>$`(){}\\'"]+) \s* && \s* )?
+    nohup \s+ (?P<argv>[^;&|<>`\n]+?) \s*
+    1? > \s* (?P<log>[^\s;&|<>$`(){}\\'"]+) \s*
+    2 \s* > \s* & \s* 1 \s* & \s* $""",
+    re.VERBOSE,
+)
+"""The restart line the stale-service hint dictates, and the spellings around it.
+
+Anchored at both ends, and every shell operator except the ones written here is outside
+the character classes: a second command appended after the `&`, a substitution inside
+the argv or a redirect that is not `>/tmp/... 2>&1` simply fails to match.
+"""
+
+
+def _service_relaunch(command: str, state: AgentState) -> bool:
+    """The background restart of a service this run's own finish gate named.
+
+    The gate refuses a `finish` while a process older than the edit is serving the
+    changed code, and hands the model the command to fix that: `kill <pid> 2>/dev/null;
+    sleep 1; cd <dir> && nohup <argv> >/tmp/service-restart.log 2>&1 &`. The policy then
+    refused that very command -- a lone `&` makes the part splitter give up and `nohup`
+    is an opaque runner -- so on the public set the model retyped it four times per
+    episode for nothing (two of the public fix episodes, 16.09), and, since
+    a bare `kill` was accepted all along, could leave the service down for good.
+
+    What passes is not "a background start". It is this shape, with an argv equal to the
+    argv the /proc scan read off the stale service, the pid of that same service, a
+    directory inside the workspace (or the service's own), and a redirect into `/tmp`.
+    Another argv, another pid, a redirect at the evaluator or anything appended after
+    the `&` fails the match and is refused as before. The argv outlives the process on
+    purpose: the model kills the service with a separate command first.
+    """
+    if not state.service_restarts:
+        return False
+    match = _SERVICE_RELAUNCH.match(command)
+    if not match:
+        return False
+    log = PurePosixPath(posixpath.normpath(match["log"]))
+    if not log.is_relative_to("/tmp") or log == PurePosixPath("/tmp"):
+        return False
+    if _is_evaluator_path(Path(log), state) or _is_repository_control_path(Path(log), state):
+        return False  # a workspace that itself lives under /tmp, as it does under pytest
+    try:
+        argv = shlex.split(match["argv"])
+    except ValueError:
+        return False
+    if not argv or PurePosixPath(argv[0]).name in _OPAQUE_COMMAND_RUNNERS | _SHELL_WRAPPERS:
+        return False
+    if any(
+        _is_evaluator_path(Path(token), state) or _is_repository_control_path(Path(token), state)
+        for token in argv
+    ):
+        return False
+    for pid, offered, cwd in state.service_restarts:
+        if argv != list(offered):
+            continue
+        if match["pid"] is not None and int(match["pid"]) != pid:
+            continue
+        if match["dir"] is not None and not _relaunch_directory(match["dir"], cwd, state):
+            continue
+        return True
+    return False
+
+
+def _relaunch_directory(spelled: str, cwd: str, state: AgentState) -> bool:
+    """Whether `cd <spelled>` lands inside the workspace, or in the service's own cwd."""
+    if spelled in {"-", "~"} or spelled.startswith(("~", "$")):
+        return False
+    try:
+        root = state.workspace.resolve()
+        target = Path(spelled)
+        resolved = (target if target.is_absolute() else root / target).resolve()
+        if not resolved.is_dir():
+            return False
+        return resolved.is_relative_to(root) or (bool(cwd) and resolved == Path(cwd).resolve())
+    except (OSError, ValueError):
+        return False
+
+
 def _code_fix_shell_refusal(command: str, state: AgentState) -> str:
     """Reject an explicit shell mutation aimed at the evaluator, not source edits."""
     parts = _code_fix_shell_parts(command, state)
     if parts is not None and parts != [command]:
         refusals = [_code_fix_shell_refusal(part, state) for part in parts]
         return next((refusal for refusal in refusals if refusal), "")
-    if _curl_probe(command) or _python_probe(command, state):
+    if _curl_probe(command) or _python_probe(command, state) or _service_relaunch(command, state):
         return ""
     try:
         workspace_text = str(state.workspace.resolve()).lower()
@@ -2989,6 +3074,10 @@ def _execute(
             cwd=state.workspace,
             timeout_s=state.budget.tool_timeout_s(),
             secrets=secrets,
+            # The one command whose point is to leave a process running. Through the
+            # pipes it would hold the step until the timeout and then be reaped with the
+            # session, which is the opposite of a restart.
+            detached=playbook.name == "code-fix" and _service_relaunch(command, state),
         )
         if guarded is not None:
             changed = _restore_protected(guarded, state)
@@ -3362,6 +3451,22 @@ def _workspace_relative(path: Path, workspace: Path) -> str:
     return name.replace("\r", " ").replace("\n", " ")
 
 
+def _remember_relaunch(state: AgentState, process: tools.ServingProcess) -> None:
+    """Record the argv the hint is about to dictate, so the policy can recognise it.
+
+    Only the process the hint names: that is the only command line that reaches the
+    model, and a background start the model was never told about stays refused.
+    """
+    try:
+        argv = tuple(shlex.split(process.command))
+    except ValueError:
+        return
+    offer = (process.pid, argv, str(process.cwd) if process.cwd else "")
+    if argv and offer not in state.service_restarts:
+        state.service_restarts.append(offer)
+        del state.service_restarts[: -limits.SERVICE_SCAN_MAX_CHECKS]
+
+
 def _stale_service(
     state: AgentState, changes: result_progress.SourceChanges | None = None
 ) -> tuple[str, str, str] | None:
@@ -3433,6 +3538,7 @@ def _stale_service(
         cwd_note = f" (`{process.cwd}`)" if process.cwd else ""
         relaunch = ""
         if process.command:
+            _remember_relaunch(state, process)
             where = f"cd {process.cwd} && " if process.cwd else ""
             relaunch = (
                 f" Готовая команда: `{where}nohup {process.command} "

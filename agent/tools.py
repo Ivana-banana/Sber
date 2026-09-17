@@ -163,8 +163,19 @@ def run_argv(
     secrets: Iterable[str] = (),
     name: str = "run",
     env: Mapping[str, str] | None = None,
+    detached: bool = False,
 ) -> ToolResult:
     """Run a command with no shell between us and it, bounded in time and size.
+
+    `detached` is for the one command that is supposed to leave something running: the
+    service relaunch the finish gate itself dictates. `cd /app && nohup <argv> >log
+    2>&1 &` backgrounds the whole AND-list, so the subshell that waits on the service
+    keeps our stdout pipe for as long as the service lives -- the reader threads block,
+    the call runs into its timeout and the session reap takes the new service down with
+    it (measured: 120 s and a dead service). With `detached` the child writes into a
+    temporary file instead of a pipe, so nothing of ours is held, the call returns when
+    the leader exits, and what the leader printed is still read back. Every other
+    command keeps the pipes and the reap.
 
     `env` replaces the child's whole environment rather than extending it, which is
     what makes it usable as a scrubber: `run_shell` and the macro controller both hand
@@ -181,16 +192,24 @@ def run_argv(
     if env is not None:
         spawn["env"] = dict(env)
 
+    handle = tempfile.TemporaryFile() if detached else None
+    if handle is not None:
+        spawn["stdout"] = handle
+        spawn["stderr"] = subprocess.STDOUT
+    else:
+        spawn["stdout"] = subprocess.PIPE
+        spawn["stderr"] = subprocess.PIPE
+
     # argv is a list, so the model's text is one argument and never a command line.
     try:
         process = subprocess.Popen(
             list(argv),
             cwd=str(cwd),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
             **spawn,  # type: ignore[arg-type]
         )
     except (OSError, ValueError) as exc:
+        if handle is not None:
+            handle.close()
         return ToolResult(
             name=name,
             ok=False,
@@ -208,12 +227,14 @@ def run_argv(
             pgid = None
 
     out_sink, err_sink = _BoundedSink(), _BoundedSink()
-    readers = [
-        threading.Thread(target=out_sink.drain, args=(process.stdout,), daemon=True),
-        threading.Thread(target=err_sink.drain, args=(process.stderr,), daemon=True),
-    ]
-    for reader in readers:
-        reader.start()
+    readers: list[threading.Thread] = []
+    if handle is None:
+        readers = [
+            threading.Thread(target=out_sink.drain, args=(process.stdout,), daemon=True),
+            threading.Thread(target=err_sink.drain, args=(process.stderr,), daemon=True),
+        ]
+        for reader in readers:
+            reader.start()
 
     timed_out = False
     try:
@@ -248,6 +269,16 @@ def run_argv(
                 stream.close()
             except (OSError, ValueError):
                 pass
+    if handle is not None:
+        # Whatever the leader wrote before it exited. A job it left behind may still be
+        # appending; this is a snapshot of the file, not a wait for that job to finish.
+        try:
+            handle.seek(0)
+            out_sink.drain(handle)
+        except (OSError, ValueError):
+            pass
+        finally:
+            handle.close()
 
     stdout, out_cut = out_sink.text()
     stderr, err_cut = err_sink.text()
@@ -290,8 +321,13 @@ def run_shell(
     cwd: Path,
     timeout_s: float,
     secrets: Iterable[str] = (),
+    detached: bool = False,
 ) -> ToolResult:
-    """Run a shell command line, so pipelines and redirection stay available."""
+    """Run a shell command line, so pipelines and redirection stay available.
+
+    `detached` is passed through to `run_argv` for a command the caller has already
+    recognised as one that is meant to leave a process running.
+    """
     return run_argv(
         [limits.SHELL_EXECUTABLE, "-c", command],
         cwd=cwd,
@@ -299,6 +335,7 @@ def run_shell(
         secrets=secrets,
         name="shell",
         env=endpoint_scrubbed_env(),
+        detached=detached,
     )
 
 
