@@ -2895,7 +2895,7 @@ _SERVICE_RELAUNCH = re.compile(
     r"""^\s*
     (?: kill \s+ (?: -(?: 9 | 15 | KILL | TERM | SIGKILL | SIGTERM ) \s+ )?
         (?P<pid>\d+) \s* (?: 2 \s* > \s* /dev/null \s* )? (?: ; | && ) \s* )?
-    (?: sleep \s+ (?P<settle>\d+ (?: \.\d+ )? ) \s* (?: ; | && ) \s* )?
+    (?: sleep \s+ (?P<settle>\d{1,2} (?: \.\d+ )? ) \s* (?: ; | && ) \s* )?
     (?: cd \s+ (?P<dir>[^\s;&|<>$`(){}\\'"]+) \s* && \s* )?
     nohup \s+ (?P<argv>[^;&|<>`\n]+?) \s*
     1? > \s* (?P<log>[^\s;&|<>$`(){}\\'"]+) \s*
@@ -2906,7 +2906,9 @@ _SERVICE_RELAUNCH = re.compile(
 
 Anchored at both ends, and every shell operator except the ones written here is outside
 the character classes: a second command appended after the `&`, a substitution inside
-the argv or a redirect that is not `>/tmp/... 2>&1` simply fails to match.
+the argv or a redirect that is not `>/tmp/... 2>&1` simply fails to match. The settle
+`sleep` is two digits at most: letting the service come up is a second or two, and a
+`sleep 100000` in front of the restart is a step spent holding the tool timeout open.
 """
 
 
