@@ -43,6 +43,17 @@ Codex, 07.09.2026, углубление organizer-first: проверить ко
 
 ## Завершено
 
+**Codex, 17.09.2026 — аудит КТ №7 и восьмичасовой план.**
+Отчёт: `docs/research/2026-09-17-readiness-and-generalization.md`;
+план: `docs/superpowers/plans/2026-09-17-final-eight-hours.md`.
+Срез после fetch: `origin/main=fc82507`, дерево равно `r2b=50c6678`;
+сборка 187100 байт, SHA `6b9ba85c…1a3d`, check_submission 5 PASS.
+Записаны предыдущие проверки `0c96797`, включая красный shell escape;
+сырые утренние логи были в /tmp, их сохранность не гарантируется.
+Новый модельный прогон не проводился; запуск восьмичасового плана не начат.
+Runtime и чужие правки сохранены. Карточка A20260917-readiness в experiments.
+Коммит искать по пути отчёта; публикацию проверять по Git, не по этой записи.
+
 **Codex, 12.09.2026 — план по текущим провалам.**
 `docs/superpowers/plans/2026-09-12-current-failures.md` обновляет очередь по
 `fix/public-solves` (`15720ca`), `fix/sqli-login-solve` (`31a8653`) и

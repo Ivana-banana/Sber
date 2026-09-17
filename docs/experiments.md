@@ -2738,3 +2738,33 @@ task image не запускался, solved count не менялся.
   E-BASE-r1: 2/6 eligible, 205 914 токенов, 1 605 с, архив `133b81d0…`.
 - Ограничение скрипта: unit-теста у него нет, он ведёт docker напрямую; его
   доказательство — приведённый выше прогон.
+
+### A20260917-readiness — аудит кандидатов и план последних восьми часов
+
+- Дата: 17.09.2026. Код не менялся. Отчёт:
+  `docs/research/2026-09-17-readiness-and-generalization.md`; план:
+  `docs/superpowers/plans/2026-09-17-final-eight-hours.md`.
+- Проверенные SHA: утром `0c96797`, днём `fc82507` (`origin/main`), дерево
+  последнего полностью равно `50c6678` (`r2b`). Документный источник состояния:
+  `9d8a6e1:JOURNAL.md`. Merge уже сделан; live-приёмка финального r2b в
+  опубликованном журнале ещё не завершена.
+- Свежая дневная проверка: `git archive origin/main` в отдельный временный
+  каталог, `python3 scripts/build_submission.py --out <absolute-zip>`, затем
+  `python3 scripts/check_submission.py <absolute-zip>` и
+  `python3 scripts/check_no_task_hardcode.py`: 187100 байт, 5 PASS, страж чист.
+  SHA-256: `6b9ba85ccab6cadd4b39cfa4a0246303be7584521408aad52a54052c188c1a3d`.
+- Утренняя проверка `0c96797`: 1145 passed, 1 skipped за 43.63 с;
+  архив 171335 байт, SHA `57c78a832192526fa59c656cca073d75f5c73e7f3a5acaa14bd99caad786857b`.
+  Команда: `sh scripts/live_run/gate_archive.sh <absolute-zip> <sha256>` из
+  `4e38b85`, pinned acp, `--network none`, Python 3.12.13.
+  script/flat/shape/degraded/hang PASS; escape FAIL (policy: shell записал файл
+  вне workspace, внутри контейнера). Время агента по режимам и checksum логов
+  записаны в отчёте. Матрица exit 1; это не шесть решённых задач.
+- Solved/input/output/total LLM tokens: новых модельных измерений нет.
+  Usage заглушки синтетический, не сравнивается с benchmark. Полные свежие
+  тесты/модельная проверка r2b не выполнялись; 1291 passed — из отчёта команды.
+- Сырые утренние логи: `/tmp/sber-release-gates-R8ZjBJ/build/gate-125531/`;
+  доступность после смены окружения не гарантируется, в Git не сохранены.
+  Этот пробел происхождения артефактов не заменять заявлением о новом прогоне.
+- Вывод: старый extra-split не независимый holdout; сначала восстановить
+  результаты финального SHA и eligible, затем новый замороженный набор.
