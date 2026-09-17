@@ -1184,6 +1184,16 @@ def _shares_code_fix_protected_inode(path: Path, state: AgentState) -> bool:
     )
 
 
+def _code_fix_shell_path_from(cwd: Path | None, value: str) -> Path:
+    """`value` as the shell would read it: from `cwd` when a `cd` moved the line there.
+
+    `None` -- no `cd`, or one into the workspace root -- leaves the path as written, and
+    the guards resolve it against the workspace as they always have.
+    """
+    path = Path(value)
+    return path if cwd is None or path.is_absolute() else cwd / path
+
+
 def _code_fix_shell_expand_workspace_alias(value: str, state: AgentState) -> tuple[str, ...]:
     """Resolve the shell's cwd aliases without trying to emulate arbitrary env vars."""
     expanded = [value]
@@ -1720,20 +1730,24 @@ def _code_fix_shell_has_compiler_plugin(command: str) -> bool:
     )
 
 
-def _code_fix_shell_has_evaluator_redirect(command: str, state: AgentState) -> bool:
+def _code_fix_shell_has_evaluator_redirect(
+    command: str, state: AgentState, cwd: Path | None = None
+) -> bool:
     for nested_command in _code_fix_shell_c_payloads(command):
-        if _code_fix_shell_has_evaluator_redirect(nested_command, state):
+        if _code_fix_shell_has_evaluator_redirect(nested_command, state, cwd):
             return True
     for target_text in _code_fix_shell_redirect_targets(command):
-        if _shares_code_fix_protected_inode(Path(target_text), state):
+        if _shares_code_fix_protected_inode(_code_fix_shell_path_from(cwd, target_text), state):
             return True
     return False
 
 
-def _code_fix_shell_has_evaluator_operand(command: str, state: AgentState) -> bool:
+def _code_fix_shell_has_evaluator_operand(
+    command: str, state: AgentState, cwd: Path | None = None
+) -> bool:
     """Catch mutating commands that name a production alias, not the evaluator."""
     for nested_command in _code_fix_shell_c_payloads(command):
-        if _code_fix_shell_has_evaluator_operand(nested_command, state):
+        if _code_fix_shell_has_evaluator_operand(nested_command, state, cwd):
             return True
     if _code_fix_shell_is_read_only(command):
         return False
@@ -1766,7 +1780,9 @@ def _code_fix_shell_has_evaluator_operand(command: str, state: AgentState) -> bo
             if candidate.startswith("$"):
                 return True
             for expanded in _code_fix_shell_expand_workspace_alias(candidate, state):
-                if expanded and _shares_code_fix_protected_inode(Path(expanded), state):
+                if expanded and _shares_code_fix_protected_inode(
+                    _code_fix_shell_path_from(cwd, expanded), state
+                ):
                     return True
     return False
 
@@ -2761,16 +2777,50 @@ _PIPE_FILTERS = frozenset({
 })
 
 
-def _code_fix_shell_parts(command: str, state: AgentState) -> list[str] | None:
-    """The simple commands of `a | b`, `a && b`, `a || b` or `a; b`, each checked alone.
+def _code_fix_shell_cd_target(words: Sequence[str], state: AgentState) -> Path | None:
+    """The directory `cd <dir>` moves into, when it is one inside the workspace.
+
+    The same rule `_strip_workspace_cd` has used for the Python probe since cf03abd: an
+    existing directory under the workspace, spelled plainly. The part splitter used to
+    demand the workspace *root* instead, so `cd app && python3 -m pytest -q` was refused
+    whole while `cd app && python3 -c ...` went through -- one policy, two answers about
+    the same `cd` (audit-0917 tools.md T-3).
+    """
+    if len(words) != 2 or words[0] != "cd":
+        return None
+    spelled = words[1]
+    if spelled in {"-", "~"} or spelled.startswith(("~", "$")):
+        return None  # `$OLDPWD`, `$HOME`, `~user`: not a workspace path however it resolves
+    try:
+        root = state.workspace.resolve()
+        target = Path(spelled)
+        resolved = (target if target.is_absolute() else root / target).resolve()
+        if not resolved.is_dir() or not resolved.is_relative_to(root):
+            return None
+    except (OSError, ValueError):
+        return None
+    return resolved
+
+
+def _code_fix_shell_split(
+    command: str, state: AgentState
+) -> tuple[list[str], Path | None] | None:
+    """The simple commands of `a | b`, `a && b`, `a || b` or `a; b`, each checked alone,
+    and the directory a leading `cd` moved them into.
 
     A composition writes nowhere its parts do not, so a pipe into `head` or a leading
-    `cd <workspace> &&` is no reason to refuse. None -- keep the whole-command check --
-    for anything a part-by-part check cannot see through: substitution, a subshell or
+    `cd <workspace dir> &&` is no reason to refuse. None -- keep the whole-command check
+    -- for anything a part-by-part check cannot see through: substitution, a subshell or
     group, stdin redirection, a newline, a lone `&`, or a `cd` anywhere but first and
-    into the workspace itself (relative paths in later parts would resolve elsewhere).
-    `2>&1`-style fd duplication writes no file and is dropped from each part. A part
-    reading a pipe must be a plain filter (`_PIPE_FILTERS`).
+    into the workspace. `2>&1`-style fd duplication writes no file and is dropped from
+    each part. A part reading a pipe must be a plain filter (`_PIPE_FILTERS`).
+
+    The directory travels with the parts because a relative path in them now means a
+    file under it: after `cd tests`, `rm test_app.py` is a write to the evaluator, and a
+    guard reading that name from the workspace root would see nothing. A `..` in any
+    later part gives up on the split entirely when the `cd` went into a subdirectory --
+    such a line is refused today, and every predicate that asks "is this the workspace
+    root" (`tar -C ..`) would otherwise have to be rebased one by one to keep it so.
     """
     parts: list[str] = []
     piped: list[bool] = [False]
@@ -2819,17 +2869,27 @@ def _code_fix_shell_parts(command: str, state: AgentState) -> list[str] | None:
         for reads_pipe, part_words in zip(piped, words)
     ):
         return None
+    base: Path | None = None
     if words[0][0] == "cd":
+        base = _code_fix_shell_cd_target(words[0], state)
+        if base is None or len(parts) == 1:
+            return None
         try:
-            into_workspace = len(words[0]) == 2 and (
-                (state.workspace / words[0][1]).resolve() == state.workspace.resolve()
-            )
+            subdirectory = base != state.workspace.resolve()
         except OSError:
-            into_workspace = False
-        if not into_workspace or len(parts) == 1:
+            return None
+        if subdirectory and any(
+            ".." in PurePosixPath(word).parts for part_words in words[1:] for word in part_words
+        ):
             return None
         parts = parts[1:]
-    return parts
+    return parts, base
+
+
+def _code_fix_shell_parts(command: str, state: AgentState) -> list[str] | None:
+    """The simple commands alone, for callers that do not care where they run."""
+    split = _code_fix_shell_split(command, state)
+    return None if split is None else split[0]
 
 
 def _curl_probe(command: str) -> bool:
@@ -2914,24 +2974,24 @@ def _service_relaunch(command: str, state: AgentState) -> bool:
 
 def _relaunch_directory(spelled: str, cwd: str, state: AgentState) -> bool:
     """Whether `cd <spelled>` lands inside the workspace, or in the service's own cwd."""
-    if spelled in {"-", "~"} or spelled.startswith(("~", "$")):
-        return False
+    if _code_fix_shell_cd_target(["cd", spelled], state) is not None:
+        return True
     try:
-        root = state.workspace.resolve()
-        target = Path(spelled)
-        resolved = (target if target.is_absolute() else root / target).resolve()
-        if not resolved.is_dir():
-            return False
-        return resolved.is_relative_to(root) or (bool(cwd) and resolved == Path(cwd).resolve())
+        return bool(cwd) and Path(spelled).resolve() == Path(cwd).resolve()
     except (OSError, ValueError):
         return False
 
 
-def _code_fix_shell_refusal(command: str, state: AgentState) -> str:
-    """Reject an explicit shell mutation aimed at the evaluator, not source edits."""
-    parts = _code_fix_shell_parts(command, state)
-    if parts is not None and parts != [command]:
-        refusals = [_code_fix_shell_refusal(part, state) for part in parts]
+def _code_fix_shell_refusal(command: str, state: AgentState, cwd: Path | None = None) -> str:
+    """Reject an explicit shell mutation aimed at the evaluator, not source edits.
+
+    `cwd` is the directory a leading `cd` moved this part into, and only the split below
+    passes it: a relative path is then judged where the shell would find it.
+    """
+    split = _code_fix_shell_split(command, state)
+    if split is not None and split[0] != [command]:
+        parts, base = split
+        refusals = [_code_fix_shell_refusal(part, state, base or cwd) for part in parts]
         return next((refusal for refusal in refusals if refusal), "")
     if _curl_probe(command) or _python_probe(command, state) or _service_relaunch(command, state):
         return ""
@@ -2960,8 +3020,8 @@ def _code_fix_shell_refusal(command: str, state: AgentState) -> str:
         or _code_fix_shell_has_python_script(command, state.workspace)
         or _code_fix_shell_has_script_invocation(command, state.workspace)
         or _code_fix_shell_has_pytest_plugin_option(command)
-        or _code_fix_shell_has_evaluator_redirect(command, state)
-        or _code_fix_shell_has_evaluator_operand(command, state)
+        or _code_fix_shell_has_evaluator_redirect(command, state, cwd)
+        or _code_fix_shell_has_evaluator_operand(command, state, cwd)
     ):
         return (
             "code-fix refused: this shell command may mutate an evaluator/test or "

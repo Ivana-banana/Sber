@@ -7832,6 +7832,13 @@ def _fix_workspace(root: Path) -> AgentState:
         "curl -s 'http://127.0.0.1:8000/search?q=test'",
         "curl -s \"http://127.0.0.1:8000/search?q=%27%20OR%201=1--\"",
         "curl -s http://127.0.0.1:8000/tests/latest",
+        # `cd <subdirectory>` -- the layout of every application that is not at the root
+        "cd app && python3 -m pytest -q",
+        "cd {ws}/app && python3 -m pytest -q",
+        "cd app && ls",
+        "cd app && cat db.py",
+        "cd app; grep -rn execute .",
+        "cd app && python3 -m pytest -q 2>&1 | tail -20",
     ],
 )
 def test_code_fix_lets_a_composition_of_allowed_commands_through(tmp_path: Path, command: str) -> None:
@@ -7866,6 +7873,16 @@ def test_code_fix_lets_a_composition_of_allowed_commands_through(tmp_path: Path,
         "git status && git checkout -- tests",
         "curl -s http://127.0.0.1:8000/ -o tests/test_app.py",
         "curl -s http://127.0.0.1:8000/ && curl -o tests/test_app.py http://127.0.0.1:8000/",
+        # A relative path after `cd <subdirectory>` means a file under that directory,
+        # and that is the file the evaluator guard has to judge -- not the same spelling
+        # read from the workspace root.
+        "cd tests && rm test_app.py",
+        "cd tests && mv test_app.py /tmp/x",
+        "cd tests && sed -i s/x/y/ test_app.py",
+        "cd app && rm ../tests/test_app.py",
+        "cd app && cat db.py > ../tests/test_app.py",
+        "cd app && rm -rf ../tests",
+        "cd app && tar -x -C ..",
     ],
 )
 def test_code_fix_still_refuses_a_composition_with_a_refused_part(tmp_path: Path, command: str) -> None:
