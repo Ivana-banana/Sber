@@ -3098,12 +3098,29 @@ def _relaunch_observation(
     if settle:
         time.sleep(settle)
 
+    # Anything this command started began after the step did, so the window opens at
+    # the moment the step began: now, less the settle sleep and the shell's own run.
+    # A process with the right argv and an older start is not it, and both shapes that
+    # produces are serving the code the run has just changed -- a supervisor's forked
+    # twin, a stray second copy -- while the process the command really started loses
+    # the race for the port and dies. The margin is the error a procfs start time
+    # carries (`SERVICE_SCAN_START_MARGIN_S`), spent in the safe direction: a genuine
+    # restart is still read as one, at the price of accepting a twin forked within the
+    # second before the step.
+    launched_at = (
+        time.time() - settle - max(0.0, result.duration_s) - limits.SERVICE_SCAN_START_MARGIN_S
+    )
     table = tools.process_table()
     old_alive = any(info.pid == pid for info in table.processes)
     started = [
         info.pid
         for info in table.processes
-        if info.pid != pid and tuple(info.argv) == tuple(argv)
+        if info.pid != pid
+        and tuple(info.argv) == tuple(argv)
+        # `0.0` is procfs declining to say, not a start before the window: an
+        # unreadable start time already reports itself through `table.complete`,
+        # and a verified restart must not turn into a failure over it.
+        and (info.started_at <= 0.0 or info.started_at >= launched_at)
     ]
     tail = _relaunch_log_tail(log, state.secrets)
     quoted = f"\nХвост {log}:\n{tail}" if tail else ""

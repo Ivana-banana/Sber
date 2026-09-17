@@ -23,6 +23,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,81 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
+"""
+
+FORKING_SERVICE_SOURCE = """\
+import http.server
+import os
+import sys
+import time
+
+import routers.auth
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = str(routers.auth.login()).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        return
+
+
+server = http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), Handler)
+if os.fork() == 0:
+    server.serve_forever()
+while True:
+    time.sleep(0.5)
+"""
+"""A supervisor that binds the port and forks the process that serves it.
+
+Two live processes with one command line, which is the shape `uvicorn --workers`,
+`gunicorn` and every `--reload` runner produce, and the shape a stray second copy of a
+service has as well.
+"""
+
+MODULE_SERVICE_SOURCE = """\
+import argparse
+import http.server
+
+import app.routers.auth
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = str(app.routers.auth.login()).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        return
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--port", type=int)
+parser.add_argument("--workers", type=int, default=1)
+options = parser.parse_args()
+http.server.HTTPServer(("127.0.0.1", options.port), Handler).serve_forever()
+"""
+"""The other shape the public applications come in: a module, not a script path."""
+
+MODULE_LAUNCHER_SOURCE = """\
+import subprocess
+import sys
+
+child = subprocess.Popen(
+    [sys.executable, "-m", "app.server", "--port", sys.argv[1], "--workers", "1"],
+    cwd=sys.argv[2],
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    start_new_session=True,
+)
+sys.stdout.write(str(child.pid))
 """
 
 LAUNCHER_SOURCE = """\
@@ -174,6 +250,37 @@ def started_at(pid: int) -> float:
             assert info.started_at > 0.0, "procfs did not report a start time"
             return info.started_at
     raise AssertionError(f"pid {pid} is not in the process table")
+
+
+def sharing_the_command_line(pid: int) -> list[int]:
+    """Every pid whose argv equals this one's -- the twin of a fork included."""
+    table = tools.process_table(max_processes=1_000_000)
+    argv = next((tuple(info.argv) for info in table.processes if info.pid == pid), None)
+    assert argv is not None, f"pid {pid} is not in the process table"
+    return [info.pid for info in table.processes if tuple(info.argv) == argv]
+
+
+def wait_for_a_twin(pid: int, machine: "Machine") -> int:
+    """Block until the service has forked, and hand the twin to the teardown."""
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        others = [found for found in sharing_the_command_line(pid) if found != pid]
+        if others:
+            machine.pids.extend(others)
+            return others[0]
+        time.sleep(0.02)
+    raise AssertionError(f"pid {pid} never forked")
+
+
+def wait_until_gone(pid: int) -> None:
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"pid {pid} is still running")
 
 
 def wait_until_an_edit_is_newer(pid: int) -> None:
@@ -765,3 +872,105 @@ def test_a_relaunch_the_old_process_still_blocks_names_that_process(
     assert "повтори команду перезапуска" in result.output
     assert wait_for_port(port, timeout_s=1.0), "the old service is what still answers"
     assert state.service_restarts, "the retry needs the offer"
+
+
+@LINUX_ONLY
+def test_a_twin_the_service_forked_is_not_the_process_this_command_started(
+    tmp_path: Path, machine: Machine
+) -> None:
+    """Only the supervisor was stopped; the twin it forked still holds the port.
+
+    A process with that argv and a pid other than the old one was enough to call the
+    restart done. A twin is exactly that, and so is a stray second copy of the service:
+    the process the command really started loses the race for the port and dies on
+    `Address already in use`, the port goes on answering with the code the run has just
+    changed, and the observation reports success and spends the offer -- the one
+    privilege a run gets to fix this (critic, 17.09). When a process started is what
+    tells the two apart.
+    """
+    changed = write_app(tmp_path)
+    (tmp_path / "main.py").write_text(FORKING_SERVICE_SOURCE, encoding="utf-8")
+    supervisor, port = machine.detached(tmp_path)
+    twin = wait_for_a_twin(supervisor, machine)
+    wait_until_an_edit_is_newer(supervisor)
+    changed.write_text("def login():\n    return 'new'\n", encoding="utf-8")
+    state = codefix_state(tmp_path)
+    state.artifacts.append(changed)
+    kind, _, hint = deliver(state)
+    assert kind == "stale-service", kind
+    relaunch = offered_relaunch(hint)
+    Path("/tmp/service-restart.log").unlink(missing_ok=True)
+
+    stopped = loop._execute(
+        prompt.RUN_SHELL, {"command": f"kill {supervisor}"}, state, playbook=playbooks.CODE_FIX
+    )
+    assert stopped.ok, stopped.detail
+    wait_until_gone(supervisor)
+
+    result = loop._execute(
+        prompt.RUN_SHELL, {"command": relaunch}, state, playbook=playbooks.CODE_FIX
+    )
+
+    assert result.ok is False, result.output
+    assert str(twin) not in result.output, "the twin is not what this command started"
+    assert state.service_restarts, "a restart that did not happen keeps its offer"
+    assert wait_for_port(port, timeout_s=1.0), "the twin is what still answers"
+    assert (
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=3).read() == b"old"
+    ), "and it answers with the code the run changed"
+
+
+@LINUX_ONLY
+def test_a_module_service_restarted_for_real_is_still_a_success(
+    tmp_path: Path, machine: Machine
+) -> None:
+    """The `python3 -m app.server --port N --workers 1` shape, restarted properly.
+
+    The start-time reading is what the test is about: the settle sleep, the shell's own
+    duration and the margin a procfs start time carries are all walked back, so a
+    process this command really did start is inside the window even when the step was
+    slow. A margin cut too fine here would turn every working restart into a failure.
+    """
+    (tmp_path / "app" / "routers").mkdir(parents=True)
+    (tmp_path / "app" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "app" / "routers" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "app" / "server.py").write_text(MODULE_SERVICE_SOURCE, encoding="utf-8")
+    changed = tmp_path / "app" / "routers" / "auth.py"
+    changed.write_text("def login():\n    return 'old'\n", encoding="utf-8")
+    port = free_port()
+    launched = subprocess.run(
+        [sys.executable, "-c", MODULE_LAUNCHER_SOURCE, str(port), str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=30.0,
+    )
+    assert launched.returncode == 0, launched.stderr
+    service_pid = int(launched.stdout.strip())
+    machine.pids.append(service_pid)
+    assert wait_for_port(port), "the module service never came up"
+
+    wait_until_an_edit_is_newer(service_pid)
+    changed.write_text("def login():\n    return 'new'\n", encoding="utf-8")
+    state = codefix_state(tmp_path)
+    state.artifacts.append(changed)
+    kind, _, hint = deliver(state)
+    assert kind == "stale-service", kind
+    relaunch = offered_relaunch(hint)
+    Path("/tmp/service-restart.log").unlink(missing_ok=True)
+
+    stopped = loop._execute(
+        prompt.RUN_SHELL, {"command": f"kill {service_pid}"}, state, playbook=playbooks.CODE_FIX
+    )
+    assert stopped.ok, stopped.detail
+    wait_until_gone(service_pid)
+
+    result = loop._execute(
+        prompt.RUN_SHELL, {"command": relaunch}, state, playbook=playbooks.CODE_FIX
+    )
+
+    assert result.ok, result.output
+    assert "перезапуск выполнен" in result.output, result.output
+    assert wait_for_port(port), "the relaunched service never came up"
+    for found in tools.serving_processes([changed]).processes:
+        machine.pids.append(found.pid)
+    assert state.service_restarts == [], "a restart that worked has spent its offer"
