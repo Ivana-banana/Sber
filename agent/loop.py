@@ -31,12 +31,17 @@ from typing import Any
 import json
 import dataclasses
 import os
+import posixpath
 import re
 import shlex
 import stat
 import time
 
 from agent import detectors, limits, prompt, result_contract, result_progress, sources, tools
+# Aliased, and used for exactly one question: whether a refusal the client could not
+# work around was about the size of the request. The loop reaches a model only through
+# the injected `LlmPort`, and `llm` is that parameter's name in half the functions here.
+from agent import llm as _llm
 from agent.playbooks import Playbook
 from agent.ports import LlmError, LlmPort, LlmReply
 from agent.preflight import EnvironmentBrief
@@ -76,6 +81,18 @@ exactly what the one-action-per-step rule exists for.
 """
 
 
+FOCUS_CAUSES: dict[str, tuple[str, str]] = {
+    "runaway": ("a truncated reasoning reply", prompt.FOCUS_NOTICE),
+    "overflow": ("a context-overflow refusal", prompt.CONTEXT_FOCUS_NOTICE),
+}
+"""The two things that narrow the next request: `(audit note tail, line for the model)`.
+
+Kept together because they have to agree. A run whose trace says the reply ran away
+while the model is being told the request did not fit is a run nobody can read
+afterwards, and the two strings are written three hundred lines apart.
+"""
+
+
 @dataclass(frozen=True)
 class Outcome:
     """What the run has to show for itself. `solved` is never the model's opinion."""
@@ -109,11 +126,14 @@ def run(
     # Consecutive calls that failed in a way that says the endpoint cannot be used. A
     # call that merely timed out is counted separately -- see `_llm_failure_kind`.
     llm_failures = 0
-    # Whether the NEXT request is a focused one: a narrowed history plus one line asking
-    # for an action and no reasoning (`prompt.FOCUS_NOTICE`). Set only by a reply that
-    # reasoned past the raised output ceiling without emitting anything, and only when
-    # the call that did it was not itself focused.
-    focus_next = False
+    # Why the NEXT request is a focused one -- a key of `FOCUS_CAUSES`, or "" for the
+    # ordinary case. A focused request is a narrowed history plus one line asking for an
+    # action and no reasoning. It is set by a reply that reasoned past the raised output
+    # ceiling without emitting anything, or by a refusal the client could not shrink its
+    # way out of, and only when the call that did it was not itself focused. The cause
+    # travels with the flag rather than beside it, so consuming one cannot leave the
+    # other behind to mislabel a later call.
+    focus_next = ""
     # Index in `observations` of the newest entry that is a tool result rather than
     # something this loop said to itself. Only the narrowing of a focused request reads
     # it, and it reads it so that the narrowing cannot drop the last observed fact: the
@@ -200,15 +220,19 @@ def run(
         # Focus is consumed here, before the reply is read: whatever comes back, the next
         # request is an ordinary one unless a fresh runaway asks for another. That is what
         # makes a focus loop impossible rather than merely unlikely.
-        focused, focus_next = focus_next, False
+        focused, focus_next = focus_next, ""
         base = history_base
+        notice = prompt.FOCUS_NOTICE
         if focused:
             # Narrowed for this call only -- `history_base` keeps its anchor, so the next
             # ordinary request is the one that would have been sent anyway.
+            note, notice = FOCUS_CAUSES[focused]
             base = prompt.focus_base(observations, history_base, last_evidence)
-            state.record("budget", "focus", "focused retry after a truncated reasoning reply")
+            state.record("budget", "focus", f"focused retry after {note}")
         reply = llm.complete_structured(
-            prompt.build_messages(system, observations, base, focus=focused),
+            prompt.build_messages(
+                system, observations, base, focus=bool(focused), notice=notice
+            ),
             schema=prompt.ACTION_SCHEMA,
             # The same ceiling on a focused call as on any other. The raised output
             # budget is `agent.llm`'s and is sticky, and the model needs the room: what
@@ -240,10 +264,24 @@ def run(
                     stop_reason = "llm-unusable"
                     summary = f"endpoint unusable after {llm_failures} failed calls: {reply.reason}"
                     break
-                if reply.truncated_reasoning and not focused:
+                overflowed = _llm.reason_is_context_overflow(reply.reason)
+                if (reply.truncated_reasoning or overflowed) and not focused:
                     # The model reasoned to the ceiling and emitted nothing. Repeating the
                     # request buys the same non-answer -- measured four times in a row on
                     # the 35B stand -- so the next one is narrowed instead.
+                    #
+                    # The second cause is the mirror image of the first and takes the same
+                    # answer. A strict server (vLLM) refuses `prompt + max_tokens > num_ctx`
+                    # with a 400 naming the context length; `agent.llm` answers it by
+                    # halving its output ceiling, which is right while there is ceiling to
+                    # give and useless once it sits on `LLM_MAX_OUTPUT_TOKENS` -- the
+                    # refusal is about the prompt by then, not the answer. Measured by the
+                    # loop audit (17.09) against a faithful strict endpoint: a read-heavy
+                    # `code-audit` episode ended `llm-unusable` on step 6 with nothing on
+                    # disk at a 8192-token window, and survived to the step cap at 16384.
+                    # The history is the only part of the request left to shrink. An
+                    # endpoint that never returns that 400 never reaches this branch, and
+                    # its requests stay byte-for-byte what they were.
                     #
                     # Counted as the hard failure it is, and only once: the focused call
                     # replaces the second of the three logical calls the counter allows,
@@ -260,7 +298,7 @@ def run(
                     # Decided here, audited where the request is actually built: the clock
                     # or the step cap can end the run in between, and a trace must not
                     # claim a retry nobody sent.
-                    focus_next = True
+                    focus_next = "runaway" if reply.truncated_reasoning else "overflow"
             else:
                 # A call that ran out of wall clock with nothing delivered says the
                 # endpoint is slow, not broken, and the two must not end the run the same
@@ -325,7 +363,8 @@ def run(
                 # Could this check have exercised the change at all? A process older
                 # than the edit is running the code as it was before it. Observation
                 # only: nothing here restarts, signals or starts anything.
-                looked = _stale_service(state, source_changes)
+                offered: list[tuple[int, tuple[str, ...], str]] = []
+                looked = _stale_service(state, source_changes, offer=offered)
                 if looked is not None:
                     stale_service_checks += 1
                     kind, detail, hint = looked
@@ -337,6 +376,10 @@ def run(
                         and state.budget.spendable_s() >= limits.SERVICE_RESTART_MIN_SPARE_S
                     ):
                         stale_service_refusals += 1
+                        for record in offered:
+                            # Recorded only now: the shell policy accepts this restart
+                            # because the model was handed it, on this step.
+                            _remember_relaunch(state, record)
                         observations.append(f"[step {step}] {hint}")
                         continue
                     if hint:
@@ -418,7 +461,26 @@ def run(
 
         blocks_in_a_row = 0
         act_started = state.start_phase("act")
-        result = _execute(tool, args, state, playbook=playbook)
+        try:
+            result = _execute(tool, args, state, playbook=playbook)
+        except MemoryError:
+            # Not an answer to the model: the process is out of memory and the next
+            # action would fail on the same allocation. `agent.main` turns it into the
+            # parseable `stop=crash` line and leaves whatever is already on disk.
+            # `KeyboardInterrupt` and `SystemExit` pass for the same reason -- they are
+            # `BaseException` and never reach the clause below.
+            raise
+        except Exception as error:  # noqa: BLE001 - a crash here costs the whole task
+            # `_execute` is documented never to raise, and the batch path guards it
+            # anyway; the primary path trusted the documentation. But the path comes
+            # from the model, and `Path.resolve` raises `ValueError` on a NUL byte and
+            # `UnicodeEncodeError` on a lone surrogate -- neither is the `OSError` that
+            # `agent.tools` and `_evaluator_path_refusal` catch. The episode died with
+            # the file already written and `finish` never sent. The type name only: the
+            # message may quote a path or file content.
+            result = tools.ToolResult(
+                name=tool, ok=False, detail=f"action failed: {type(error).__name__}"
+            )
         state.finish_phase("act", act_started)
         if os.environ.get(limits.TRACE_TOOLS_ENV_NAME):
             # Diagnostic only, off unless explicitly enabled: the loop otherwise prints
@@ -588,7 +650,10 @@ def _parse(text: str) -> tuple[dict[str, Any], str]:
     """
     try:
         parsed = json.loads(text)
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError, RecursionError):
+        # `RecursionError` because the scanner recurses once per bracket: a degenerate
+        # reply of tens of thousands of nested arrays exhausts the stack instead of
+        # failing to decode, and this function promises above that it never raises.
         return {}, "reply was not json: send one JSON object with a `tool` field and nothing else"
     if not isinstance(parsed, dict):
         return {}, "reply was not a json object: send one object with a `tool` field"
@@ -618,9 +683,27 @@ def _deliverable(act: dict[str, Any], state: AgentState) -> tuple[Path | None, s
     candidate = Path(raw)
     if not candidate.is_absolute():
         candidate = state.workspace / candidate
-    if not candidate.exists():
+    try:
+        exists = candidate.exists()
+        directory = exists and candidate.is_dir()
+    except (OSError, ValueError):
+        # The same class of defect as the guard around `_execute`, one branch earlier:
+        # `finish` returns before that call, so nothing else covers it. On the target
+        # 3.12 `Path.exists` re-raises everything but ENOENT/ENOTDIR/EBADF/ELOOP, so a
+        # name that is too long or a parent directory that is not searchable ends the
+        # episode here -- the audit's fuzzer hit it on all four playbooks. 3.13 swallows
+        # every OSError instead, which is why the failure is invisible on a newer
+        # interpreter than the one this ships on. A path the filesystem will not answer
+        # about is not a deliverable, and the refusal says that rather than "does not
+        # exist": on this branch we do not know whether it exists, and telling the model
+        # to create a file it may already have written is the wrong next action.
+        return None, (
+            f"finish refused: не удалось проверить путь {candidate}. "
+            f"Назови обычный файл внутри рабочего каталога."
+        )
+    if not exists:
         return None, f"finish refused: {candidate} does not exist. Сначала создай файл."
-    if candidate.is_dir():
+    if directory:
         return None, (
             f"finish refused: {candidate} is a directory, not a file. "
             f"Назови файл с результатом."
@@ -1800,7 +1883,7 @@ def _code_fix_shell_is_read_only(command: str) -> bool:
     if executable in {"mypy", "flake8", "pylint"}:
         return not _code_fix_shell_has_output_option(words[1:])
     if _code_fix_is_python_executable(words[0]):
-        if len(words) < 3 or words[1] != "-m" or words[2] not in {"pytest", "compileall"}:
+        if len(words) < 3 or words[1] != "-m" or words[2] not in _CODE_FIX_READ_ONLY_PYTHON_MODULES:
             return False
         return not _code_fix_shell_has_output_option(words[3:])
     if executable == "git":
@@ -1999,18 +2082,75 @@ def _code_fix_shell_has_startup_hook_assignment(command: str) -> bool:
     return False
 
 
+_CODE_FIX_ALLOWED_PYTHON_MODULES = frozenset({"compileall", "json.tool", "pytest", "unittest"})
+"""`python -m <module>` the code-fix policy runs without calling it a script invocation.
+
+`unittest` is the standard-library test runner and executes test code exactly as
+`pytest`, which has always been allowed, does -- the risk is the one already taken. A
+closed task whose suite is written on it, or an image without pytest, left the model
+with no way to run any check while the refusal advised it to "use a read-only test
+command" (audit-0917 tools.md T-4). `json.tool` pretty-prints and executes nothing."""
+
+_CODE_FIX_READ_ONLY_PYTHON_MODULES = _CODE_FIX_ALLOWED_PYTHON_MODULES - {"json.tool"}
+"""Of those, the ones that write nothing of their own, so an evaluator path among their
+operands is being read and not overwritten. `json.tool` is left out because its second
+positional argument is the file it writes into."""
+
+
+_PYTHON_OPTIONS_TAKING_A_VALUE = frozenset({"-W", "-X", "--check-hash-based-pycs"})
+"""Interpreter options whose value is the next word, so the word after is not an operand.
+
+Only the separated spelling needs them. `-Wignore` is one word and is skipped as the
+option it is."""
+
+
 def _code_fix_python_module(words: list[str]) -> str | None:
-    """Return a Python -m module, including attached ``-mMODULE`` syntax."""
-    for index, word in enumerate(words[1:], start=1):
+    """The module `python -m` was given, or None when the line names no module.
+
+    Read among the interpreter's own options and nowhere else, which is where the
+    selector can be: the options end at the first operand, and everything after the
+    script path belongs to the script. `python3 evil.py -m pytest` runs `evil.py` and
+    hands it `-m pytest`; scanning the whole line found `pytest` there, and an allowed
+    module is not a script invocation -- so the script ran without the guarded probe
+    that snapshots the evaluator's files and restores whatever a run of it changed
+    (critic, 17.09).
+
+    `-c` and `-` are operands of their own kind: with either, the program is the code or
+    the standard input and the rest of the line is its argv, so neither can carry a
+    module. Attached `-mMODULE` still counts, because there the option is the operand.
+    """
+    index = 1
+    while index < len(words):
+        word = words[index]
         if word == "-m":
             return words[index + 1] if index + 1 < len(words) else ""
         if word.startswith("-m") and not word.startswith("--"):
             return word[2:]
+        if word == "-c" or (word.startswith("-c") and not word.startswith("--")):
+            return None
+        if word in {"-", "--"} or not word.startswith("-"):
+            return None
+        if word in _PYTHON_OPTIONS_TAKING_A_VALUE:
+            index += 1
+        index += 1
     return None
 
 
 def _code_fix_shell_has_pytest_plugin_option(command: str) -> bool:
-    """Reject pytest plugin imports hidden in otherwise read-only test commands."""
+    """Reject pytest plugin imports hidden in otherwise read-only test commands.
+
+    Two corrections to what this used to ask (audit-0917 tools.md T-8). It fired on the
+    substring `pytest` anywhere in the line, so a file named `pytest.ini` or a search
+    pattern was enough: `head -c 200 pytest.ini`, `wc -c pytest.ini` and `grep -c pytest
+    requirements.txt` were all refused as plugin injections. Only the options *after* the
+    word that invokes pytest are its options now -- which also keeps the wrapped forms
+    (`timeout 30 pytest -p evil`, `sh -c '...'`, `python -mpytest`) caught as before.
+
+    And `-p no:<plugin>` switches a plugin off. It is the ordinary way to ask pytest not
+    to write to disk (`-p no:cacheprovider`), and it imports nothing; every other `-p`,
+    and every option that can point pytest at another config, rootdir or conftest, is
+    refused as before.
+    """
     for nested_command in _code_fix_shell_c_payloads(command):
         if _code_fix_shell_has_pytest_plugin_option(nested_command):
             return True
@@ -2018,19 +2158,34 @@ def _code_fix_shell_has_pytest_plugin_option(command: str) -> bool:
         words = shlex.split(command)
     except ValueError:
         return False
-    if not any(
-        PurePosixPath(word).name in {"pytest", "py.test"} for word in words
-    ) and "pytest" not in command:
+    invoked = next(
+        (
+            index
+            for index, word in enumerate(words)
+            if PurePosixPath(word).name in {"pytest", "py.test"}
+            or (word.startswith("-m") and not word.startswith("--") and word[2:] == "pytest")
+        ),
+        None,
+    )
+    if invoked is None:
         return False
+    arguments = words[invoked + 1 :]
+    for index, word in enumerate(arguments):
+        if word == "-p" or word == "--plugin":
+            plugin = arguments[index + 1] if index + 1 < len(arguments) else ""
+        elif word.startswith("-p") and not word.startswith("--"):
+            plugin = word[2:]
+        elif word.startswith("--plugin="):
+            plugin = word.split("=", 1)[1]
+        else:
+            continue
+        if not plugin.startswith("no:"):
+            return True
     return any(
-        word == "-p"
-        or (word.startswith("-p") and not word.startswith("--"))
-        or word == "-o"
+        word == "-o"
         or (word.startswith("-o") and not word.startswith("--"))
         or word == "-c"
         or (word.startswith("-c") and not word.startswith("--"))
-        or word == "--plugin"
-        or word.startswith("--plugin=")
         or word == "--pyargs"
         or word == "--doctest-modules"
         or word == "--doctest-glob"
@@ -2047,7 +2202,7 @@ def _code_fix_shell_has_pytest_plugin_option(command: str) -> bool:
         or word.startswith("--rootdir=")
         or word == "--log-file"
         or word.startswith("--log-file=")
-        for word in words
+        for word in arguments
     )
 
 
@@ -2062,7 +2217,7 @@ def _code_fix_shell_has_python_script(
         if any(word == "-c" or word.startswith("-c") for word in words[1:]):
             return True
         module = _code_fix_python_module(words)
-        return module is not None and module not in {"pytest", "compileall"}
+        return module is not None and module not in _CODE_FIX_ALLOWED_PYTHON_MODULES
     return any(
         _code_fix_shell_has_python_script(payload, workspace)
         for payload in _code_fix_shell_c_payloads(command)
@@ -2097,7 +2252,7 @@ def _code_fix_shell_has_script_invocation(
             return True
         module = _code_fix_python_module(words)
         if module is not None:
-            return module not in {"pytest", "compileall"}
+            return module not in _CODE_FIX_ALLOWED_PYTHON_MODULES
         return any(not word.startswith("-") for word in words[1:])
     if executable in {
         "lua",
@@ -2842,13 +2997,237 @@ def _curl_probe(command: str) -> bool:
     return bool(words) and words[0] == "curl" and not _curl_can_write(words[1:])
 
 
+_SERVICE_RELAUNCH = re.compile(
+    r"""^\s*
+    (?: kill \s+ (?: -(?: 9 | 15 | KILL | TERM | SIGKILL | SIGTERM ) \s+ )?
+        (?P<pid>\d+) \s* (?: 2 \s* > \s* /dev/null \s* )? (?: ; | && ) \s* )?
+    (?: sleep \s+ (?P<settle>\d{1,2} (?: \.\d+ )? ) \s* (?: ; | && ) \s* )?
+    (?: cd \s+ (?P<dir>[^\s;&|<>$`(){}\\'"]+) \s* && \s* )?
+    nohup \s+ (?P<argv>[^;&|<>`\n]+?) \s*
+    1? > \s* (?P<log>[^\s;&|<>$`(){}\\'"]+) \s*
+    2 \s* > \s* & \s* 1 \s* & \s* $""",
+    re.VERBOSE,
+)
+"""The restart line the stale-service hint dictates, and the spellings around it.
+
+Anchored at both ends, and every shell operator except the ones written here is outside
+the character classes: a second command appended after the `&`, a substitution inside
+the argv or a redirect that is not `>/tmp/... 2>&1` simply fails to match. The settle
+`sleep` is two digits at most: letting the service come up is a second or two, and a
+`sleep 100000` in front of the restart is a step spent holding the tool timeout open.
+"""
+
+
+def _relaunch_offer(
+    command: str, state: AgentState
+) -> tuple[tuple[int, tuple[str, ...], str], str] | None:
+    """The recorded offer this command relaunches and the log it redirects into.
+
+    `None` for anything else -- the background restart of a service this run's own
+    finish gate named is the only shape that gets through.
+
+    The gate refuses a `finish` while a process older than the edit is serving the
+    changed code, and hands the model the command to fix that: `kill <pid> 2>/dev/null;
+    sleep 1; cd <dir> && nohup <argv> >/tmp/service-restart.log 2>&1 &`. The policy then
+    refused that very command -- a lone `&` makes the part splitter give up and `nohup`
+    is an opaque runner -- so on the public set the model retyped it four times per
+    episode for nothing (two of the public fix episodes, 16.09), and, since
+    a bare `kill` was accepted all along, could leave the service down for good.
+
+    What passes is not "a background start". It is this shape, with an argv equal to the
+    argv the /proc scan read off the stale service, the pid of that same service, a
+    directory inside the workspace (or the service's own), and a redirect into `/tmp`.
+    Another argv, another pid, a redirect at the evaluator or anything appended after
+    the `&` fails the match and is refused as before. The argv outlives the process on
+    purpose: the model kills the service with a separate command first.
+    """
+    if not state.service_restarts:
+        return None
+    match = _SERVICE_RELAUNCH.match(command)
+    if not match:
+        return None
+    log = PurePosixPath(posixpath.normpath(match["log"]))
+    if not log.is_relative_to("/tmp") or log == PurePosixPath("/tmp"):
+        return None
+    if _shares_code_fix_protected_inode(Path(log), state):
+        # By inode, like every other redirect the policy judges: a hardlink under /tmp
+        # is the evaluator file, and `>` on it truncates the original. Also catches a
+        # workspace that itself lives under /tmp, as it does under pytest.
+        return None
+    try:
+        argv = shlex.split(match["argv"])
+    except ValueError:
+        return None
+    if not argv or PurePosixPath(argv[0]).name in _OPAQUE_COMMAND_RUNNERS | _SHELL_WRAPPERS:
+        return None
+    if any(_shares_code_fix_protected_inode(Path(token), state) for token in argv):
+        return None
+    for offer in state.service_restarts:
+        pid, offered, cwd = offer
+        if argv != list(offered):
+            continue
+        if match["pid"] is not None and int(match["pid"]) != pid:
+            continue
+        if match["dir"] is not None and not _relaunch_directory(match["dir"], cwd, state):
+            continue
+        return offer, str(log)
+    return None
+
+
+def _service_relaunch(command: str, state: AgentState) -> bool:
+    """Whether this command is the recorded relaunch (see `_relaunch_offer`)."""
+    return _relaunch_offer(command, state) is not None
+
+
+def _relaunch_log_tail(path: str, secrets: Sequence[str]) -> str:
+    """The end of the file the restart redirected into, bounded and redacted.
+
+    The end, because that is where an interpreter writes the traceback it died on. Read
+    by seeking, so a service that has been logging for an hour costs one read of
+    `limits.SERVICE_RESTART_LOG_BYTES`.
+    """
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - limits.SERVICE_RESTART_LOG_BYTES))
+            data = handle.read(limits.SERVICE_RESTART_LOG_BYTES)
+    except OSError:
+        return ""
+    text = data.decode("utf-8", "replace").strip()
+    return redact(text, secrets)
+
+
+def _relaunch_observation(
+    command: str, state: AgentState, result: tools.ToolResult
+) -> tools.ToolResult:
+    """What the restart actually did, in place of the shell's silent success.
+
+    `nohup <argv> >/tmp/... 2>&1 &` exits 0 and prints nothing whatever happens next: the
+    service's own output went into the log file, so a service that died on an import
+    error or on `Address already in use` looked exactly like one that came up. And the
+    finish gate, which asks only whether a process *older than the edit* is running, then
+    opened -- because the old process was gone. End to end that finished a run `solved`
+    with a dead service in the container, and, when the old process was still holding the
+    port, with the old code answering it (critic, 17.09).
+
+    So the step waits a moment and looks: is the process it was told to stop gone, is a
+    process with that argv running now, and what does the log say. A restart whose
+    service is not there is a failed action and says so; a restart the old process is
+    still blocking says that, because the way out is to stop it and run the same command
+    again -- which is why a failed restart keeps its offer and only a successful one
+    spends it.
+    """
+    found = _relaunch_offer(command, state)
+    if found is None or not result.ok:
+        return result
+    (pid, argv, _), log = found
+
+    settle = max(0.0, min(limits.SERVICE_RESTART_SETTLE_S, state.budget.tool_timeout_s()))
+    if settle:
+        time.sleep(settle)
+
+    # Anything this command started began after the step did, so the window opens at
+    # the moment the step began: now, less the settle sleep and the shell's own run.
+    # A process with the right argv and an older start is not it, and both shapes that
+    # produces are serving the code the run has just changed -- a supervisor's forked
+    # twin, a stray second copy -- while the process the command really started loses
+    # the race for the port and dies. The margin is the error a procfs start time
+    # carries (`SERVICE_SCAN_START_MARGIN_S`), spent in the safe direction: a genuine
+    # restart is still read as one, at the price of accepting a twin forked within the
+    # second before the step.
+    launched_at = (
+        time.time() - settle - max(0.0, result.duration_s) - limits.SERVICE_SCAN_START_MARGIN_S
+    )
+    table = tools.process_table()
+    old_alive = any(info.pid == pid for info in table.processes)
+    started = [
+        info.pid
+        for info in table.processes
+        if info.pid != pid
+        and tuple(info.argv) == tuple(argv)
+        # `0.0` is procfs declining to say, not a start before the window: an
+        # unreadable start time already reports itself through `table.complete`,
+        # and a verified restart must not turn into a failure over it.
+        and (info.started_at <= 0.0 or info.started_at >= launched_at)
+    ]
+    tail = _relaunch_log_tail(log, state.secrets)
+    quoted = f"\nХвост {log}:\n{tail}" if tail else ""
+
+    if old_alive:
+        return dataclasses.replace(
+            result,
+            ok=False,
+            detail=f"restart blocked: pid {pid} is still running",
+            output=(
+                f"перезапуск не удался: старый процесс {pid} ещё жив и держит порт, "
+                f"новый на его месте не поднимется. Останови только его (`kill {pid}`), "
+                f"дождись, пока он исчезнет, и повтори команду перезапуска.{quoted}"
+            ),
+        )
+    if started:
+        state.service_restarts[:] = [
+            offer for offer in state.service_restarts if offer != found[0]
+        ]
+        return dataclasses.replace(
+            result,
+            detail=f"restart ok: pid {started[0]}",
+            output=(
+                f"перезапуск выполнен: старого процесса {pid} больше нет, эту команду "
+                f"сейчас выполняет pid {started[0]}.{quoted}"
+            ),
+        )
+    if not table.complete:
+        return dataclasses.replace(
+            result,
+            detail="restart unverified: the process table could not be read",
+            output=(
+                "перезапуск запущен, но проверить его не удалось: таблицу процессов "
+                f"прочитать не вышло ({table.reason or 'причина неизвестна'}). "
+                f"Проверь сервис сам, прежде чем гонять тесты.{quoted}"
+            ),
+        )
+    return dataclasses.replace(
+        result,
+        ok=False,
+        detail="restart failed: no process is running that command",
+        output=(
+            f"перезапуск не удался: старого процесса {pid} больше нет, но и новый с этой "
+            "командой не работает — сервис сейчас не поднят. Почини причину и повтори "
+            f"команду перезапуска.{quoted}"
+        ),
+    )
+
+
+def _relaunch_directory(spelled: str, cwd: str, state: AgentState) -> bool:
+    """Whether `cd <spelled>` lands inside the workspace, or in the service's own cwd.
+
+    Never in the evaluator: a service whose working directory is `tests/` writes its
+    relative paths -- a log, a database, a cache -- into the tree that has to stay as the
+    grader left it, and no spelling of the hint asks for that.
+    """
+    if _is_evaluator_path(Path(spelled), state) or _is_repository_control_path(Path(spelled), state):
+        return False
+    if spelled in {"-", "~"} or spelled.startswith(("~", "$")):
+        return False
+    try:
+        root = state.workspace.resolve()
+        target = Path(spelled)
+        resolved = (target if target.is_absolute() else root / target).resolve()
+        if not resolved.is_dir():
+            return False
+        return resolved.is_relative_to(root) or (bool(cwd) and resolved == Path(cwd).resolve())
+    except (OSError, ValueError):
+        return False
+
+
 def _code_fix_shell_refusal(command: str, state: AgentState) -> str:
     """Reject an explicit shell mutation aimed at the evaluator, not source edits."""
     parts = _code_fix_shell_parts(command, state)
     if parts is not None and parts != [command]:
         refusals = [_code_fix_shell_refusal(part, state) for part in parts]
         return next((refusal for refusal in refusals if refusal), "")
-    if _curl_probe(command) or _python_probe(command, state):
+    if _curl_probe(command) or _python_probe(command, state) or _service_relaunch(command, state):
         return ""
     try:
         workspace_text = str(state.workspace.resolve()).lower()
@@ -2933,7 +3312,14 @@ def _execute(
     *,
     playbook: Playbook,
 ) -> tools.ToolResult:
-    """Run one action. Every failure comes back as a `ToolResult`, never as a raise."""
+    """Run one action. Every failure it can name comes back as a `ToolResult`.
+
+    Written never to raise, and guarded at both call sites all the same: the path in
+    `args` came from the model, and `Path.resolve` raises `ValueError` on an embedded
+    NUL byte and `UnicodeEncodeError` on a lone surrogate -- neither of them the
+    `OSError` the tools catch. The guards are what that promise is worth to a run, not
+    a licence to stop keeping it here.
+    """
     secrets = state.secrets
 
     if tool == prompt.RUN_SHELL:
@@ -2984,12 +3370,20 @@ def _execute(
         # filesystem tick still counts as touched (mtime >= since), never missed into a
         # false refusal.
         since = time.time() - 1.0
+        # The one command whose point is to leave a process running. Through the pipes
+        # it would hold the step until the timeout and then be reaped with the session,
+        # which is the opposite of a restart; and its exit code says nothing about the
+        # service, so the observation is rebuilt from the machine afterwards.
+        relaunch = playbook.name == "code-fix" and _service_relaunch(command, state)
         result = tools.run_shell(
             command,
             cwd=state.workspace,
             timeout_s=state.budget.tool_timeout_s(),
             secrets=secrets,
+            detached=relaunch,
         )
+        if relaunch:
+            result = _relaunch_observation(command, state, result)
         if guarded is not None:
             changed = _restore_protected(guarded, state)
             if changed:
@@ -3178,12 +3572,18 @@ def _batch_reads(
         act_started = state.start_phase("act")
         try:
             result = _execute(tool, args, state, playbook=playbook)
-        except Exception as error:
-            # `_execute` is documented never to raise and the primary path trusts that.
-            # The asymmetry here is deliberate: an extra is work the run did not have
-            # to be given, and losing a whole task to a defect in a bonus action would
-            # be the worst trade in the file. The exception type only -- its message
-            # may quote file content.
+        except MemoryError:
+            # As on the primary path: the process is out of memory, the next action
+            # cannot run either, and `agent.main` ends the run with a line a reader can
+            # parse. `KeyboardInterrupt` and `SystemExit` are `BaseException` and never
+            # reach the clause below.
+            raise
+        except Exception as error:  # noqa: BLE001 - a crash here costs the whole task
+            # The same guard the primary action has, for the same reason: `_execute` is
+            # written never to raise, and both call sites hand it a path that came from
+            # the model. Losing a whole task to a defect in a bonus action would be the
+            # worst trade in the file. The exception type only -- its message may quote
+            # file content.
             result = tools.ToolResult(
                 name=tool, ok=False, detail=f"batch action failed: {type(error).__name__}"
             )
@@ -3362,10 +3762,41 @@ def _workspace_relative(path: Path, workspace: Path) -> str:
     return name.replace("\r", " ").replace("\n", " ")
 
 
+def _relaunch_record(process: tools.ServingProcess) -> tuple[int, tuple[str, ...], str] | None:
+    """The offer a hint about `process` would dictate: its pid, argv and directory."""
+    try:
+        argv = tuple(shlex.split(process.command))
+    except ValueError:
+        return None
+    if not argv:
+        return None
+    return process.pid, argv, str(process.cwd) if process.cwd else ""
+
+
+def _remember_relaunch(state: AgentState, offer: tuple[int, tuple[str, ...], str]) -> None:
+    """Record a restart command the model was actually shown.
+
+    Only when the hint reached the observations. A scan whose hint the loop decided not
+    to spend a refusal on (`stale-service-late`) prints nothing, so there is no command
+    the model could have copied, and a background start it was never told about stays
+    refused like any other.
+    """
+    if offer not in state.service_restarts:
+        state.service_restarts.append(offer)
+        del state.service_restarts[: -limits.SERVICE_SCAN_MAX_CHECKS]
+
+
 def _stale_service(
-    state: AgentState, changes: result_progress.SourceChanges | None = None
+    state: AgentState,
+    changes: result_progress.SourceChanges | None = None,
+    *,
+    offer: list[tuple[int, tuple[str, ...], str]] | None = None,
 ) -> tuple[str, str, str] | None:
     """`(audit name, audit detail, hint for the model)` about pre-change processes.
+
+    `offer` is filled with the restart this hint would dictate, and is *not* recorded on
+    the state here: only the caller knows whether the hint will be shown, and the policy
+    must accept a relaunch the model was told about, not one this scan merely considered.
 
     `None` means no scan happened at all -- this run has changed nothing a process could
     be executing, which is the ordinary case on an audit or a forensics task. The caller
@@ -3433,11 +3864,14 @@ def _stale_service(
         cwd_note = f" (`{process.cwd}`)" if process.cwd else ""
         relaunch = ""
         if process.command:
+            record = _relaunch_record(process)
+            if offer is not None and record is not None:
+                offer.append(record)
             where = f"cd {process.cwd} && " if process.cwd else ""
             relaunch = (
                 f" Готовая команда: `{where}nohup {process.command} "
-                ">/tmp/service-restart.log 2>&1 &` — после неё проверь, что порт снова "
-                "отвечает, прежде чем гонять тесты."
+                ">/tmp/service-restart.log 2>&1 &` — её наблюдение само скажет, поднялся "
+                "ли новый процесс, прежде чем гонять тесты."
             )
         hint = (
             f"[verify] сервис `{process.label}` (pid {process.pid}{listens}) запущен в "
@@ -3588,7 +4022,9 @@ def _edit_echo(
 
 def _advances_state_epoch(tool: str, args: dict[str, object]) -> bool:
     """Whether an executed action may have changed files or a local service."""
-    if tool in {prompt.WRITE_FILE, prompt.REPLACE_TEXT}:
+    # `write_json` with them: it writes a file, so the evidence the detectors gathered
+    # before it describes a tree that no longer exists.
+    if tool in {prompt.WRITE_FILE, prompt.WRITE_JSON, prompt.REPLACE_TEXT}:
         return True
     return tool == prompt.RUN_SHELL and _shell_can_change(str(args.get("command", "")))
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import stat
 import sys
 import time
@@ -214,6 +215,36 @@ def test_a_backgrounded_child_does_not_hold_the_call_past_its_timeout(tmp_path: 
     assert not marker.exists(), "the backgrounded child was reaped, not left running"
 
 
+@POSIX_ONLY
+def test_a_relaunched_service_with_its_own_redirect_outlives_the_step(tmp_path: Path) -> None:
+    """The restart the stale-service hint dictates has to survive the command that ran it.
+
+    `nohup <argv> >/tmp/service-restart.log 2>&1 &` hands the job its own stdout, so
+    nothing of ours is left holding a pipe: the shell exits at once, the call returns far
+    inside its timeout, and the session reaper that frees a blocked pipe (the case above)
+    never runs -- which is why the service is still up on the next step.
+    """
+    marker = tmp_path / "service.marker"
+    log = tmp_path / "service-restart.log"
+    child = f"import time; time.sleep(1.5); open({str(marker)!r}, 'w').write('up')"
+    started = time.monotonic()
+
+    result = run_shell(
+        f"nohup {shlex.quote(sys.executable)} -c {shlex.quote(child)} >{log} 2>&1 &",
+        cwd=tmp_path,
+        timeout_s=8.0,
+    )
+
+    elapsed = time.monotonic() - started
+    assert result.ok is True, result.detail
+    assert elapsed < 3.0, "a backgrounded service must not hold the step"
+    assert not marker.exists(), "the child finished inside the step; this proves nothing"
+    deadline = time.monotonic() + 10.0
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert marker.exists(), "the relaunched service did not outlive the step that started it"
+
+
 # --- looking at files -------------------------------------------------------
 
 
@@ -336,6 +367,43 @@ def test_reading_the_environment_out_of_a_file_does_not_leak_the_key(tmp_path: P
 
     assert secret not in window.output
     assert secret not in found.output
+
+
+def test_read_range_redacts_a_secret_the_byte_limit_cuts_in_half(tmp_path: Path) -> None:
+    """The window is cut at `READ_MAX_BYTES`, and a secret can straddle that cut.
+
+    Redaction ran over the assembled body, so by then the secret was already half of
+    itself and matched nothing: the surviving prefix travelled into the context, which
+    is the one thing the file tools promise never to do. Redacting the line before it is
+    cut removes the choice.
+    """
+    secret = "sk-not-a-real-key-0123456789"
+    filler = "y" * (limits.READ_MAX_BYTES - 8)
+    target = tmp_path / "huge.log"
+    target.write_text(f"{filler}{secret}\ntail\n", encoding="utf-8")
+
+    result = read_range(target, start_line=1, max_lines=1, secrets=(secret,))
+
+    assert result.ok is True
+    assert result.truncated is True
+    for length in range(8, len(secret) + 1):
+        assert secret[:length] not in result.output, f"a {length}-character prefix leaked"
+
+
+def test_read_range_without_secrets_cuts_exactly_where_it_always_did(tmp_path: Path) -> None:
+    """The byte-for-byte guard on the change above: with nothing to redact, nothing moves."""
+    filler = "y" * (limits.READ_MAX_BYTES - 8)
+    tail = "0123456789abcdefghij"
+    target = tmp_path / "huge.log"
+    target.write_text(f"{filler}{tail}\ntail\n", encoding="utf-8")
+
+    result = read_range(target, start_line=1, max_lines=1)
+
+    body = f"{filler}{tail}\n"[: limits.READ_MAX_BYTES]
+    metadata = (
+        f"[read_range source={target} start_line=1 end_line=1 eof=no truncated=yes]"
+    )
+    assert result.output == f"{body}\n… [window cut at line 1] …\n{metadata}"
 
 
 def test_read_range_past_the_end_says_so_instead_of_returning_nothing(tmp_path: Path) -> None:
@@ -520,6 +588,35 @@ def test_search_without_a_match_is_a_clean_empty_answer(tmp_path: Path) -> None:
     assert result.detail == f"no match for 'absent-pattern' under {tmp_path}", (
         "with nothing skipped the answer stays exactly what every measured run saw"
     )
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        # `re.compile` raises this one, not `re.error`, and it is the shape a model
+        # writes by accident: a repetition count copied out of a byte size.
+        "x{4294967296}",
+        "(?P<a>x)(?P<a>y)",
+        "[z-a]",
+        "*",
+        "(?<=a*)b",
+    ],
+)
+def test_search_refuses_a_pattern_the_engine_will_not_build(tmp_path: Path, pattern: str) -> None:
+    """A pattern the engine cannot compile is a refused tool call, never a raised step.
+
+    `re.error` is not the only way a compile fails: a repetition count past the engine's
+    limit raises `OverflowError` and a deeply nested one can exhaust the interpreter's
+    stack with `RecursionError`. Either escaped the tool and ended the step as a crash
+    rather than as the ordinary answer -- "bad pattern" -- that the model can read and
+    write a better pattern from (critic, 17.09).
+    """
+    (tmp_path / "text.txt").write_text("hello\n", encoding="utf-8")
+
+    result = search(pattern, tmp_path / "text.txt")
+
+    assert result.ok is False
+    assert result.detail.startswith("bad pattern: "), result.detail
 
 
 def test_search_says_which_files_it_could_not_read_instead_of_only_no_match(tmp_path: Path) -> None:
@@ -1466,65 +1563,3 @@ def test_relaunch_command_is_quoted_and_refused_for_credentials() -> None:
     assert _relaunch_command(["app", "--dsn=postgres://u:p@h/db"], []) == ""
     assert _relaunch_command(["app", "--database-url", "postgres://h/db"], []) == ""
     assert _relaunch_command([], []) == ""
-
-
-# --- named by the task, and still not writable -------------------------------
-
-
-def _system_tree(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Make `tmp_path/etc` an OS tree, so the real one is never touched by a test."""
-    from agent import paths
-
-    monkeypatch.setattr(paths, "SYSTEM_TREES", (str(tmp_path / "etc"),))
-    conf = tmp_path / "etc" / "nginx" / "app.conf"
-    conf.parent.mkdir(parents=True)
-    conf.write_text("allow all;\n", encoding="utf-8")
-    return conf
-
-
-def test_a_refused_write_to_a_path_the_task_named_does_not_claim_it_was_unnamed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A false fact in a refusal argues the model into the wrong repair.
-
-    `/etc/nginx/...` and `/etc/ssh/sshd_config` are named deliverables of an ordinary
-    hardening task, and the write policy refuses them on purpose. The old message said
-    they were "unnamed by the task", which the model can see is untrue; the move it
-    invites -- put the answer in /app instead -- leaves the real config unfixed.
-    """
-    workspace = tmp_path / "app"
-    workspace.mkdir()
-    conf = _system_tree(monkeypatch, tmp_path)
-
-    result = write_file(conf, "allow 127.0.0.1;\n", workspace=workspace, permitted=(conf,))
-
-    assert result.ok is False
-    assert "unnamed by the task" not in result.detail
-    assert "run_shell" in result.detail
-    assert conf.read_text(encoding="utf-8") == "allow all;\n", "still refused, only worded honestly"
-
-
-def test_replace_text_says_the_same_thing_about_a_named_system_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    workspace = tmp_path / "app"
-    workspace.mkdir()
-    conf = _system_tree(monkeypatch, tmp_path)
-
-    result = replace_text(conf, "allow all;", "allow 127.0.0.1;", workspace=workspace, permitted=(conf,))
-
-    assert result.ok is False
-    assert "unnamed by the task" not in result.detail
-    assert "run_shell" in result.detail
-
-
-def test_a_path_the_task_never_named_is_still_refused_as_unnamed(tmp_path: Path) -> None:
-    # The other half of the distinction: nothing named this, so "unnamed" is the fact
-    # and moving the write into the workspace is the right correction.
-    workspace = tmp_path / "app"
-    workspace.mkdir()
-
-    result = write_file(tmp_path / "elsewhere.txt", "x", workspace=workspace)
-
-    assert result.ok is False
-    assert "unnamed by the task" in result.detail

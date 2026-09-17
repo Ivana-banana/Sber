@@ -276,6 +276,13 @@ def _transport_reason(exc: BaseException) -> str:
     return f"transport failed: {type(exc).__name__}"
 
 
+CONTEXT_MARKERS = ("context length", "context window", "maximum context", "context_length")
+"""Markers that name the prompt. The only ones safe to read outside this module."""
+
+_OUTPUT_BUDGET_MARKERS = ("max_tokens", "max_new_tokens")
+"""Markers that name the ceiling. Meaningful only behind the gates at the call site."""
+
+
 def _looks_like_context_overflow(detail: str) -> str | None:
     """The marker in a 400 body that says the raised output budget overran the context.
 
@@ -286,10 +293,26 @@ def _looks_like_context_overflow(detail: str) -> str | None:
     lowered = detail.lower()
     # Context-specific markers only: a generic 400 (an unsupported response_format on a
     # strict server, say) must still step the protocol down, not lower the ceiling.
-    for marker in ("context length", "context window", "maximum context", "context_length", "max_tokens", "max_new_tokens"):
+    for marker in CONTEXT_MARKERS + _OUTPUT_BUDGET_MARKERS:
         if marker in lowered:
             return marker
     return None
+
+
+def reason_is_context_overflow(reason: str) -> bool:
+    """Whether a refusal names the *prompt* rather than the output budget.
+
+    Narrower than `_looks_like_context_overflow` on purpose. That one runs behind three
+    gates -- a SHAPE status, a ceiling this client raised, and room left to halve it --
+    so a bare `max_tokens` in the body can only mean the ceiling there. A caller with
+    none of those gates, `agent.loop` deciding whether to throw its history away, would
+    otherwise read every ordinary `max_tokens` validation error as an overflow: a
+    llama.cpp "must be a positive integer", a LiteLLM "not supported with this model", a
+    422 echoing our own request body, even a schema failure quoting a key name. Measured
+    on twelve real error bodies, eight of them were.
+    """
+    lowered = reason.lower()
+    return any(marker in lowered for marker in CONTEXT_MARKERS)
 
 
 def _has_reasoning_field(message: dict[str, Any]) -> bool:
@@ -340,8 +363,11 @@ def _thinking_evidence(
         return "reasoning field"
     if finish != "length":
         return ""
-    content = message.get("content")
-    content = content if isinstance(content, str) else ""
+    # `_content_text`, the same reading `_read_reply` uses: a proxy that ships the
+    # content as a list of parts would otherwise look like a reply with nothing visible
+    # in it, and an ordinary answer that ran out of room would be read as a thinking
+    # span -- the verdict this function exists to withhold.
+    content = _content_text(message)
     if "<think>" in content or "</think>" in content:
         return "truncated inside a think block"
     if content.strip() or message.get("tool_calls"):
@@ -395,8 +421,7 @@ def _runaway_reasoning(message: dict[str, Any], evidence: str, *, was_raised: bo
         # `_thinking_evidence` already refuses a bare truncated tool call; this also
         # covers the endpoint that returns a reasoning field *and* a cut-off call.
         return False
-    content = message.get("content")
-    return not _strip_thinking(content if isinstance(content, str) else "").strip()
+    return not _strip_thinking(_content_text(message)).strip()
 
 
 def _unwrap_function_envelope(value: Any, schema: dict[str, Any]) -> dict[str, Any] | None:
@@ -1058,7 +1083,7 @@ class HttpLlm:
                     verdict == SHAPE
                     and self._thinking_off
                     and not thinking_dropped
-                    and not _looks_like_context_overflow(detail)
+                    and not reason_is_context_overflow(detail)
                 ):
                     # `chat_template_kwargs` is the one key in this body that no
                     # OpenAI-compatible server promises to accept, and a gateway
@@ -1078,6 +1103,15 @@ class HttpLlm:
                     # smaller ceiling above, and it still is not about the switch on the
                     # call where the cap has already reached the floor and that branch
                     # can no longer fire.
+                    #
+                    # The narrow reading, and not the wide one the ceiling branch uses:
+                    # that one is allowed to take a bare `max_tokens` for an overflow
+                    # because three gates have already been passed by the time it runs.
+                    # Here there are none, and a gateway refusing `chat_template_kwargs`
+                    # with `extra="forbid"` quotes the rejected body back -- `max_tokens`
+                    # and all -- so the wide reading would hand every such refusal to the
+                    # branch above, spend the ceiling on it, and leave the sticky key on
+                    # every later call of the run.
                     thinking_dropped = True
                     self._thinking_off = False
                     lowered = detail.lower()

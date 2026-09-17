@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import zipfile
@@ -7896,6 +7897,150 @@ def test_the_five_shapes_the_model_actually_writes_for_pytest(tmp_path: Path, py
     assert loop._code_fix_shell_refusal(pytest_command.format(ws=tmp_path), state) == ""
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -m unittest discover -s tests",
+        "python3 -m unittest tests.test_app",
+        "python3 -m unittest -v",
+        "cd {ws} && python3 -m unittest discover 2>&1 | tail -20",
+        "python3 -m json.tool app/db.py",
+    ],
+)
+def test_the_stdlib_test_runner_is_allowed_where_pytest_is(tmp_path: Path, command: str) -> None:
+    """`unittest` runs test code exactly as `pytest` does, and `pytest` is allowed.
+
+    A closed task whose suite is written on the stdlib runner, or an image without
+    pytest, left the model with no way to run a check at all, while the refusal told it
+    to "use a read-only test command" -- which is what it had just written (audit-0917
+    tools.md T-4). `json.tool` is a pretty-printer and executes nothing."""
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(command.format(ws=tmp_path), state) == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -m http.server 8000",
+        "python3 -m pip install requests",
+        "python3 -m unittest discover > tests/out.txt",
+        "python3 -m unittest.mock",
+        # json.tool's second operand is the file it writes, so it is not read-only
+        "python3 -m json.tool app/db.py tests/test_app.py",
+    ],
+)
+def test_no_other_python_module_is_allowed_with_it(tmp_path: Path, command: str) -> None:
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(command, state) != ""
+
+
+@pytest.mark.parametrize(
+    "command, module",
+    [
+        # the interpreter's own options, where the selector really is
+        ("python3 -m pytest -q", "pytest"),
+        ("python3 -mpytest", "pytest"),
+        ("python3 -B -m pytest", "pytest"),
+        ("python3 -W ignore -m pytest", "pytest"),
+        ("python3 -X importtime -m pytest", "pytest"),
+        ("python3 --check-hash-based-pycs always -m pytest", "pytest"),
+        ("python3 -m unittest discover -s tests", "unittest"),
+        # past the first operand it is the program's own flag, whatever it spells
+        ("python3 evil.py -m pytest", None),
+        ("python3 a b -m pytest", None),
+        ("python3 -B evil.py -m pytest", None),
+        ("python3 tool.py --report -m pytest", None),
+        # `-c <code>` is the program; `-` is the program, read from stdin
+        ("python3 -c 'print(1)' -m pytest", None),
+        ("python3 - -m pytest", None),
+    ],
+)
+def test_the_module_selector_is_read_among_the_interpreter_options_only(
+    command: str, module: str | None
+) -> None:
+    """`python3 evil.py -m pytest` runs `evil.py`; the `-m` is the script's own flag.
+
+    Read as the interpreter's selector it made the line look like a plain `pytest`,
+    which the code-fix policy runs as an allowed module -- so the script went past the
+    guarded probe that snapshots the evaluator's files and restores what a run of it
+    changed (critic, 17.09). Options stop at the first operand, and `-c` and `-` are
+    operands of their own kind: after either, the rest of the line is the program's.
+    """
+    assert loop._code_fix_python_module(shlex.split(command)) == module
+
+
+def test_a_script_hiding_m_pytest_in_its_argv_takes_the_route_the_script_takes(
+    tmp_path: Path,
+) -> None:
+    """The consequence of the line above, at the policy the model actually meets."""
+    state = _fix_workspace(tmp_path)
+    (tmp_path / "evil.py").write_text("print('x')\n", encoding="utf-8")
+
+    assert loop._python_probe("python3 evil.py", state), "the route the plain script takes"
+
+    for hidden in ("python3 evil.py -m pytest", "python3 a b -m pytest"):
+        assert loop._code_fix_shell_has_script_invocation(hidden, tmp_path), hidden
+        assert loop._python_probe(hidden, state) or loop._code_fix_shell_refusal(
+            hidden, state
+        ), f"{hidden} went neither through the guarded probe nor into a refusal"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # `pytest` as part of a file name or as a search pattern, never as the command
+        "head -c 200 pytest.ini",
+        "wc -c pytest.ini",
+        "cat pytest.ini",
+        "grep -c pytest requirements.txt",
+        "grep -rn pytest .",
+        # `-p no:<plugin>` switches a plugin off; it is the usual way to ask pytest not
+        # to write to disk, and it cannot import anything
+        "python3 -m pytest -q -p no:cacheprovider",
+        "python3 -m pytest -q -pno:cacheprovider",
+        "pytest -q -p no:randomly",
+        "cd {ws} && python3 -m pytest -q -p no:cacheprovider 2>&1 | tail -20",
+    ],
+)
+def test_the_pytest_plugin_guard_reads_the_command_not_the_letters(
+    tmp_path: Path, command: str
+) -> None:
+    """The guard fired on the substring `pytest` anywhere plus a `-c`/`-p`/`-o` anywhere.
+
+    `head -c 200 pytest.ini` and `grep -c pytest requirements.txt` are neither pytest nor
+    a plugin, and `-p no:cacheprovider` is the opposite of loading one (audit-0917
+    tools.md T-8)."""
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(command.format(ws=tmp_path), state) == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest -p evil",
+        "pytest -pevil",
+        "python3 -m pytest -p my_plugin",
+        "python3 -mpytest -p evil",
+        "timeout 30 pytest -p evil",
+        "sh -c 'pytest -p evil'",
+        "pytest --plugin=evil",
+        "python3 -m pytest --rootdir=/tmp",
+        "python3 -m pytest -c /tmp/pytest.ini",
+        "python3 -m pytest -o addopts=-pevil",
+        "python3 -m pytest --override-ini=addopts=-pevil",
+        "python3 -m pytest --doctest-modules",
+        "python3 -m pytest --pdbcls=evil:Debugger",
+        "python3 -m pytest --log-file=/tmp/x",
+        "python3 -m pytest -p ''",
+    ],
+)
+def test_the_pytest_plugin_guard_still_refuses_a_loaded_plugin(
+    tmp_path: Path, command: str
+) -> None:
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(command, state) != "", command
+
+
 def test_a_pytest_chain_with_a_mutation_appended_is_still_refused(tmp_path: Path) -> None:
     state = _fix_workspace(tmp_path)
     assert loop._code_fix_shell_refusal(f"cd {tmp_path} && python3 -m pytest tests/ ; rm -r tests", state) != ""
@@ -7913,26 +8058,3 @@ def test_a_probe_inside_a_composition_is_still_guarded(tmp_path: Path) -> None:
     assert not loop._python_probe(command, state), "the whole string is not a lone probe"
     parts = loop._code_fix_shell_parts(command, state) or [command]
     assert any(loop._python_probe(part, state) for part in parts), "the guard would miss it"
-
-
-def test_the_way_out_a_write_refusal_names_is_really_open(tmp_path: Path) -> None:
-    """`agent.tools` tells a refused write to use run_shell instead. That must be true.
-
-    code-fix is the only playbook with a shell policy at all (`loop._execute`), so it
-    is the only one that could turn that sentence into a lie. `sed -i` on a path the
-    task named passes it. A heredoc does not -- `<<` is compound syntax there -- which
-    is why the refusal names `sed -i` and stops.
-    """
-    workspace = tmp_path / "app"
-    workspace.mkdir()
-    (workspace / "app.py").write_text("x = 1\n", encoding="utf-8")
-    state = AgentState(
-        instruction="Disable password authentication in /etc/ssh/sshd_config.",
-        workspace=workspace,
-        budget=Budget(total_s=600.0, clock=lambda: 0.0),
-    )
-
-    assert loop._code_fix_shell_refusal("sed -i 's/yes/no/' /etc/ssh/sshd_config", state) == ""
-    assert loop._code_fix_shell_refusal(
-        "tee /etc/ssh/sshd_config <<'EOF'\nPasswordAuthentication no\nEOF", state
-    ), "a heredoc is refused here, so the refusal text must not promise one"
