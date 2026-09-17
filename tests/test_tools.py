@@ -369,6 +369,43 @@ def test_reading_the_environment_out_of_a_file_does_not_leak_the_key(tmp_path: P
     assert secret not in found.output
 
 
+def test_read_range_redacts_a_secret_the_byte_limit_cuts_in_half(tmp_path: Path) -> None:
+    """The window is cut at `READ_MAX_BYTES`, and a secret can straddle that cut.
+
+    Redaction ran over the assembled body, so by then the secret was already half of
+    itself and matched nothing: the surviving prefix travelled into the context, which
+    is the one thing the file tools promise never to do. Redacting the line before it is
+    cut removes the choice.
+    """
+    secret = "sk-not-a-real-key-0123456789"
+    filler = "y" * (limits.READ_MAX_BYTES - 8)
+    target = tmp_path / "huge.log"
+    target.write_text(f"{filler}{secret}\ntail\n", encoding="utf-8")
+
+    result = read_range(target, start_line=1, max_lines=1, secrets=(secret,))
+
+    assert result.ok is True
+    assert result.truncated is True
+    for length in range(8, len(secret) + 1):
+        assert secret[:length] not in result.output, f"a {length}-character prefix leaked"
+
+
+def test_read_range_without_secrets_cuts_exactly_where_it_always_did(tmp_path: Path) -> None:
+    """The byte-for-byte guard on the change above: with nothing to redact, nothing moves."""
+    filler = "y" * (limits.READ_MAX_BYTES - 8)
+    tail = "0123456789abcdefghij"
+    target = tmp_path / "huge.log"
+    target.write_text(f"{filler}{tail}\ntail\n", encoding="utf-8")
+
+    result = read_range(target, start_line=1, max_lines=1)
+
+    body = f"{filler}{tail}\n"[: limits.READ_MAX_BYTES]
+    metadata = (
+        f"[read_range source={target} start_line=1 end_line=1 eof=no truncated=yes]"
+    )
+    assert result.output == f"{body}\n… [window cut at line 1] …\n{metadata}"
+
+
 def test_read_range_past_the_end_says_so_instead_of_returning_nothing(tmp_path: Path) -> None:
     target = tmp_path / "short.txt"
     target.write_text("only line\n", encoding="utf-8")

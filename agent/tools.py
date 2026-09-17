@@ -821,6 +821,9 @@ def read_range(
     """
     start_line = max(1, start_line)
     max_lines = max(1, min(max_lines, limits.READ_MAX_LINES))
+    # Read once per line now, so a caller that passed an iterator would hand the second
+    # line an exhausted one.
+    secrets = tuple(secrets)
 
     if not _is_regular_file(path):
         return ToolResult(name="read_range", ok=False, detail=f"not a regular file: {path}")
@@ -842,12 +845,19 @@ def read_range(
                 if room <= 0:
                     truncated = True
                     break
-                if len(line) > room:
-                    collected.append(line[:room])
+                # Redacted before the cut, not after. A secret sitting across the byte
+                # limit would otherwise be halved by the slice, and half a secret is not
+                # a match for `redact`, so the surviving prefix travelled into the
+                # context -- the one thing the file tools promise never to do. With no
+                # secrets `redact` returns the line it was given, so every window that
+                # has ever been measured is byte for byte what it was.
+                visible = redact(line, secrets)
+                if len(visible) > room:
+                    collected.append(visible[:room])
                     truncated = True
                     break
-                collected.append(line)
-                used += len(line)
+                collected.append(visible)
+                used += len(visible)
     except OSError as exc:
         return ToolResult(
             name="read_range",
