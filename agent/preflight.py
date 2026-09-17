@@ -259,7 +259,12 @@ def _walk(root: Path, budget: int) -> tuple[list[str], int, str]:
                 continue
             if child.is_dir():
                 listed.append(f"{relative}/")
-                if depth + 1 < limits.BRIEF_MAX_DEPTH:
+                # Named but not entered, for the same reason `_locate` and the source
+                # index skip them: the image ships `/app/.venv` before any task is
+                # copied in, and its first level alone is eight of the thirty lines
+                # this budget has -- on a wide workspace, the last eight, which are
+                # the ones the task's own files needed.
+                if depth + 1 < limits.BRIEF_MAX_DEPTH and child.name not in _SKIPPED_DIRS:
                     queue.append((Path(child.path), depth + 1))
             else:
                 listed.append(relative)

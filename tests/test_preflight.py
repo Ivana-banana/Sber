@@ -176,6 +176,47 @@ def test_nested_directories_are_summarised_but_not_walked_forever(tmp_path: Path
     assert "level9" not in rendered, "depth is capped; the loop searches the rest on demand"
 
 
+def test_the_image_virtualenv_does_not_spend_the_tree_on_itself(tmp_path: Path) -> None:
+    # `/app/.venv` is put there by the base image, before any task is copied in, so
+    # every brief on every task pays for it. Directories sort first and `.` sorts
+    # before every letter, so it is also the first thing the walk descends into: on a
+    # wide workspace its entries take the last slots of the budget and the files the
+    # task shipped never reach the model at all. That is C1 verbatim -- eight evidence
+    # files named nowhere, and a report written out of nothing.
+    workspace = tmp_path / "app"
+    venv = workspace / ".venv"
+    for name in ("bin", "include", "lib", "lib64", "share"):
+        (venv / name).mkdir(parents=True)
+    (venv / "bin" / "python3").write_text("#!/bin/sh\n", encoding="utf-8")
+    (venv / "lib" / "site.py").write_text("x\n", encoding="utf-8")
+    (venv / ".gitignore").write_text("*\n", encoding="utf-8")
+    (venv / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172\n", encoding="utf-8")
+    (venv / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
+    for number in range(20):
+        (workspace / f"note{number:02d}.txt").write_text("x\n", encoding="utf-8")
+    evidence = workspace / "incident"
+    evidence.mkdir()
+    names = (
+        "app.jsonl", "auth.log", "dns.txt", "edge.log",
+        "flagged.json", "notes.md", "proxy.log", "report.tmpl",
+    )
+    for name in names:
+        (evidence / name).write_text("x\n", encoding="utf-8")
+
+    brief = inspect_environment(workspace, ENV)
+    rendered = brief.render()
+
+    inside = [entry for entry in brief.entries if entry.startswith(".venv/") and entry != ".venv/"]
+    assert not inside, f"the virtualenv's contents answer no question the task asked: {inside}"
+    assert ".venv/" in brief.entries, (
+        "the directory itself stays -- `/app/.venv/bin/python` is how the verifier "
+        "starts the application in the fix-sqli tasks"
+    )
+    assert brief.hidden_entries == 0, "nothing the task shipped was pushed out of the tree"
+    for name in names:
+        assert f"incident/{name}" in rendered, "the evidence is what the brief is for"
+
+
 def test_an_absent_tool_with_a_verified_substitute_names_it(tmp_path: Path, monkeypatch) -> None:
     # Reporting `sqlite3: absent` only tells the model its first plan is dead. The
     # substitutes below were run inside secureintelligent/acp on 2026-08-26, so the
