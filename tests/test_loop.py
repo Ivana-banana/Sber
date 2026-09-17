@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import zipfile
@@ -7931,6 +7932,57 @@ def test_the_stdlib_test_runner_is_allowed_where_pytest_is(tmp_path: Path, comma
 def test_no_other_python_module_is_allowed_with_it(tmp_path: Path, command: str) -> None:
     state = _fix_workspace(tmp_path)
     assert loop._code_fix_shell_refusal(command, state) != ""
+
+
+@pytest.mark.parametrize(
+    "command, module",
+    [
+        # the interpreter's own options, where the selector really is
+        ("python3 -m pytest -q", "pytest"),
+        ("python3 -mpytest", "pytest"),
+        ("python3 -B -m pytest", "pytest"),
+        ("python3 -W ignore -m pytest", "pytest"),
+        ("python3 -X importtime -m pytest", "pytest"),
+        ("python3 --check-hash-based-pycs always -m pytest", "pytest"),
+        ("python3 -m unittest discover -s tests", "unittest"),
+        # past the first operand it is the program's own flag, whatever it spells
+        ("python3 evil.py -m pytest", None),
+        ("python3 a b -m pytest", None),
+        ("python3 -B evil.py -m pytest", None),
+        ("python3 tool.py --report -m pytest", None),
+        # `-c <code>` is the program; `-` is the program, read from stdin
+        ("python3 -c 'print(1)' -m pytest", None),
+        ("python3 - -m pytest", None),
+    ],
+)
+def test_the_module_selector_is_read_among_the_interpreter_options_only(
+    command: str, module: str | None
+) -> None:
+    """`python3 evil.py -m pytest` runs `evil.py`; the `-m` is the script's own flag.
+
+    Read as the interpreter's selector it made the line look like a plain `pytest`,
+    which the code-fix policy runs as an allowed module -- so the script went past the
+    guarded probe that snapshots the evaluator's files and restores what a run of it
+    changed (critic, 17.09). Options stop at the first operand, and `-c` and `-` are
+    operands of their own kind: after either, the rest of the line is the program's.
+    """
+    assert loop._code_fix_python_module(shlex.split(command)) == module
+
+
+def test_a_script_hiding_m_pytest_in_its_argv_takes_the_route_the_script_takes(
+    tmp_path: Path,
+) -> None:
+    """The consequence of the line above, at the policy the model actually meets."""
+    state = _fix_workspace(tmp_path)
+    (tmp_path / "evil.py").write_text("print('x')\n", encoding="utf-8")
+
+    assert loop._python_probe("python3 evil.py", state), "the route the plain script takes"
+
+    for hidden in ("python3 evil.py -m pytest", "python3 a b -m pytest"):
+        assert loop._code_fix_shell_has_script_invocation(hidden, tmp_path), hidden
+        assert loop._python_probe(hidden, state) or loop._code_fix_shell_refusal(
+            hidden, state
+        ), f"{hidden} went neither through the guarded probe nor into a refusal"
 
 
 @pytest.mark.parametrize(

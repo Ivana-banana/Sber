@@ -2097,13 +2097,42 @@ operands is being read and not overwritten. `json.tool` is left out because its 
 positional argument is the file it writes into."""
 
 
+_PYTHON_OPTIONS_TAKING_A_VALUE = frozenset({"-W", "-X", "--check-hash-based-pycs"})
+"""Interpreter options whose value is the next word, so the word after is not an operand.
+
+Only the separated spelling needs them. `-Wignore` is one word and is skipped as the
+option it is."""
+
+
 def _code_fix_python_module(words: list[str]) -> str | None:
-    """Return a Python -m module, including attached ``-mMODULE`` syntax."""
-    for index, word in enumerate(words[1:], start=1):
+    """The module `python -m` was given, or None when the line names no module.
+
+    Read among the interpreter's own options and nowhere else, which is where the
+    selector can be: the options end at the first operand, and everything after the
+    script path belongs to the script. `python3 evil.py -m pytest` runs `evil.py` and
+    hands it `-m pytest`; scanning the whole line found `pytest` there, and an allowed
+    module is not a script invocation -- so the script ran without the guarded probe
+    that snapshots the evaluator's files and restores whatever a run of it changed
+    (critic, 17.09).
+
+    `-c` and `-` are operands of their own kind: with either, the program is the code or
+    the standard input and the rest of the line is its argv, so neither can carry a
+    module. Attached `-mMODULE` still counts, because there the option is the operand.
+    """
+    index = 1
+    while index < len(words):
+        word = words[index]
         if word == "-m":
             return words[index + 1] if index + 1 < len(words) else ""
         if word.startswith("-m") and not word.startswith("--"):
             return word[2:]
+        if word == "-c" or (word.startswith("-c") and not word.startswith("--")):
+            return None
+        if word in {"-", "--"} or not word.startswith("-"):
+            return None
+        if word in _PYTHON_OPTIONS_TAKING_A_VALUE:
+            index += 1
+        index += 1
     return None
 
 
