@@ -624,6 +624,12 @@ class HttpLlm:
     thinking: there is nothing there to turn off, and the request buys another full-length
     generation for nothing."""
 
+    _thinking_unsupported: bool = field(default=False, repr=False)
+    """Set once, for the rest of the run, when the endpoint answered a body carrying
+    `chat_template_kwargs` with a shape error: the key is not a dialect this server
+    knows. Asking again buys the same refusal on every later call, so the switch is
+    taken off the escalation for good and truncation stops one rung earlier."""
+
     _output_cap: int = field(default=limits.LLM_THINKING_MAX_OUTPUT_TOKENS, repr=False)
     """Upper bound on the raised ceiling, lowered only when the server answers a raised
     request with a 400 about context length: `prompt + max_tokens > num_ctx` on a strict
@@ -997,6 +1003,18 @@ class HttpLlm:
                     self._note("thinking", f"context rejected the budget; capping output at {self._output_cap}")
                     continue
 
+                if verdict == SHAPE and self._thinking_off:
+                    # `chat_template_kwargs` is the one key in this body that no
+                    # OpenAI-compatible server promises to accept, and a gateway
+                    # validating with `extra="forbid"` rejects it. The rung is not what
+                    # was refused: drop the switch and repeat the same request. Without
+                    # this the ladder is spent on a field that has nothing to do with the
+                    # rung, and the key -- sticky -- then refuses every later call too.
+                    self._thinking_off = False
+                    self._thinking_unsupported = True
+                    self._note("thinking", "endpoint refused enable_thinking; dropping the flag")
+                    continue
+
                 if verdict == FATAL:
                     # A rejected key, an unknown model or an unknown route. The ladder
                     # cannot fix any of them and retrying only spends the deadline.
@@ -1086,7 +1104,11 @@ class HttpLlm:
                         # readable when only one of them fired.
                         self._note("budget", "reply truncated by length; raising the output ceiling")
                         continue
-                    if self._thinking_endpoint and not self._thinking_off:
+                    if (
+                        self._thinking_endpoint
+                        and not self._thinking_off
+                        and not self._thinking_unsupported
+                    ):
                         self._thinking_off = True
                         self._note("thinking", "still truncated; asking the endpoint to skip thinking")
                         continue
