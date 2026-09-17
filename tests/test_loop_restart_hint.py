@@ -472,6 +472,7 @@ def synthetic_stale_service(
     """A workspace whose edit is newer than the one process serving it, and its hint."""
     changed = write_app(tmp_path)
     (tmp_path / "tests").mkdir(exist_ok=True)
+    (tmp_path / "tests" / "test_app.py").write_text("def test_x(): pass\n", encoding="utf-8")
     (tmp_path / ".git").mkdir(exist_ok=True)
     proc = write_proc(
         tmp_path.parent / f"{tmp_path.name}-proc",
@@ -550,6 +551,23 @@ def test_the_restart_shape_does_not_launder_anything_else(
     command = template.format(cwd=tmp_path, argv="uvicorn main:app")
 
     assert loop._code_fix_shell_refusal(command, state) != "", command
+
+
+@LINUX_ONLY
+def test_a_relaunch_redirect_is_judged_by_inode_like_every_other_redirect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hardlink under /tmp is the evaluator file, and `>` on it truncates the original.
+
+    The rest of the shell path has judged redirects by inode since 0fc814f; the relaunch
+    read the spelling only (critic, 17.09).
+    """
+    state, _ = synthetic_stale_service(tmp_path, monkeypatch)
+    alias = tmp_path / "service-restart.log"
+    os.link(tmp_path / "tests" / "test_app.py", alias)
+
+    command = f"cd {tmp_path} && nohup uvicorn main:app >{alias} 2>&1 &"
+    assert loop._code_fix_shell_refusal(command, state) != ""
 
 
 @LINUX_ONLY
