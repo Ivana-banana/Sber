@@ -32,15 +32,6 @@ _NOTE = re.compile(
     r")\s*\Z",
     re.IGNORECASE,
 )
-_HEADING = re.compile(r"\A[ \t]*#{1,6}[ \t][^\n]*(?:\n|\Z)\s*")
-"""One leading markdown heading: the title of the instruction, not a step of it.
-
-`#` must open a real heading -- one to six of them followed by a space -- so `#1
-priority ...` or a shell comment is still prose standing in front of the write. Only
-the first is dropped; a second heading means the text has sections, and sections mean
-more than one sentence.
-"""
-
 _NEGATION = re.compile(
     r"\b(?:do|does|did|must|should|shall|may|can)\s+not\b"
     r"|\b(?:never|don't|doesn't|didn't|mustn't|shouldn't|can't|cannot|not)\b",
@@ -71,13 +62,6 @@ def exact_file_requirement(instruction: str) -> tuple[Path, bytes] | None:
     Anything less specific stays on the normal model-chosen verifier path rather than
     turning a report or a repair instruction into an invented content oracle.
     """
-    # A heading is dropped before anything is scanned, so every offset below belongs
-    # to the same string. 4 of the 6 public instructions and all 18 extra ones open
-    # with one, and the prefix guard read the title as an action taken before the
-    # write -- which is the whole one-call path, on the class whose public tasks are
-    # given 120 s. Nothing else relaxes: the guards on the prefix, the bridge and the
-    # tail all still run, on the text behind the title.
-    instruction = _HEADING.sub("", instruction, count=1)
     targets = [match for match in _TARGET.finditer(instruction) if not _is_negated(instruction, match.start())]
     contents = list(_CONTENT.finditer(instruction))
     if len(targets) != 1 or len(contents) != 1:

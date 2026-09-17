@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent import limits, result_contract
-from agent.paths import digest, verifiable
+from agent.paths import digest, permits
 from agent.redact import redact
 from agent.state import AgentState
 from agent.tools import run_shell
@@ -87,19 +87,14 @@ class VerifyResult:
 def _resolve_deliverable(
     path: Path, workspace: Path, permitted: tuple[Path, ...] = ()
 ) -> Path | None:
-    """Join a workspace-relative path; refuse one the task never pointed at.
+    """Join a workspace-relative path; refuse one the run was never allowed to write.
 
-    `finish(path, ...)` takes whatever path shape the model gives it, and the model has
-    no reliable way to know whether the loop's cwd equals the workspace --
-    `agent/main.py`'s own `resolve_workspace` exists because that assumption was
-    already wrong once. `None` on escape rather than raising, because a wrong or
-    hostile path is data for `verify` to report, not a reason to crash the run.
-
-    The bound is `paths.verifiable`, not `paths.permits`: a deliverable the task named
-    inside a system tree is refused to the write tools but can still be produced with
-    `run_shell`, and a run that fixed `/etc/nginx/conf.d/app.conf` correctly must be
-    able to end on it. Writing there is still refused -- `agent.tools` asks `permits`
-    and nothing here changes that.
+    Mirrors `agent.tools.write_file`'s own guard. `finish(path, ...)` takes whatever
+    path shape the model gives it, and the model has no reliable way to know whether
+    the loop's cwd equals the workspace -- `agent/main.py`'s own `resolve_workspace`
+    exists because that assumption was already wrong once. `None` on escape rather
+    than raising, because a wrong or hostile path is data for `verify` to report, not
+    a reason to crash the run.
     """
     try:
         root = workspace.resolve()
@@ -107,7 +102,7 @@ def _resolve_deliverable(
         target = target.resolve()
     except OSError:
         return None
-    if not verifiable(target, root, permitted):
+    if not permits(target, root, permitted):
         return None
     return target
 
@@ -116,11 +111,10 @@ def verify(state: AgentState, *, deliverable: Path, command: str) -> VerifyResul
     """Check a claimed deliverable the way a public verifier would.
 
     `deliverable` may be relative to `state.workspace`, since that is what `finish`
-    hands the loop; it is resolved and confined to the workspace or to a path the task
-    itself named. Everything the write tools accept is accepted here, or a deliverable
-    the run was allowed to write would fail verification for existing in the place the
-    task asked for -- and one thing more, a named path in a system tree, which no tool
-    writes but `run_shell` can still produce (`paths.verifiable`).
+    hands the loop; it is resolved and confined the same way `write_file` confines a
+    write -- inside the workspace, or at a path the task itself named. The two have to
+    agree: a deliverable the run was allowed to write but not allowed to check would
+    fail verification for existing in the place the task asked for.
 
     The command's timeout comes from `state.budget.tool_timeout_s()`, never a tool
     default: a verify command is acting, and acting past the reserve is what

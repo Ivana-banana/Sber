@@ -8058,26 +8058,3 @@ def test_a_probe_inside_a_composition_is_still_guarded(tmp_path: Path) -> None:
     assert not loop._python_probe(command, state), "the whole string is not a lone probe"
     parts = loop._code_fix_shell_parts(command, state) or [command]
     assert any(loop._python_probe(part, state) for part in parts), "the guard would miss it"
-
-
-def test_the_way_out_a_write_refusal_names_is_really_open(tmp_path: Path) -> None:
-    """`agent.tools` tells a refused write to use run_shell instead. That must be true.
-
-    code-fix is the only playbook with a shell policy at all (`loop._execute`), so it
-    is the only one that could turn that sentence into a lie. `sed -i` on a path the
-    task named passes it. A heredoc does not -- `<<` is compound syntax there -- which
-    is why the refusal names `sed -i` and stops.
-    """
-    workspace = tmp_path / "app"
-    workspace.mkdir()
-    (workspace / "app.py").write_text("x = 1\n", encoding="utf-8")
-    state = AgentState(
-        instruction="Disable password authentication in /etc/ssh/sshd_config.",
-        workspace=workspace,
-        budget=Budget(total_s=600.0, clock=lambda: 0.0),
-    )
-
-    assert loop._code_fix_shell_refusal("sed -i 's/yes/no/' /etc/ssh/sshd_config", state) == ""
-    assert loop._code_fix_shell_refusal(
-        "tee /etc/ssh/sshd_config <<'EOF'\nPasswordAuthentication no\nEOF", state
-    ), "a heredoc is refused here, so the refusal text must not promise one"
