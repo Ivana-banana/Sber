@@ -7933,6 +7933,62 @@ def test_no_other_python_module_is_allowed_with_it(tmp_path: Path, command: str)
     assert loop._code_fix_shell_refusal(command, state) != ""
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        # `pytest` as part of a file name or as a search pattern, never as the command
+        "head -c 200 pytest.ini",
+        "wc -c pytest.ini",
+        "cat pytest.ini",
+        "grep -c pytest requirements.txt",
+        "grep -rn pytest .",
+        # `-p no:<plugin>` switches a plugin off; it is the usual way to ask pytest not
+        # to write to disk, and it cannot import anything
+        "python3 -m pytest -q -p no:cacheprovider",
+        "python3 -m pytest -q -pno:cacheprovider",
+        "pytest -q -p no:randomly",
+        "cd {ws} && python3 -m pytest -q -p no:cacheprovider 2>&1 | tail -20",
+    ],
+)
+def test_the_pytest_plugin_guard_reads_the_command_not_the_letters(
+    tmp_path: Path, command: str
+) -> None:
+    """The guard fired on the substring `pytest` anywhere plus a `-c`/`-p`/`-o` anywhere.
+
+    `head -c 200 pytest.ini` and `grep -c pytest requirements.txt` are neither pytest nor
+    a plugin, and `-p no:cacheprovider` is the opposite of loading one (audit-0917
+    tools.md T-8)."""
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(command.format(ws=tmp_path), state) == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest -p evil",
+        "pytest -pevil",
+        "python3 -m pytest -p my_plugin",
+        "python3 -mpytest -p evil",
+        "timeout 30 pytest -p evil",
+        "sh -c 'pytest -p evil'",
+        "pytest --plugin=evil",
+        "python3 -m pytest --rootdir=/tmp",
+        "python3 -m pytest -c /tmp/pytest.ini",
+        "python3 -m pytest -o addopts=-pevil",
+        "python3 -m pytest --override-ini=addopts=-pevil",
+        "python3 -m pytest --doctest-modules",
+        "python3 -m pytest --pdbcls=evil:Debugger",
+        "python3 -m pytest --log-file=/tmp/x",
+        "python3 -m pytest -p ''",
+    ],
+)
+def test_the_pytest_plugin_guard_still_refuses_a_loaded_plugin(
+    tmp_path: Path, command: str
+) -> None:
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(command, state) != "", command
+
+
 def test_a_pytest_chain_with_a_mutation_appended_is_still_refused(tmp_path: Path) -> None:
     state = _fix_workspace(tmp_path)
     assert loop._code_fix_shell_refusal(f"cd {tmp_path} && python3 -m pytest tests/ ; rm -r tests", state) != ""

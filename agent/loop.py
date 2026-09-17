@@ -2103,7 +2103,20 @@ def _code_fix_python_module(words: list[str]) -> str | None:
 
 
 def _code_fix_shell_has_pytest_plugin_option(command: str) -> bool:
-    """Reject pytest plugin imports hidden in otherwise read-only test commands."""
+    """Reject pytest plugin imports hidden in otherwise read-only test commands.
+
+    Two corrections to what this used to ask (audit-0917 tools.md T-8). It fired on the
+    substring `pytest` anywhere in the line, so a file named `pytest.ini` or a search
+    pattern was enough: `head -c 200 pytest.ini`, `wc -c pytest.ini` and `grep -c pytest
+    requirements.txt` were all refused as plugin injections. Only the options *after* the
+    word that invokes pytest are its options now -- which also keeps the wrapped forms
+    (`timeout 30 pytest -p evil`, `sh -c '...'`, `python -mpytest`) caught as before.
+
+    And `-p no:<plugin>` switches a plugin off. It is the ordinary way to ask pytest not
+    to write to disk (`-p no:cacheprovider`), and it imports nothing; every other `-p`,
+    and every option that can point pytest at another config, rootdir or conftest, is
+    refused as before.
+    """
     for nested_command in _code_fix_shell_c_payloads(command):
         if _code_fix_shell_has_pytest_plugin_option(nested_command):
             return True
@@ -2111,19 +2124,34 @@ def _code_fix_shell_has_pytest_plugin_option(command: str) -> bool:
         words = shlex.split(command)
     except ValueError:
         return False
-    if not any(
-        PurePosixPath(word).name in {"pytest", "py.test"} for word in words
-    ) and "pytest" not in command:
+    invoked = next(
+        (
+            index
+            for index, word in enumerate(words)
+            if PurePosixPath(word).name in {"pytest", "py.test"}
+            or (word.startswith("-m") and not word.startswith("--") and word[2:] == "pytest")
+        ),
+        None,
+    )
+    if invoked is None:
         return False
+    arguments = words[invoked + 1 :]
+    for index, word in enumerate(arguments):
+        if word == "-p" or word == "--plugin":
+            plugin = arguments[index + 1] if index + 1 < len(arguments) else ""
+        elif word.startswith("-p") and not word.startswith("--"):
+            plugin = word[2:]
+        elif word.startswith("--plugin="):
+            plugin = word.split("=", 1)[1]
+        else:
+            continue
+        if not plugin.startswith("no:"):
+            return True
     return any(
-        word == "-p"
-        or (word.startswith("-p") and not word.startswith("--"))
-        or word == "-o"
+        word == "-o"
         or (word.startswith("-o") and not word.startswith("--"))
         or word == "-c"
         or (word.startswith("-c") and not word.startswith("--"))
-        or word == "--plugin"
-        or word.startswith("--plugin=")
         or word == "--pyargs"
         or word == "--doctest-modules"
         or word == "--doctest-glob"
@@ -2140,7 +2168,7 @@ def _code_fix_shell_has_pytest_plugin_option(command: str) -> bool:
         or word.startswith("--rootdir=")
         or word == "--log-file"
         or word.startswith("--log-file=")
-        for word in words
+        for word in arguments
     )
 
 
