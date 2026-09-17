@@ -2387,3 +2387,5 @@ PASS, архив `build/r2b.zip` sha `8f586438…74f2`. Гейты r2b (орак
 потомок `main`, вливается fast-forward. В сам `main` я не пушил (политика AFK), PR открывает человек.
 Оговорка: полный pytest для этой проверки (2 мин CPU) пришёлся на зачётный R2B-public (эпизоды
 fix-sqli-login r2–r3) — нарушил собственное правило тихой машины; учту при чтении времени этих эпизодов.
+
+**15:58 — человек слил PR #9 (`merge/r2b-into-main`) и PR #11 (`r2/loop`, по содержимому пустой) в `main` @ fc82507.** Проверено: дерево `agent/ tests/ scripts/ run.sh` в `main` побайтово равно `r2b` (diff 0 строк), архив из `git archive origin/main` — sha `6b9ba85c…1a3d`, check_submission PASS; `r2/general` откатана. Оставшиеся PR (`r2/tools-policy-b`) вливать не нужно — содержимое уже в main через r2b.
