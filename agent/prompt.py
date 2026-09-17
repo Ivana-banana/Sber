@@ -297,8 +297,32 @@ one call, not in every call of every task.
 """
 
 
+CONTEXT_FOCUS_NOTICE = (
+    "[фокус] Запрос не поместился в окно контекста модели, поэтому история сокращена. "
+    "Не рассуждай: сразу верни один короткий вызов инструмента для следующего шага "
+    "(если результат уже записан — finish с командой проверки)."
+)
+"""The same request, for the other thing that can narrow a call.
+
+A separate string and not a reworded `FOCUS_NOTICE`, for two reasons. The first is that
+`FOCUS_NOTICE` opens by telling the model its previous answer was cut off by length --
+true of a runaway, false of a server refusing the request before the model saw it, and a
+false sentence in the one line the model is asked to act on is worth more than the line
+saves. The second is that the runaway branch is the one reached on the measured stand,
+so its wording is a fixed point: it may not move while it still stands behind numbers.
+
+The ask -- one short call, no reasoning, finish if the result is already written -- is
+word for word the same, because what the loop needs back is the same.
+"""
+
+
 def build_messages(
-    system: str, observations: list[str], base: int = 0, *, focus: bool = False
+    system: str,
+    observations: list[str],
+    base: int = 0,
+    *,
+    focus: bool = False,
+    notice: str = FOCUS_NOTICE,
 ) -> list[Message]:
     """The full request: one system message and the observation history from `base`.
 
@@ -307,7 +331,8 @@ def build_messages(
     nothing here can silently drop the error the model needs to read -- and `base` comes
     from `history_base`, so what travels grows by one message a step until a re-lay.
 
-    `focus` closes the request with `FOCUS_NOTICE` and does nothing else. The narrowing
+    `focus` closes the request with `notice` -- `FOCUS_NOTICE` unless the caller names
+    the other one -- and does nothing else. The narrowing
     that goes with it is `focus_base`, computed by the caller and arriving here as `base`
     like any other: one place decides what travels, whether or not this is a focused
     request, so the two cannot narrow the same history twice and disagree about it.
@@ -324,5 +349,5 @@ def build_messages(
         messages.append({"role": "user", "content": OMISSION_NOTICE})
     messages.extend({"role": "user", "content": text} for text in observations[base:])
     if focus:
-        messages.append({"role": "user", "content": FOCUS_NOTICE})
+        messages.append({"role": "user", "content": notice})
     return messages

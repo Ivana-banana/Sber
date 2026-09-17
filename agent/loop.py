@@ -80,6 +80,18 @@ exactly what the one-action-per-step rule exists for.
 """
 
 
+FOCUS_CAUSES: dict[str, tuple[str, str]] = {
+    "runaway": ("a truncated reasoning reply", prompt.FOCUS_NOTICE),
+    "overflow": ("a context-overflow refusal", prompt.CONTEXT_FOCUS_NOTICE),
+}
+"""The two things that narrow the next request: `(audit note tail, line for the model)`.
+
+Kept together because they have to agree. A run whose trace says the reply ran away
+while the model is being told the request did not fit is a run nobody can read
+afterwards, and the two strings are written three hundred lines apart.
+"""
+
+
 @dataclass(frozen=True)
 class Outcome:
     """What the run has to show for itself. `solved` is never the model's opinion."""
@@ -113,14 +125,14 @@ def run(
     # Consecutive calls that failed in a way that says the endpoint cannot be used. A
     # call that merely timed out is counted separately -- see `_llm_failure_kind`.
     llm_failures = 0
-    # Whether the NEXT request is a focused one: a narrowed history plus one line asking
-    # for an action and no reasoning (`prompt.FOCUS_NOTICE`). Set by a reply that reasoned
-    # past the raised output ceiling without emitting anything, or by a refusal the client
-    # could not shrink its way out of, and only when the call that did it was not itself
-    # focused. `focus_cause` is the half-sentence the audit note is built from: two causes
-    # need two sentences, or a trace names the wrong one.
-    focus_next = False
-    focus_cause = ""
+    # Why the NEXT request is a focused one -- a key of `FOCUS_CAUSES`, or "" for the
+    # ordinary case. A focused request is a narrowed history plus one line asking for an
+    # action and no reasoning. It is set by a reply that reasoned past the raised output
+    # ceiling without emitting anything, or by a refusal the client could not shrink its
+    # way out of, and only when the call that did it was not itself focused. The cause
+    # travels with the flag rather than beside it, so consuming one cannot leave the
+    # other behind to mislabel a later call.
+    focus_next = ""
     # Index in `observations` of the newest entry that is a tool result rather than
     # something this loop said to itself. Only the narrowing of a focused request reads
     # it, and it reads it so that the narrowing cannot drop the last observed fact: the
@@ -207,15 +219,19 @@ def run(
         # Focus is consumed here, before the reply is read: whatever comes back, the next
         # request is an ordinary one unless a fresh runaway asks for another. That is what
         # makes a focus loop impossible rather than merely unlikely.
-        focused, focus_next = focus_next, False
+        focused, focus_next = focus_next, ""
         base = history_base
+        notice = prompt.FOCUS_NOTICE
         if focused:
             # Narrowed for this call only -- `history_base` keeps its anchor, so the next
             # ordinary request is the one that would have been sent anyway.
+            note, notice = FOCUS_CAUSES[focused]
             base = prompt.focus_base(observations, history_base, last_evidence)
-            state.record("budget", "focus", f"focused retry after {focus_cause}")
+            state.record("budget", "focus", f"focused retry after {note}")
         reply = llm.complete_structured(
-            prompt.build_messages(system, observations, base, focus=focused),
+            prompt.build_messages(
+                system, observations, base, focus=bool(focused), notice=notice
+            ),
             schema=prompt.ACTION_SCHEMA,
             # The same ceiling on a focused call as on any other. The raised output
             # budget is `agent.llm`'s and is sticky, and the model needs the room: what
@@ -247,7 +263,7 @@ def run(
                     stop_reason = "llm-unusable"
                     summary = f"endpoint unusable after {llm_failures} failed calls: {reply.reason}"
                     break
-                overflowed = bool(_llm._looks_like_context_overflow(reply.reason))
+                overflowed = _llm.reason_is_context_overflow(reply.reason)
                 if (reply.truncated_reasoning or overflowed) and not focused:
                     # The model reasoned to the ceiling and emitted nothing. Repeating the
                     # request buys the same non-answer -- measured four times in a row on
@@ -281,12 +297,7 @@ def run(
                     # Decided here, audited where the request is actually built: the clock
                     # or the step cap can end the run in between, and a trace must not
                     # claim a retry nobody sent.
-                    focus_next = True
-                    focus_cause = (
-                        "a truncated reasoning reply"
-                        if reply.truncated_reasoning
-                        else "a context-overflow refusal"
-                    )
+                    focus_next = "runaway" if reply.truncated_reasoning else "overflow"
             else:
                 # A call that ran out of wall clock with nothing delivered says the
                 # endpoint is slow, not broken, and the two must not end the run the same
