@@ -7707,6 +7707,34 @@ def test_spawning_through_posix_spawn_or_multiprocessing_is_refused_up_front(tmp
     assert loop._code_fix_shell_refusal(command, make_state(tmp_path)) != ""
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -c 'print(1)' && python3 -m pytest -q",
+        "cd {ws} && python3 -c 'import m' && python3 -m pytest tests/ -v 2>&1 | head -80",
+        "python3 -m pytest -q ; python3 -c 'print(1)'",
+        "python3 -c 'print(1)' && git status",
+    ],
+)
+def test_a_probe_mixed_with_other_commands_is_refused_with_the_way_out(tmp_path: Path, command: str) -> None:
+    # The snapshot covers the whole line: a fixture database pytest writes or the
+    # stat cache git refreshes would be charged to the probe (found by the critic).
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "conftest.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "m.py").write_text("x = 1\n", encoding="utf-8")
+    state = make_state(tmp_path)
+
+    result = _probe(command.format(ws=tmp_path), state)
+
+    assert result.ok is False and "as its own command" in result.detail
+    assert state.python_probes_disabled is False
+
+
+@pytest.mark.parametrize("command", ["cd ~ && python3 -c 'print(1)'", "cd - && python3 -c 'print(1)'", "cd $HOME && python3 -c 'print(1)'", "cd {ws}/missing && python3 -c 'print(1)'"])
+def test_a_cd_that_is_not_a_workspace_directory_is_not_stripped(tmp_path: Path, command: str) -> None:
+    assert loop._code_fix_shell_refusal(command.format(ws=tmp_path), make_state(tmp_path)) != ""
+
+
 def test_a_harmless_probe_runs_and_keeps_the_privilege(tmp_path: Path) -> None:
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "conftest.py").write_text("x = 1\n", encoding="utf-8")

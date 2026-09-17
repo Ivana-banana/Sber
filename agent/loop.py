@@ -2634,10 +2634,16 @@ def _strip_workspace_cd(command: str, state: AgentState) -> str:
     match = _WORKSPACE_CD.match(command)
     if not match:
         return command
+    spelled = match["dir"]
+    if spelled in {"-", "~"} or spelled.startswith(("~", "$")):
+        return command  # `$OLDPWD`, `$HOME`, `~user`: not a workspace path however it resolves
     try:
         root = state.workspace.resolve()
-        target = Path(match["dir"])
-        (target if target.is_absolute() else root / target).resolve().relative_to(root)
+        target = Path(spelled)
+        resolved = (target if target.is_absolute() else root / target).resolve()
+        resolved.relative_to(root)
+        if not resolved.is_dir():
+            return command
     except (OSError, ValueError):
         return command
     return match["rest"]
@@ -2932,7 +2938,24 @@ def _execute(
             # part. The guard has to look at the same parts, or a probe inside a pipe
             # would run with no snapshot behind it.
             probe_parts = _code_fix_shell_parts(command, state) or [command]
-            if any(_python_probe(part, state) for part in probe_parts):
+            probes = [part for part in probe_parts if _python_probe(part, state)]
+            if probes and len(probes) != len(probe_parts):
+                # A probe next to pytest or git in one line: the snapshot would cover
+                # the whole line and charge the neighbours' side effects (a fixture
+                # database, `.git/index`) to the probe -- output lost, privilege gone.
+                # Before the part-by-part split such a line was refused whole; keep it
+                # so, with the way out spelled.
+                return tools.ToolResult(
+                    name=tool,
+                    ok=False,
+                    detail=(
+                        "code-fix refused: run the Python check as its own command "
+                        "(a pipe into a filter such as `| head` is fine); combined with "
+                        "other commands its effect on the evaluator cannot be told apart "
+                        "from theirs."
+                    ),
+                )
+            if probes:
                 guarded = _protected_snapshot(state)
                 if guarded is None:
                     return tools.ToolResult(
