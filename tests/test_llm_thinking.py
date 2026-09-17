@@ -22,7 +22,7 @@ import urllib.error
 
 from agent import limits, llm
 from agent.ports import LlmError, LlmReply
-from tests.test_llm import ACTION_LIKE, ENV, make_client
+from tests.test_llm import ACTION_LIKE, ENV, make_client, tool_reply
 
 
 def _reply(
@@ -280,3 +280,53 @@ def test_nothing_is_sent_to_an_endpoint_that_never_showed_a_thought() -> None:
     client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
 
     assert not any("chat_template_kwargs" in body for body in endpoint.bodies)
+
+
+def test_an_endpoint_that_refuses_the_thinking_switch_drops_it_and_keeps_the_rung() -> None:
+    """A strict server answers the unknown key with a 400, and the key is sticky.
+
+    `chat_template_kwargs` is the newest thing in the body and the only one no
+    OpenAI-compatible server promises to accept: a gateway validating with
+    `extra="forbid"` rejects it. Read as "this rung is unsupported" the client spends the
+    whole ladder on it and then keeps sending the same key on every later call, so every
+    request of the task is refused -- three consecutive failures and `llm-unusable`.
+    The switch is a request about the model's reasoning, not about the request shape,
+    so a shape error is answered by dropping it and repeating the same rung.
+    """
+
+    class StrictEndpoint:
+        """Truncates twice, refuses any body carrying the thinking switch, then answers."""
+
+        def __init__(self) -> None:
+            self.bodies: list[dict] = []
+
+        def __call__(self, url, body, headers, timeout_s):
+            parsed = json.loads(body)
+            self.bodies.append(parsed)
+            if "chat_template_kwargs" in parsed:
+                return 400, b'{"error":"Extra inputs are not permitted: chat_template_kwargs"}'
+            if len(self.bodies) <= 2:
+                return 200, _reply("", finish="length", completion=2048)
+            return 200, tool_reply(ACTION)
+
+    endpoint = StrictEndpoint()
+    events: list[tuple[str, str]] = []
+    client = llm.HttpLlm(
+        settings=llm.LlmSettings.from_env(ENV),
+        transport=endpoint,
+        sleep=lambda _: None,
+        on_event=lambda kind, detail: events.append((kind, detail)),
+    )
+
+    first = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(first, LlmReply)
+    assert client.style == llm.NATIVE_TOOLS, "a refused key is not a refused rung"
+    assert "chat_template_kwargs" in endpoint.bodies[2], "the switch was tried once"
+    assert "chat_template_kwargs" not in endpoint.bodies[3], "and dropped for the retry"
+
+    second = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(second, LlmReply)
+    assert "chat_template_kwargs" not in endpoint.bodies[4], "and never sent again"
+    assert client.style == llm.NATIVE_TOOLS
