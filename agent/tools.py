@@ -182,10 +182,16 @@ def run_argv(
         spawn["env"] = dict(env)
 
     # argv is a list, so the model's text is one argument and never a command line.
+    # stdin is /dev/null and not ours: no caller here feeds the child anything, and a
+    # command with a forgotten operand -- `grep ERROR` without a file, a bare `cat`,
+    # `python3`, `sqlite3` -- would otherwise read the agent's own stdin and wait out
+    # the whole tool timeout, which on a file task is the whole task budget. At EOF the
+    # same commands answer at once, which is the answer the model can act on.
     try:
         process = subprocess.Popen(
             list(argv),
             cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             **spawn,  # type: ignore[arg-type]
@@ -530,6 +536,13 @@ def replace_text(
     Ambiguity is refused rather than resolved. Replacing the first of several matches
     is a coin flip the model cannot see the result of, and the count of matches is
     something it can act on by lengthening the anchor.
+
+    On a CRLF file an anchor written with "\n" is matched against the line ends the file
+    actually has, and the replacement is written back with them, because that anchor is
+    what `read_range` handed the model in the first place. The translated form must be
+    unique too; when it is not, the refusal says the endings are the reason. A file whose
+    lines end with a bare CR is named in the refusal and nothing more: it is rare enough
+    that guessing at it is not worth a write.
     """
     try:
         root = workspace.resolve()
@@ -583,13 +596,53 @@ def replace_text(
         )
 
     found = before.count(old)
+    # `read_range` opens a file with universal newlines, so on a CRLF file the model is
+    # shown "\n" and copies "\n" back into the anchor, while this comparison is over the
+    # raw bytes, where the line ends are "\r\n". Such an anchor could never match, and
+    # the refusal below speaks only of indentation -- so the model rewrites indentation
+    # for as long as its budget lasts. Translating the anchor is safe only when it is
+    # unambiguous, which is the same bar the whole tool holds: the CRLF form must occur
+    # exactly once, and neither side may already carry a "\r" of its own.
+    crlf_anchor = False
+    if found == 0 and "\r\n" in before and "\r" not in old and "\r" not in new:
+        as_written = old.replace("\n", "\r\n")
+        if before.count(as_written) == 1:
+            old, new = as_written, new.replace("\n", "\r\n")
+            found, crlf_anchor = 1, True
+
     if found == 0:
+        # Only when the CRLF form is really there: an anchor that is absent either way
+        # is not a line-ending problem, and a wrong hint costs a step to disprove.
+        crlf_found = before.count(old.replace("\n", "\r\n")) if "\r\n" in before and "\r" not in old else 0
+        # A classic-Mac file ends its lines with a lone "\r", which `read_range` also
+        # shows as "\n". Named, not translated: it is a rarer file than a CRLF one, and
+        # this branch has already refused to touch it.
+        bare_cr = "\r" in before and "\r\n" not in before and "\r" not in old and "\n" in old
+        cr_found = before.count(old.replace("\n", "\r")) if bare_cr else 0
+        if old.startswith("…") or old.endswith("…"):
+            # `search` marks a line it cut with "…", and the hit is the text the model
+            # has in front of it when it writes the anchor.
+            hint = (
+                " The `…` is where `search` cut the line for display; it is not in the file. "
+                "Read the region with read_range and copy the anchor from there."
+            )
+        elif crlf_found > 1:
+            hint = (
+                f" This file's lines end with CRLF, and with \\r\\n between them `old` appears "
+                f"{crlf_found} times; extend it with surrounding lines until it is unique."
+            )
+        elif crlf_found:
+            hint = " This file's lines end with CRLF: put \\r\\n between the lines of `old`."
+        elif cr_found:
+            hint = " This file's lines end with a bare CR: put \\r between the lines of `old`."
+        else:
+            hint = ""
         return ToolResult(
             name="replace_text",
             ok=False,
             detail=(
                 f"`old` does not appear in {target}. Read the file and copy the text "
-                f"to replace exactly, including indentation."
+                f"to replace exactly, including indentation.{hint}"
             ),
             duration_s=time.monotonic() - started,
         )
@@ -656,10 +709,11 @@ def replace_text(
     # error introduced in `new` breaks the module exactly as a bad write_file would --
     # report it the same way rather than answer only "replaced 1 occurrence".
     note = _python_compile_note(replacement, target)
+    matched = " (matched with CRLF line endings, which the file keeps)" if crlf_anchor else ""
     return ToolResult(
         name="replace_text",
         ok=True,
-        output=f"replaced 1 occurrence at line {line} of {target}{note}",
+        output=f"replaced 1 occurrence at line {line} of {target}{matched}{note}",
         duration_s=time.monotonic() - started,
     )
 
@@ -848,6 +902,58 @@ def _files_under(root: Path) -> Iterable[Path]:
                 yield path
 
 
+def _match_window(line: str, at: int) -> str:
+    """One match line, bounded and centred on the match rather than on the line's start.
+
+    The cut used to be `line[:MATCH_LINE_CHARS]` with no marker, so a match past column
+    200 -- minified JS or HTML, one long JSON string, a line-delimited forensic event
+    (300-800 characters is the normal size of one), a base64 blob, a long configuration
+    value -- reached the model as a screen of padding with a "here is the line" in front
+    of it and nothing in the line. Shifting the window onto the match and marking each
+    side that was cut with a "…" costs the same 200 characters and carries the evidence.
+
+    A line that fits is returned exactly as before, marker and all: this is the tool's
+    ordinary output, and it must not move. Neither does a line whose match the old window
+    already showed -- shifting there costs the head of the line, which is where a line
+    says what it is about and what a model copies as an anchor, and buys nothing. Over
+    this repository that was 1 433 023 of the 1 450 080 long match lines.
+    """
+    text = line.rstrip()
+    if len(text) <= MATCH_LINE_CHARS:
+        return text
+    # `rstrip` shortens the text the window is cut from, so a match inside the trailing
+    # whitespace can start past its end; clamp rather than trust the index.
+    at = max(0, min(at, len(text)))
+    if at < MATCH_LINE_CHARS - MATCH_LINE_CHARS // 4:
+        start = 0
+    else:
+        # Clamped so the window is always full and always inside the line; a little
+        # context before the match is worth more than centring it exactly.
+        start = max(0, min(at - MATCH_LINE_CHARS // 4, len(text) - MATCH_LINE_CHARS))
+    head = "…" if start else ""
+    tail = "…" if start + MATCH_LINE_CHARS < len(text) else ""
+    return f"{head}{text[start : start + MATCH_LINE_CHARS]}{tail}"
+
+
+def _skipped_note(count: int, compressed: bool) -> str:
+    """What to add to `no match` when files were skipped, empty when none were.
+
+    Empty and not "0 files skipped" on purpose: the ordinary answer of this tool is
+    compared against itself across runs, and a search that skipped nothing must read
+    exactly as it always has.
+
+    A count and one way out, no paths. An ordinary /app holds a database file, a few
+    images, a compiled translation and a rotated log, so the note is on the end of every
+    fruitless search there; a list of names would make that a paragraph, and the paths
+    are one `ls` away for a model that wants them. The gzip clause only when a `.gz` was
+    actually among them, for the same reason.
+    """
+    if not count:
+        return ""
+    gz = ", or zgrep" if compressed else ""
+    return f"; {count} binary/compressed file(s) not searched -- try run_shell: strings <file> | grep{gz}"
+
+
 def search(
     pattern: str,
     root: Path,
@@ -858,7 +964,11 @@ def search(
     """Find a regular expression in a file or under a directory, returning locations.
 
     Binary files are skipped rather than decoded: a match inside an ELF section tells
-    the model nothing it can act on and costs a screen of mojibake to say it.
+    the model nothing it can act on and costs a screen of mojibake to say it. When the
+    search then finds nothing, how many files were skipped is said out loud, because
+    `no match` over a tree of binaries is a proof of absence the model has no way to
+    doubt -- and on a CTF or a forensic image the evidence is usually in exactly those
+    files, reachable through `strings` or `zgrep` in the shell.
 
     A file is as valid a `root` as a directory. It used to walk one, and `os.walk` over
     a file yields nothing at all, so a pattern plainly present in the file the task had
@@ -884,27 +994,46 @@ def search(
         return ToolResult(name="search", ok=False, detail=f"no such path: {root}")
 
     hits: list[str] = []
+    skipped = 0
+    compressed = False
     truncated = False
     for target in targets:
         relative = target.relative_to(base).as_posix()
         try:
             if _looks_binary(target):
+                skipped += 1
+                compressed = compressed or target.suffix.lower() == ".gz"
                 continue
             with target.open("r", encoding="utf-8", errors="replace") as handle:
                 for number, line in enumerate(handle, start=1):
-                    if not expression.search(line):
+                    match = expression.search(line)
+                    if match is None:
                         continue
                     if len(hits) >= max_matches:
                         truncated = True
                         break
-                    hits.append(f"{relative}:{number}: {line.rstrip()[:MATCH_LINE_CHARS]}")
+                    # Redacted before the window is cut, not only after. Redaction is a
+                    # substring replacement, so a window that cuts through a key leaves a
+                    # prefix that no longer matches the value -- and a prefix of a key is
+                    # a key. The match is located again in the redacted line because the
+                    # placeholder is a different length; if it no longer matches there,
+                    # the placeholder swallowed it and the head of the line is the only
+                    # window that is honest about what is left.
+                    shown, at = line, match.start()
+                    if secrets:
+                        shown = redact(line, secrets)
+                        if shown != line:
+                            moved = expression.search(shown)
+                            at = moved.start() if moved is not None else 0
+                    hits.append(f"{relative}:{number}: {_match_window(shown, at)}")
         except OSError:
             continue
         if truncated:
             break
 
     if not hits:
-        return ToolResult(name="search", ok=False, detail=f"no match for {pattern!r} under {root}")
+        note = _skipped_note(skipped, compressed)
+        return ToolResult(name="search", ok=False, detail=f"no match for {pattern!r} under {root}{note}")
 
     body = "\n".join(hits)
     if truncated:

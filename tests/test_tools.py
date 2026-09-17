@@ -35,6 +35,11 @@ from agent.tools import (
 POSIX_ONLY = pytest.mark.skipif(os.name != "posix", reason="target image is Linux; /bin/sh absent on Windows")
 
 
+def limits_match_chars() -> int:
+    """The window `search` allows one match line, as the module defines it."""
+    return tools.MATCH_LINE_CHARS
+
+
 def python_argv(source: str) -> list[str]:
     """Run a snippet with the interpreter running the tests, on any platform."""
     return [sys.executable, "-c", source]
@@ -99,6 +104,32 @@ def test_a_hanging_command_is_killed_and_does_not_cost_its_full_sleep(tmp_path: 
     assert result.ok is False
     assert "timeout" in result.detail
     assert elapsed < 10, "the loop must get its step back, not wait out the child"
+
+
+@POSIX_ONLY
+def test_a_command_that_reads_stdin_gets_eof_instead_of_the_agent_terminal(tmp_path: Path) -> None:
+    # The child inherited our stdin, so a command with a forgotten operand -- `grep ERROR`
+    # without a file, a bare `cat`, `python3`, `sqlite3` -- waited on input nobody was
+    # going to send and burned the whole tool timeout, which on a file task is the whole
+    # task budget. fd 0 is made an open pipe here because that is what the runner leaves
+    # it as; under pytest it is already /dev/null, and the bug would not reproduce.
+    read_fd, write_fd = os.pipe()
+    saved_stdin = os.dup(0)
+    try:
+        os.dup2(read_fd, 0)
+        started = time.monotonic()
+        piped = run_argv(python_argv("import sys; print('read %d bytes' % len(sys.stdin.read()))"), cwd=tmp_path, timeout_s=5.0)
+        shelled = run_shell("cat", cwd=tmp_path, timeout_s=5.0)
+        elapsed = time.monotonic() - started
+    finally:
+        os.dup2(saved_stdin, 0)
+        for handle in (saved_stdin, read_fd, write_fd):
+            os.close(handle)
+
+    assert piped.ok is True, piped.detail
+    assert "read 0 bytes" in piped.output
+    assert shelled.ok is True, shelled.detail
+    assert elapsed < 4.0, "both commands must end at EOF, not at their timeout"
 
 
 def test_a_flood_of_output_is_bounded_before_it_reaches_the_model(tmp_path: Path) -> None:
@@ -391,6 +422,94 @@ def test_search_does_not_dump_a_binary_file(tmp_path: Path) -> None:
     assert "blob.bin" not in result.output
 
 
+def test_search_centres_a_long_line_on_the_match_and_marks_the_cut(tmp_path: Path) -> None:
+    # The window used to be the first 200 characters with no marker, so a flag past
+    # column 200 -- minified JS, one long JSON string, a line-delimited forensic event,
+    # a base64 blob -- reached the model as a screen of padding it had no reason to
+    # distrust: "there is a match, and here is the line", with nothing in the line.
+    target = tmp_path / "bundle.js"
+    target.write_text("X" * 300 + "FLAG{c0rrect_h0rse_battery}" + "Y" * 300 + "\n", encoding="utf-8")
+
+    result = search(r"FLAG\{", tmp_path)
+
+    assert result.ok is True
+    assert "FLAG{c0rrect_h0rse_battery}" in result.output
+    body = result.output.split(": ", 1)[1]
+    assert body.startswith("…") and body.endswith("…"), "a cut on both sides says so on both sides"
+    assert len(body) <= limits_match_chars() + 2
+
+
+def test_search_does_not_mark_a_cut_it_did_not_make(tmp_path: Path) -> None:
+    exactly = "a" * (limits_match_chars() - len("needle")) + "needle"
+    target = tmp_path / "edge.txt"
+    target.write_text(exactly + "\n", encoding="utf-8")
+
+    result = search("needle", tmp_path)
+
+    assert result.output == f"edge.txt:1: {exactly}", "a line that fits is passed through as it always was"
+    assert "…" not in result.output
+
+
+def test_search_keeps_the_head_of_a_long_line_when_the_match_is_at_its_start(tmp_path: Path) -> None:
+    target = tmp_path / "events.jsonl"
+    target.write_text('{"event":"needle"' + ',"pad":"' + "z" * 400 + '"}\n', encoding="utf-8")
+
+    result = search("needle", tmp_path)
+
+    body = result.output.split(": ", 1)[1]
+    assert body.startswith('{"event":"needle"'), "nothing was cut before the match"
+    assert body.endswith("…")
+
+
+def test_search_does_not_move_a_window_the_match_was_already_inside(tmp_path: Path) -> None:
+    # Shifting a window whose match was visible anyway buys nothing and costs the head of
+    # the line -- the part that says which object the line is about, and the part a model
+    # copies as a replace_text anchor. Over this repository the shift fired on 35 225 long
+    # lines, and on 1 433 023 of them the match was inside the first 200 characters.
+    line = "class Views:  # " + "z" * 104 + " def handler(request):" + "z" * 300
+    target = tmp_path / "views.py"
+    target.write_text(line + "\n", encoding="utf-8")
+
+    result = search("handler", tmp_path)
+
+    body = result.output.split(": ", 1)[1]
+    assert line.index("handler") == 125, "the match is past the middle but inside the old window"
+    assert body.startswith("class Views:"), "the line still begins where the file does"
+    assert not body.startswith("…")
+    assert body[:-1] == line[:200], "the old window, plus the marker that it was cut"
+    assert body.endswith("…")
+
+
+def test_search_windows_a_match_that_a_trailing_blank_put_past_the_line(tmp_path: Path) -> None:
+    # `rstrip` shortens the line the window is cut from, so a match inside the trailing
+    # whitespace sits past its end. The index is clamped rather than trusted; the window
+    # stays a real slice of the line.
+    target = tmp_path / "ws.txt"
+    target.write_text("A" * 300 + "   \n", encoding="utf-8")
+
+    result = search(r"\s", tmp_path)
+
+    body = result.output.split(": ", 1)[1]
+    assert result.ok is True
+    assert body.strip("…") in "A" * 300
+    assert len(body.strip("…")) == 200
+
+
+def test_a_secret_is_redacted_before_the_window_is_cut_not_after(tmp_path: Path) -> None:
+    # Redaction is a substring replacement over the finished output. A window that cuts
+    # through a key leaves a prefix that no longer matches the value, so the prefix
+    # survives redaction and reaches the model -- and the centred window can place that
+    # cut where the old head-of-line window never could.
+    secret = "sk-proj-" + "Z" * 112
+    line = "q" * 300 + "NEEDLE" + "x" * 90 + secret + "y" * 300
+    (tmp_path / "bundle.js").write_text(line + "\n", encoding="utf-8")
+
+    result = search("NEEDLE", tmp_path, secrets=(secret,))
+
+    assert secret not in result.output
+    assert secret[:40] not in result.output, "a cut key is still a key"
+
+
 def test_search_without_a_match_is_a_clean_empty_answer(tmp_path: Path) -> None:
     (tmp_path / "text.txt").write_text("nothing of interest\n", encoding="utf-8")
 
@@ -398,6 +517,63 @@ def test_search_without_a_match_is_a_clean_empty_answer(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert "no match" in result.detail
+    assert result.detail == f"no match for 'absent-pattern' under {tmp_path}", (
+        "with nothing skipped the answer stays exactly what every measured run saw"
+    )
+
+
+def test_search_says_which_files_it_could_not_read_instead_of_only_no_match(tmp_path: Path) -> None:
+    # `no match` on a tree whose only candidate was skipped is a false proof of absence,
+    # and absence is the one answer a small model cannot argue with. CTF and forensics
+    # material is exactly this: an ELF with the flag in .rodata, a gzipped auth.log.
+    (tmp_path / "prog").write_bytes(b"\x7fELF\x00\x02FLAG{binary_rodata_flag}\x00")
+    (tmp_path / "evidence.log.gz").write_bytes(b"\x1f\x8b\x08\x00\x00\x00\x00\x00packed")
+    (tmp_path / "notes.txt").write_text("nothing of interest\n", encoding="utf-8")
+
+    result = search(r"FLAG\{", tmp_path)
+
+    assert result.ok is False
+    assert "no match" in result.detail
+    assert "2 binary/compressed" in result.detail
+    assert "strings" in result.detail
+    assert "zgrep" in result.detail, "one of the two was gzipped"
+
+
+def test_the_skipped_note_is_one_short_clause_and_names_no_files(tmp_path: Path) -> None:
+    # An ordinary /app holds a database file, a few images, a compiled translation and a
+    # rotated log, so this note lands on the end of every fruitless search there. A list
+    # of paths would make that a paragraph of context for a tool that found nothing.
+    for index in range(7):
+        (tmp_path / f"blob{index}.bin").write_bytes(b"\x00\x01needle\x00")
+
+    result = search("needle", tmp_path)
+
+    plain = f"no match for 'needle' under {tmp_path}"
+    note = result.detail[len(plain) :]
+    assert result.detail.startswith(plain)
+    assert "7 binary/compressed" in note
+    assert "blob0.bin" not in note
+    assert "zgrep" not in note, "nothing here was gzipped"
+    assert len(note) <= 90, note
+
+
+def test_the_skipped_count_covers_every_file_the_search_opened(tmp_path: Path) -> None:
+    # Counted by what the walk actually reached, not by where the file sits: a CTF that
+    # ships its binary in `vendor/` or `env/` is ordinary, and a count that quietly
+    # dropped those directories would put the silent `no match` right back.
+    for name in ("vendor", "env", "lib"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "chal").write_bytes(b"\x7fELF\x00\x02FLAG{here}\x00")
+    pruned = tmp_path / ".venv" / "bin"
+    pruned.mkdir(parents=True)
+    (pruned / "python").write_bytes(b"\x7fELF\x00\x02interpreter\x00")
+    (tmp_path / "readme.txt").write_text("nothing here\n", encoding="utf-8")
+
+    result = search(r"FLAG\{", tmp_path)
+
+    assert "3 binary/compressed" in result.detail, (
+        "the three the walk opened; `.venv` is pruned before the count and is not one of them"
+    )
 
 
 def test_a_broken_pattern_fails_without_raising(tmp_path: Path) -> None:
@@ -735,6 +911,81 @@ def test_replace_text_refuses_a_symlink_to_outside_workspace(tmp_path: Path) -> 
 
     assert not result.ok
     assert outside.read_text(encoding="utf-8") == "value = 1\n"
+
+
+def test_replace_text_explains_an_anchor_copied_out_of_a_search_hit(tmp_path: Path) -> None:
+    # `search` marks a cut line with "…". The model's next move is to copy that hit as an
+    # anchor, markers and all, and the refusal that followed spoke about indentation.
+    target = tmp_path / "app.js"
+    target.write_text("var a=1;" * 40 + "var q='SELECT '+name;" + "var b=2;" * 40 + "\n", encoding="utf-8")
+    hit = search("SELECT", tmp_path).output.split(": ", 1)[1]
+
+    result = replace_text(target, hit[:60], "var q='SELECT $1';", workspace=tmp_path)
+
+    assert result.ok is False
+    assert "…" in result.detail, "name the marker the model just copied"
+    assert "search" in result.detail
+
+
+def test_replace_text_matches_an_anchor_across_crlf_lines_and_keeps_the_endings(tmp_path: Path) -> None:
+    # read_range opens files with universal newlines, so on a CRLF file the model is
+    # shown "\n" and copies "\n" -- while replace_text compares the raw bytes, where the
+    # line ends are "\r\n". The anchor could never match, and the refusal talked about
+    # indentation, so the model rewrote indentation for as long as its budget lasted.
+    target = tmp_path / "handler.py"
+    target.write_bytes(b"import os\r\ndef f():\r\n    return 1\r\ntrailer = 2\r\n")
+
+    result = replace_text(target, "def f():\n    return 1", "def f():\n    return 2", workspace=tmp_path)
+
+    assert result.ok is True, result.detail
+    assert target.read_bytes() == b"import os\r\ndef f():\r\n    return 2\r\ntrailer = 2\r\n", (
+        "the replacement keeps the file's own line endings and touches nothing else"
+    )
+    assert "CRLF" in result.output, "say what was matched, so the model is not guessing"
+    assert "line 2" in result.output
+
+
+def test_replace_text_points_at_bare_cr_endings_without_changing_the_file(tmp_path: Path) -> None:
+    # `read_range` shows "\n" for a lone "\r" too, so the anchor misses the same way it
+    # does on CRLF. Only a hint here: translating a classic-Mac file is a rarer guess than
+    # a CRLF one, and this branch has already refused to touch the file.
+    target = tmp_path / "old_mac.py"
+    target.write_bytes(b"a = 1\rb = 2\r")
+
+    result = replace_text(target, "a = 1\nb = 2", "a = 1\nb = 3", workspace=tmp_path)
+
+    assert result.ok is False
+    assert "bare CR" in result.detail
+    assert "CRLF" not in result.detail
+    assert target.read_bytes() == b"a = 1\rb = 2\r", "a hint changes nothing"
+
+
+def test_replace_text_still_refuses_an_ambiguous_anchor_on_a_crlf_file(tmp_path: Path) -> None:
+    target = tmp_path / "twice.py"
+    target.write_bytes(b"def f():\r\n    return 1\r\ndef f():\r\n    return 1\r\n")
+
+    result = replace_text(target, "def f():\n    return 1", "def f():\n    return 2", workspace=tmp_path)
+
+    assert result.ok is False
+    assert "CRLF" in result.detail and "2" in result.detail
+    assert target.read_bytes() == b"def f():\r\n    return 1\r\ndef f():\r\n    return 1\r\n"
+
+
+def test_replace_text_says_nothing_about_line_endings_when_they_are_not_the_problem(tmp_path: Path) -> None:
+    lf = tmp_path / "lf.py"
+    lf.write_text("value = 1\n", encoding="utf-8")
+    crlf = tmp_path / "crlf.py"
+    crlf.write_bytes(b"value = 1\r\n")
+
+    plain = replace_text(lf, "no such line", "x", workspace=tmp_path)
+    absent = replace_text(crlf, "no such line", "x", workspace=tmp_path)
+
+    expected = (
+        f"`old` does not appear in {lf}. Read the file and copy the text to replace "
+        f"exactly, including indentation."
+    )
+    assert plain.detail == expected, "the ordinary refusal is the one every run has seen"
+    assert "CRLF" not in absent.detail, "an anchor that is absent either way is not a newline problem"
 
 
 def test_replace_text_refuses_an_anchor_that_is_not_there(tmp_path: Path) -> None:
