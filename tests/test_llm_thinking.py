@@ -75,6 +75,40 @@ def test_a_cutoff_inside_a_think_tag_is_thinking() -> None:
     assert client._thinking_endpoint is True
 
 
+def test_a_truncated_answer_shipped_as_parts_is_a_long_answer_not_a_hidden_one() -> None:
+    """The same reply, read twice, must not be read two different ways.
+
+    A proxy translating an Anthropic-shaped backend ships the assistant's content as a
+    list of parts, and `_read_reply` has read that shape through `_content_text` for
+    exactly that reason. The two verdicts about the reply did not: to them a content
+    that is not a string is an empty one, so an ordinary answer that ran out of room
+    became "the whole budget was billed and nothing of it is visible" -- a thinking
+    span. That buys the raised ceiling and the thinking call timeout for the rest of the
+    run, which is the `F4-7b-regression-4080` cost (+250 s for the same zero) arriving
+    by another door, and it marks the truncation a runaway on top.
+    """
+    parts = {
+        "choices": [
+            {
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "an ordinary answer that ran out of room"}
+                    ]
+                },
+                "finish_reason": "length",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2048},
+    }
+    client, _, _ = make_client([(200, json.dumps(parts).encode())] * 8)
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(result, LlmError)
+    assert client._thinking_endpoint is False, "the tokens are visible; nothing was hidden"
+    assert result.truncated_reasoning is False, "and a visible answer is not a runaway"
+
+
 def test_a_cutoff_with_no_usage_block_is_not_read_as_thinking() -> None:
     # An endpoint that reports no usage cannot corroborate that the cap was reached.
     # Without corroboration the cheap hypothesis wins (critic, 16.09): the thinking

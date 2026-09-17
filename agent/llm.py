@@ -363,8 +363,11 @@ def _thinking_evidence(
         return "reasoning field"
     if finish != "length":
         return ""
-    content = message.get("content")
-    content = content if isinstance(content, str) else ""
+    # `_content_text`, the same reading `_read_reply` uses: a proxy that ships the
+    # content as a list of parts would otherwise look like a reply with nothing visible
+    # in it, and an ordinary answer that ran out of room would be read as a thinking
+    # span -- the verdict this function exists to withhold.
+    content = _content_text(message)
     if "<think>" in content or "</think>" in content:
         return "truncated inside a think block"
     if content.strip() or message.get("tool_calls"):
@@ -418,8 +421,7 @@ def _runaway_reasoning(message: dict[str, Any], evidence: str, *, was_raised: bo
         # `_thinking_evidence` already refuses a bare truncated tool call; this also
         # covers the endpoint that returns a reasoning field *and* a cut-off call.
         return False
-    content = message.get("content")
-    return not _strip_thinking(content if isinstance(content, str) else "").strip()
+    return not _strip_thinking(_content_text(message)).strip()
 
 
 def _unwrap_function_envelope(value: Any, schema: dict[str, Any]) -> dict[str, Any] | None:
