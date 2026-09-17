@@ -945,6 +945,21 @@ def test_replace_text_matches_an_anchor_across_crlf_lines_and_keeps_the_endings(
     assert "line 2" in result.output
 
 
+def test_replace_text_points_at_bare_cr_endings_without_changing_the_file(tmp_path: Path) -> None:
+    # `read_range` shows "\n" for a lone "\r" too, so the anchor misses the same way it
+    # does on CRLF. Only a hint here: translating a classic-Mac file is a rarer guess than
+    # a CRLF one, and this branch has already refused to touch the file.
+    target = tmp_path / "old_mac.py"
+    target.write_bytes(b"a = 1\rb = 2\r")
+
+    result = replace_text(target, "a = 1\nb = 2", "a = 1\nb = 3", workspace=tmp_path)
+
+    assert result.ok is False
+    assert "bare CR" in result.detail
+    assert "CRLF" not in result.detail
+    assert target.read_bytes() == b"a = 1\rb = 2\r", "a hint changes nothing"
+
+
 def test_replace_text_still_refuses_an_ambiguous_anchor_on_a_crlf_file(tmp_path: Path) -> None:
     target = tmp_path / "twice.py"
     target.write_bytes(b"def f():\r\n    return 1\r\ndef f():\r\n    return 1\r\n")
