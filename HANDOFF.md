@@ -13,21 +13,23 @@
 
 ## Активные задачи
 
-Claude (Fable 5.1) AFK, 16→17.09.2026 ночь — ветки `eval/review-merge` (ревью + документы +
-факторы шага 4, всё закоммичено и запушено) и **`cand/kt7`** (кандидат КТ №7: код 9a8673c +
-перенос F-C2 критиком + F-B1 + F-A + роутер bf0128c + восстановленные фикстуры; @ d00335f,
-архив `build/kt7.zip` sha `6ae5245119c131efcbf7e30ce05ae3ec15e774511467b664bfeea4e04670e505`,
-воспроизводим из коммита, check_submission PASS, offline-гейт в acp пройден критиком,
-оракул replay 18/18). Идут гейты на стенде c: `build/logs/kt7_queue.log` → KT7-devfix
-(9/9, отказов 3 против 18 у базы), KT7-devaudit, KT7-public ×3 (шлюз ≥ 17/18), KT7-extra 18×3
-(решение по holdout); затем 7B. Результаты и таксономия — `docs/experiments.md`
-(REVIEW-public-q36, EXTRA-pair-q36, EXTRA-taxonomy, далее KT7-*). Split extra —
-`scripts/eval/extra_split.py`, holdout-логи не открывались. Сессия-критик ai-challenge-92:
-ветка `review/critic-20260917` (аудит фикстур, offline_gate.sh, памятка
-`docs/review/2026-09-17-kt7-release-checklist.md`), `review/critic-fc-on-kt7` (перенос).
-**Человеку:** ревью tool-политики (python-проба в code-fix с защитой по эффекту), budget-политики
-и роутера до отправки; слияние в `main` и тег `submit-…`; риск exec-бита при распаковке zipfile
-у организаторов. Стенд после ночи возвращён на конфигурацию c.
+Claude (Fable 5.1) AFK, 16→17.09.2026 ночь — **закончено, всё закоммичено и запушено.**
+Кандидат КТ №7: ветка **`cand/kt7` @ 0c96797**, архив `build/kt7.zip` sha256
+`57c78a832192526fa59c656cca073d75f5c73e7f3a5acaa14bd99caad786857b` (171 335 байт,
+воспроизводим из коммита, check_submission PASS, offline-гейт в acp пройден критиком, оракул
+replay 18/18, pytest 1134 passed). Замеры: public 18/18 (расход не хуже базы), extra на 16
+сравнимых 39/48 против 37/48 (dev 21/24, holdout 18/24), восстановленные forensics 6/6, 7B
+9/18 против 6/18 — карточки `KT7-public`, `KT7-extra`, `KT7-7b-public`, сводка `KT7-summary`
+в `docs/experiments.md`. Что внутри относительно 9a8673c: F-C2 python-проба в code-fix с
+защитой по эффекту, F-B1 номера строк в audit-чтениях, F-A отказ `write_file` без `content`,
+роутер bf0128c, разбор составных команд 4d1c005 + curl-проба, восстановленные фикстуры.
+Ветка `eval/review-merge` — ревью + факторы (зеркало), не кандидат. Критик ai-challenge-92:
+`review/critic-20260917` (аудит фикстур, offline_gate.sh, shell_policy_diff.py, памятка
+`docs/review/2026-09-17-kt7-release-checklist.md`) — влить после КТ.
+**Человеку до отправки:** ревью tool-политики (python-проба, снимок evaluator/.git//logs,
+разбор частей), роутера и budget-политики (B1/L2/C3 не менялись с 9a8673c); слияние `cand/kt7`
+в `main`, тег `submit-…`; риск exec-бита при распаковке zipfile у организаторов. Список после
+КТ — `PLAN.md`. Стенд возвращён на конфигурацию c.
 
 Claude (Fable 5.1) AFK, 16.09.2026 ночь — ветка `afk/4080-20260916`, всё **закоммичено и
 запушено**. Стенд RTX 4080 переведён на `hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ3_XXS`
