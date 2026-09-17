@@ -282,6 +282,11 @@ def permits(target: Path, workspace: Path, permitted: tuple[Path, ...]) -> bool:
     root = workspace.resolve()
     if target == root or root in target.parents:
         return True
+    return _named(target, permitted)
+
+
+def _named(target: Path, permitted: tuple[Path, ...]) -> bool:
+    """Is `target` one of the paths the task named, or under a directory it named?"""
     for path in permitted:
         try:
             named = path.resolve()
@@ -292,6 +297,50 @@ def permits(target: Path, workspace: Path, permitted: tuple[Path, ...]) -> bool:
         if named.is_dir() and named in target.parents:
             return True
     return False
+
+
+def write_refusal(target: Path, workspace: Path, permitted: tuple[Path, ...]) -> str:
+    """Why `permits` said no, in the one fact the model's next move depends on.
+
+    Both refusals used to read "outside the workspace and unnamed by the task". For a
+    deliverable like `/etc/nginx/conf.d/app.conf` the second half is false and the
+    model can see it is, since the path came out of its own task text. The repair that
+    a false "unnamed" invites is to write the answer into the workspace instead, which
+    leaves the file the task actually named unfixed -- the zero this wording costs.
+
+    `run_shell` is not confined, so the way out named here is real. It is checked
+    against the one playbook that has a shell policy at all
+    (`tests/test_loop.py::test_the_way_out_a_write_refusal_names_is_really_open`):
+    `sed -i` passes it, a heredoc does not, so nothing else is offered.
+    """
+    if _is_system(target) and _named(target, permitted):
+        return (
+            f"{target} is named by the task but lies in a system tree, which no tool "
+            "writes: change it with run_shell (`sed -i`), then finish on that path"
+        )
+    return f"{target} is outside the workspace {workspace} and unnamed by the task"
+
+
+def verifiable(target: Path, workspace: Path, permitted: tuple[Path, ...]) -> bool:
+    """May `verify` judge this path? Wider than `permits` by exactly one case.
+
+    A file the task named as its deliverable, refused to the write tools for living in
+    a system tree, can still be produced -- `run_shell` is not confined -- and then
+    `finish` has to be able to end on it. Refusing it forever turns a fixed config into
+    an unfinishable run.
+
+    This is not permission to write: that question is `permits`, and `agent.tools` asks
+    only that one. Two things keep the widening narrow. The archive's own tree stays
+    refused however the task words itself, because `permitted` is parsed out of
+    untrusted text; and `verify._untouched` still rejects a file that is byte-for-byte
+    what it was when the run started, so pointing `finish` at something already on disk
+    is not an answer.
+    """
+    if permits(target, workspace, permitted):
+        return True
+    if target == AGENT_ROOT or AGENT_ROOT in target.parents:
+        return False
+    return _named(target, permitted)
 
 
 DIGEST_BYTES = 1 << 20

@@ -120,7 +120,7 @@ Finish when the reproducer and the external check both pass; save status.""",
 
 FORENSICS = Playbook(
     name="forensics",
-    token_count=318,
+    token_count=345,
     body="""\
 Read the primary sources before you write any value; get lines you have read.
 Save the artifacts and their hashes; get a manifest.
@@ -141,6 +141,7 @@ Separate facts from claims; save the alternatives.
 Cross-check the timeline with another parser or artifact; get confirm or conflict.
 Give IOC type, value, source and interval; get a list.
 Quote every value in the report from an observation; never fill a field from memory.
+A forwarded-for chain is attacker-controlled: attribute the client to the address a second source confirms, not to the first hop.
 Give claim, evidence, alternatives and confidence; get a conclusion.
 Lower confidence on gaps, conflict or a single source; save the reason.
 Check the artifact reference of every claim; get an evidence check.""",
@@ -229,28 +230,41 @@ _KEYWORDS: dict[str, dict[str, int]] = {
     "code-fix": {
         "failing test": 3, "make the test": 3, "make tests pass": 3, "fix the bug": 3,
         "repair": 3, "почини": 3, "исправь": 3, "исправить": 3,
-        "fix": 2, "bug": 2, "patch": 2, "broken": 2, "traceback": 2, "regression": 2,
+        "fix": 2, "fix the": 2, "production code": 2,
+        "bug": 2, "patch": 3, "broken": 2, "traceback": 2, "regression": 2,
         "test": 1, "error": 1, "exception": 1, "баг": 2, "тесты": 1,
     },
     "code-audit": {
-        "audit": 3, "security review": 3, "code review": 3, "scan for": 3, "аудит": 3,
-        "vulnerab": 2, "injection": 2, "insecure": 2, "weakness": 2, "sink": 2,
-        "уязвим": 2, "слабые места": 2,
-        "review": 1, "analyze": 1, "secure": 1,
+        "audit": 3, "security review": 3, "code review": 3, "scan for": 3, "аудит*": 3,
+        "finding*": 3,
+        "misconfigurat*": 3,
+        "vulnerab*": 2, "injection*": 2, "insecure": 2, "weakness*": 2, "sink": 2,
+        "уязвим*": 2, "слабые места": 2, "without modifying it": 2, "without changing it": 2,
+        "review": 1, "analyze": 1, "secure": 1, "assess*": 1, "do not modify": 1,
+        "do not change": 1, "recommendation*": 1, "impact": 1,
     },
     "forensics": {
-        "forensic": 3, "log analysis": 3, "incident": 3, "auth.log": 3,
-        "форензик": 3, "расследуй": 3, "расследование": 3, "инцидент": 3,
-        "timeline": 2, "syslog": 2, "compromise": 2, "breach": 2, "attacker": 2,
-        "log": 2, "journal": 2, "журнал": 2, "лог": 2,
-        "investigate": 1,
+        "forensic*": 3, "log analysis": 3, "incident*": 3, "auth.log": 3, "exfil*": 3,
+        "форензик*": 3, "расследуй": 3, "расследование": 3, "инцидент*": 3,
+        "timeline*": 2, "syslog": 2, "compromise*": 2, "breach*": 2, "attacker*": 2,
+        "journal": 2, "журнал*": 2, "лог": 2, "evidence": 2,
+        "triage": 2, "auditlog": 2, "egress": 2,
+        "investigate": 1, "artifact*": 1, "timestamp*": 1, "log": 1, "logs": 1,
     },
     "ctf": {
-        "capture the flag": 3, "find the flag": 3, "the flag": 3, "ctf": 3, "флаг": 3,
+        "capture the flag": 3, "find the flag": 3, "the flag": 3, "ctf": 3, "флаг*": 3,
         "flag": 2, "challenge": 2, "pwn": 2, "reverse engineer": 2, "decode": 2,
-        "binary": 1, "crypto": 1, "exploit": 1,
+        "binary": 1, "crypto": 1, "exploit*": 1,
     },
 }
+"""A trailing `*` marks a stem: it matches the word with any ending ("vulnerab*" is
+"vulnerability", "compromise*" is "compromised_user"). Without it a keyword must be
+the whole word, so "fix" stays out of "fixture" and "log" out of "login"."""
+
+_AUDIT_AS_RECORD = re.compile(r"\baudit(?=\s+(?:records?|events?|entr(?:y|ies)|logs?|trails?|files?|lines?)\b)")
+""""audit record", "audit events": a kind of log line to read, not a code audit to run.
+Rewritten to `auditlog` before scoring, which counts toward forensics instead."""
+
 
 _BY_NAME: dict[str, Playbook] = {pb.name: pb for pb in PLAYBOOKS}
 
@@ -258,7 +272,11 @@ _BY_NAME: dict[str, Playbook] = {pb.name: pb for pb in PLAYBOOKS}
 def _score(text: str, table: dict[str, int]) -> int:
     total = 0
     for keyword, weight in table.items():
-        if re.search(r"\b" + re.escape(keyword) + r"\b", text):
+        if keyword.endswith("*"):
+            pattern = r"\b" + re.escape(keyword[:-1]) + r"\w*"
+        else:
+            pattern = r"\b" + re.escape(keyword) + r"\b"
+        if re.search(pattern, text):
             total += weight
     return total
 
@@ -289,7 +307,7 @@ def classify(instruction: str) -> Selection:
     for some other reason, and not the first category in `_KEYWORDS` order, which is
     what a plain `score > best_score` scan silently falls back to on a tie.
     """
-    text = instruction.lower()
+    text = _AUDIT_AS_RECORD.sub("auditlog", instruction.lower())
     ranked = sorted(
         ((name, _score(text, table)) for name, table in _KEYWORDS.items()),
         key=lambda scored: scored[1],

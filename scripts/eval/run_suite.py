@@ -422,6 +422,44 @@ class Runner:
         self.logs = Path(args.out) / "logs"
         self.logs.mkdir(parents=True, exist_ok=True)
 
+    def warm_model(self) -> tuple[float, str]:
+        """Load the model once before the first episode; `(seconds, outcome)`.
+
+        A stand that was just switched serves its first request only after loading the
+        weights -- 60-70 s for a 20 GB model -- and that first request belongs to the
+        first episode, whose 120 s task limit then kills a run that had not started
+        thinking yet (AFK-30b-candidate9: bye-file r1 killed at 120.1 s with one call,
+        r2 verified in 20 s). One tiny completion through the proxy pays that cost
+        outside every episode; the proxy counters are reset afterwards so the warm-up
+        is not billed to the first row. Failure is reported, never fatal: a stand that
+        cannot answer will fail the first episode with its own, better diagnostics.
+        """
+        if not self.args.counter_container or not self.args.warm_up:
+            return 0.0, "disabled"
+        body = json.dumps({
+            "model": self.args.model,
+            "messages": [{"role": "user", "content": "ok"}],
+            "max_tokens": 1,
+        })
+        script = (
+            "import json,time,urllib.request;"
+            f"body={body!r}.encode();"
+            "r=urllib.request.Request('http://127.0.0.1:8000/v1/chat/completions',data=body,"
+            "headers={'Content-Type':'application/json'},method='POST');"
+            "t=time.monotonic();urllib.request.urlopen(r,timeout=600).read();"
+            "print(round(time.monotonic()-t,1))"
+        )
+        started = time.monotonic()
+        answered = run(
+            ["docker", "exec", self.args.counter_container, "python3", "-c", script],
+            timeout=660,
+        )
+        elapsed = round(time.monotonic() - started, 1)
+        self.counter_call("/__reset", "POST")
+        if answered.returncode != 0:
+            return elapsed, f"failed: {answered.stderr.strip()[-160:]}"
+        return elapsed, "ok"
+
     def counter_call(self, path: str, method: str) -> dict[str, object] | None:
         """Talk to the counting proxy through `docker exec`, not over the network.
 
@@ -844,6 +882,11 @@ def main() -> int:
     parser.add_argument("--reuse-images", action="store_true",
                         help="use existing local task images without building or pulling")
     parser.add_argument("--repeats", type=int, default=1)
+    parser.add_argument(
+        "--no-warm-up", dest="warm_up", action="store_false",
+        help="skip the one-token model warm-up before the first episode (default: warm up, "
+             "so a freshly switched stand's weight load is not billed to the first row)",
+    )
     parser.add_argument("--timeout-scale", type=float, default=1.0)
     parser.add_argument(
         "--tell-agent-budget", action="store_true",
@@ -906,6 +949,10 @@ def main() -> int:
         "idle_wait_max_s": args.idle_wait_max,
         "sampling": "archive settings; request samples retained in logs", "images": {},
     }
+    warm_s, warm_outcome = runner.warm_model()
+    manifest["warm_up"] = {"seconds": warm_s, "outcome": warm_outcome}
+    if warm_outcome != "disabled":
+        print(f"warm-up: model answered after {warm_s}s ({warm_outcome})", file=sys.stderr, flush=True)
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     write_report(out, suite)
 

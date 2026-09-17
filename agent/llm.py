@@ -358,6 +358,47 @@ def _thinking_evidence(
     return "truncated with no visible answer"
 
 
+def _runaway_reasoning(message: dict[str, Any], evidence: str, *, was_raised: bool) -> bool:
+    """Whether this truncation is the model reasoning past the raised cap without acting.
+
+    The failure it names, measured on the Qwen3.6-35B-A3B stand (16.09, treatment-5b call
+    traces, calls 4-7): late in a run, at a prompt of ~6.9k tokens, every call comes back
+    with `completion_tokens` equal to the raised ceiling, empty `content`, no tool call and
+    ~70 s on the clock. The ladder has nothing left to try -- the budget is already raised
+    and `enable_thinking=false` is ignored by ollama -- so the run spends its three
+    consecutive failures and ends as `llm-unusable` with a correct but unverified
+    deliverable on disk.
+
+    Three conditions, and each removes a different thing that merely looks like it:
+
+    * `was_raised` -- the request already carried every token of output room this client
+      is willing to give. A first truncation at the default ceiling is answered by more
+      room, and that retry happens before anyone needs this verdict. Sticky and not a
+      comparison against the ceiling actually sent, which matters in one case: after a
+      strict server rejects the raised budget with a context-length 400, `_output_cap`
+      comes back down and the request is small again while the flags stay set. A reply
+      with nothing visible is still a runaway there -- more emphatically so, since the
+      server has just said the prompt is what leaves no room for the answer;
+    * `evidence` -- `_thinking_evidence` says the tokens went somewhere we cannot read.
+      Reused rather than re-derived, so the two readings of one reply cannot drift apart;
+    * nothing visible came back. A truncated tool call or truncated prose is a model that
+      was still talking to us: it overran the ceiling while answering, which is looping,
+      and the answer to looping is not a smaller prompt.
+
+    `_strip_thinking` decides what "visible" means, for the same reason `_read_reply` uses
+    it: a reply that is `<think>` and nothing else has emitted no answer, whatever its
+    length.
+    """
+    if not was_raised or not evidence:
+        return False
+    if _tool_call_entries(message):
+        # `_thinking_evidence` already refuses a bare truncated tool call; this also
+        # covers the endpoint that returns a reasoning field *and* a cut-off call.
+        return False
+    content = message.get("content")
+    return not _strip_thinking(content if isinstance(content, str) else "").strip()
+
+
 def _unwrap_function_envelope(value: Any, schema: dict[str, Any]) -> dict[str, Any] | None:
     """A function call written as prose, mapped onto the action schema. None if it isn't one.
 
@@ -1026,7 +1067,17 @@ class HttpLlm:
                     # LLM_MAX_ATTEMPTS. `last` is set before the retry so that if the
                     # deadline expires between attempts the returned error names the
                     # truncation, not the placeholder "no attempt was made".
-                    last = LlmError(reason=f"reply truncated by length at style {self.style}", retryable=False)
+                    last = LlmError(
+                        reason=f"reply truncated by length at style {self.style}",
+                        retryable=False,
+                        # Computed on every truncated attempt, not only the last one:
+                        # whichever attempt ends up returned -- this one, or this one
+                        # after the deadline expired between retries -- carries the
+                        # verdict about the reply it actually describes.
+                        truncated_reasoning=_runaway_reasoning(
+                            message, evidence, was_raised=was_raised
+                        ),
+                    )
                     if not was_raised:
                         self._output_raised = True
                         # `budget` and not `thinking`: the answer needs more room, which

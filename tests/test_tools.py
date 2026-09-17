@@ -1203,3 +1203,77 @@ def test_process_scan_cannot_have_a_forged_line_injected_through_a_file_name(tmp
 
     assert scan.processes, "the process is still reported"
     assert "\n" not in scan.processes[0].reason
+
+
+def test_relaunch_command_is_quoted_and_refused_for_credentials() -> None:
+    from agent.tools import _relaunch_command
+
+    assert _relaunch_command(["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"], []) == \
+        "uvicorn main:app --host 0.0.0.0 --port 8000"
+    assert _relaunch_command(["python3", "-m", "app", "a b"], []) == "python3 -m app 'a b'"
+    assert _relaunch_command(["redis-server", "--requirepass", "hunter2"], []) == ""
+    assert _relaunch_command(["app", "--dsn=postgres://u:p@h/db"], []) == ""
+    assert _relaunch_command(["app", "--database-url", "postgres://h/db"], []) == ""
+    assert _relaunch_command([], []) == ""
+
+
+# --- named by the task, and still not writable -------------------------------
+
+
+def _system_tree(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Make `tmp_path/etc` an OS tree, so the real one is never touched by a test."""
+    from agent import paths
+
+    monkeypatch.setattr(paths, "SYSTEM_TREES", (str(tmp_path / "etc"),))
+    conf = tmp_path / "etc" / "nginx" / "app.conf"
+    conf.parent.mkdir(parents=True)
+    conf.write_text("allow all;\n", encoding="utf-8")
+    return conf
+
+
+def test_a_refused_write_to_a_path_the_task_named_does_not_claim_it_was_unnamed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A false fact in a refusal argues the model into the wrong repair.
+
+    `/etc/nginx/...` and `/etc/ssh/sshd_config` are named deliverables of an ordinary
+    hardening task, and the write policy refuses them on purpose. The old message said
+    they were "unnamed by the task", which the model can see is untrue; the move it
+    invites -- put the answer in /app instead -- leaves the real config unfixed.
+    """
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    conf = _system_tree(monkeypatch, tmp_path)
+
+    result = write_file(conf, "allow 127.0.0.1;\n", workspace=workspace, permitted=(conf,))
+
+    assert result.ok is False
+    assert "unnamed by the task" not in result.detail
+    assert "run_shell" in result.detail
+    assert conf.read_text(encoding="utf-8") == "allow all;\n", "still refused, only worded honestly"
+
+
+def test_replace_text_says_the_same_thing_about_a_named_system_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    conf = _system_tree(monkeypatch, tmp_path)
+
+    result = replace_text(conf, "allow all;", "allow 127.0.0.1;", workspace=workspace, permitted=(conf,))
+
+    assert result.ok is False
+    assert "unnamed by the task" not in result.detail
+    assert "run_shell" in result.detail
+
+
+def test_a_path_the_task_never_named_is_still_refused_as_unnamed(tmp_path: Path) -> None:
+    # The other half of the distinction: nothing named this, so "unnamed" is the fact
+    # and moving the write into the workspace is the right correction.
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+
+    result = write_file(tmp_path / "elsewhere.txt", "x", workspace=workspace)
+
+    assert result.ok is False
+    assert "unnamed by the task" in result.detail

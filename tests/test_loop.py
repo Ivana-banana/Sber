@@ -372,6 +372,33 @@ def test_a_bare_length_truncation_no_longer_lifts_the_clamp(tmp_path: Path) -> N
     assert state.budget.allow_long_llm is False
 
 
+def test_a_reasoning_runaway_is_not_by_itself_a_verdict_about_the_endpoint(
+    tmp_path: Path,
+) -> None:
+    """The runaway flag changes the next request; it does not change the call ceiling.
+
+    Those are two different readings of one reply and they have different owners. Whether
+    the endpoint reasons before answering is `agent.llm`'s sticky verdict, and on a real
+    client it is already set by the time a runaway comes back -- so a loop that also
+    inferred it from the flag would be guessing where it has an answer. Pinned because
+    the two live one line apart (`F4-7b-regression-4080` is what the guessing costs).
+    """
+    state = make_state(tmp_path)
+    llm = StubLlm(replies=[
+        LlmError(
+            "reply truncated by length at style native_tools",
+            retryable=False,
+            output_tokens=limits.LLM_THINKING_MAX_OUTPUT_TOKENS,
+            truncated_reasoning=True,
+        ),
+        action("list_dir", path=str(tmp_path)),
+    ])
+
+    run(state, llm, FakeVerify())
+
+    assert state.budget.allow_long_llm is False
+
+
 def test_a_plain_endpoint_error_does_not_lift_the_clamp(tmp_path: Path) -> None:
     state = make_state(tmp_path)
     llm = StubLlm(replies=[LlmError("connection refused", retryable=True)] * 4)
@@ -6866,6 +6893,19 @@ def test_write_file_without_a_path_never_reaches_the_filesystem(tmp_path: Path) 
     assert sorted(entry.name for entry in tmp_path.iterdir()) == before
 
 
+def test_write_file_without_a_content_key_is_refused_and_writes_nothing(tmp_path: Path) -> None:
+    # A reply that lost its payload after a truncated or schema-constrained turn: the
+    # old behaviour wrote an empty deliverable over the report and scored 0
+    # (REVIEW-public-q36). `content: ""` still writes an empty file on purpose.
+    target = tmp_path / "report.json"
+    llm = StubLlm(replies=[action("write_file", path=str(target)), action("write_file", path=str(target), content="")])
+
+    outcome = run(make_state(tmp_path), llm, FakeVerify())
+
+    assert any("write_file needs `content`" in text for text in outcome.observations)
+    assert target.exists() and target.read_text(encoding="utf-8") == ""
+
+
 def test_the_loop_hands_the_write_policy_to_the_tool(tmp_path: Path) -> None:
     """Записанные в задаче пути должны доходить до `write_file`, а не оставаться в state.
 
@@ -7454,3 +7494,445 @@ def test_a_server_body_mentioning_a_timeout_is_a_hard_failure() -> None:
     assert _llm_failure_kind(LlmError("endpoint returned 400: model timeout parameter invalid", retryable=False)) == HARD_FAILURE
     assert _llm_failure_kind(LlmError("transport timeout: TimeoutError", retryable=True, timed_out=True)) == SLOW_CALL
     assert _llm_failure_kind(LlmError("transport timeout: TimeoutError", retryable=True, timed_out=True, output_tokens=5)) == HARD_FAILURE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -c \"import profile_cache; print(profile_cache.render_profile('a', 'u', 1))\"",
+        "python3 -c 'import importlib.util, sys\nif \"m\" in sys.modules: del sys.modules[\"m\"]\nimport m\nassert m.f(1) == 2, \"leak\"'",
+        "python3 {ws}/verify_fix.py",
+        "python3 -B verify_fix.py",
+        "cd {ws} && python3 verify_fix.py",
+        "python3 -c 'import sys\nsys.path.insert(0, \"{ws}\")\nimport m\nprint(m)'",
+        "cd {ws} && python3 -c 'import m\n# Test 1: cache\nassert m.f(1) == m.f(1), f\"miss {{m}}\"\nprint(\"ok\")'",
+        "python3 -c 'import os; print(os.getcwd(), os.path.exists(\"m.py\"), os.listdir(\".\"))'",
+        "python3 -c 'print(\"a,b\".replace(\",\", \";\"))'",
+        "python3 -c 'import m; print(getattr(m, \"f\"))'",
+        "python3 -c 'import sqlite3; print(sqlite3.connect(\":memory:\").execute(\"select 1\").fetchone())'",
+        # shell-looking characters inside the quoted payload are Python, not a pipeline
+        "python3 -c 'import m\nassert m.f(1) == 2; print(\"a | b > c\")\n# x -> y; z && w'",
+        "cd {ws} && python3 -c \"from m import f\n# Test cases\ntests = [('https://h.example/test?x=1', True)]\nfor u, ok in tests:\n    assert (f(u) == ok)\n\"",
+    ],
+)
+def test_code_fix_lets_a_read_only_python_probe_through(tmp_path: Path, command: str) -> None:
+    # On a fix task without a test suite the model's only check is to import the patched
+    # module and call it. Refusing every `python -c` and every local script left it with
+    # nothing (EXTRA-taxonomy: 6-12 refusals per fix episode). What the probe does to the
+    # evaluator is judged by effect (below), so ordinary reads are not second-guessed.
+    (tmp_path / "verify_fix.py").write_text(
+        "import importlib.util\nspec = importlib.util.spec_from_file_location('m', 'm.py')\n"
+        "print(spec)\nassert spec is not None\n",
+        encoding="utf-8",
+    )
+    state = make_state(tmp_path)
+    assert loop._code_fix_shell_refusal(command.format(ws=tmp_path), state) == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -c \"open('tests/test_api.py', 'w').write('')\"",
+        "python3 -c 'print(open(\"tests/test_api.py\").read())'",
+        "python3 -c 'import shutil; shutil.rmtree(\"x\")'",
+        "python3 -c 'import subprocess; subprocess.run([\"rm\", \"-r\", \"x\"])'",
+        "python3 -c 'import os; os.system(\"rm -r x\")'",
+        "python3 -c 'exec(\"import os\")'",
+        "python3 -c '__import__(\"o\" + \"s\").remove(\"x\")'",
+        "python3 {ws}/tests/conftest.py",
+        "python3 {ws}/mutate.py",
+        "python3 -c 'print(1)' > tests/out.txt",
+        "python3 -c 'print(1)' | tee tests/out.txt",
+        "python3 -c 'print(1)'; rm -r tests",
+        "python3 -c 'print(1)' $(rm -r tests)",
+        "python3 -W ignore -c 'print(1)'",
+        "cd /etc && python3 -c 'print(1)'",
+        "cd {ws} && python3 -c 'print(1)' && rm -r tests",
+        "python3 -c 'print(open(\".git/HEAD\").read())'",
+    ],
+)
+def test_code_fix_still_refuses_a_python_snippet_that_spawns_or_names_the_evaluator(
+    tmp_path: Path, command: str
+) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "conftest.py").write_text("print(1)\n", encoding="utf-8")
+    (tmp_path / "mutate.py").write_text("import shutil\nshutil.rmtree('tests')\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    assert loop._code_fix_shell_refusal(command.format(ws=tmp_path), state) != ""
+
+
+def test_a_python_script_outside_the_workspace_is_not_a_probe(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.py"
+    outside.write_text("print(1)\n", encoding="utf-8")
+    try:
+        assert loop._code_fix_shell_refusal(f"python3 {outside}", make_state(tmp_path)) != ""
+    finally:
+        outside.unlink()
+
+
+def _probe(command: str, state: AgentState):
+    from agent import playbooks
+
+    return loop._execute("run_shell", {"command": command}, state, playbook=playbooks.CODE_FIX)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # a variable file mode and a chr()-built name pass any text filter
+        "python3 -c \"n=chr(99)+'onftest.py'; d=chr(116)+'ests'; m=chr(119); open(d+chr(47)+n, m).close()\"",
+        # a side-effecting import: the snippet's own text is clean
+        "python3 -c 'import helper'",
+    ],
+)
+def test_a_probe_that_changes_the_evaluator_is_undone_and_ends_the_privilege(
+    tmp_path: Path, command: str
+) -> None:
+    (tmp_path / "tests").mkdir()
+    original = "def pytest_configure(config):\n    pass\n"
+    (tmp_path / "tests" / "conftest.py").write_text(original, encoding="utf-8")
+    (tmp_path / "helper.py").write_text(
+        "p = 'tests/' + 'conf' + 'test.py'\nopen(p, 'w').write('')\n", encoding="utf-8"
+    )
+    state = make_state(tmp_path)
+
+    result = _probe(command, state)
+
+    assert result.ok is False
+    assert "restored" in result.detail and "conftest.py" in result.detail
+    assert (tmp_path / "tests" / "conftest.py").read_text(encoding="utf-8") == original
+    assert state.python_probes_disabled is True
+    assert loop._code_fix_shell_refusal("python3 -c 'print(1)'", state) != ""
+
+
+@pytest.mark.parametrize(
+    "command, added",
+    [
+        ("python3 -c \"open('te' + 'sts/te' + 'st_b.py', 'w').write('def test_b(): pass')\"", "test_b.py"),
+        # sqlite writes a file wherever it is told to
+        ("python3 -c \"import sqlite3; sqlite3.connect('te' + 'sts/new.db').execute('create table t(x)')\"", "new.db"),
+    ],
+)
+def test_a_probe_that_adds_an_evaluator_file_has_it_removed(tmp_path: Path, command: str, added: str) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_a.py").write_text("def test_a(): pass\n", encoding="utf-8")
+    state = make_state(tmp_path)
+
+    result = _probe(command, state)
+
+    assert result.ok is False and added in result.detail
+    assert not (tmp_path / "tests" / added).exists()
+    assert (tmp_path / "tests" / "test_a.py").exists()
+    assert state.python_probes_disabled is True
+
+
+def test_a_probe_that_touches_git_metadata_is_reported_and_ends_the_privilege(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    state = make_state(tmp_path)
+
+    result = _probe("python3 -c \"d='.g'+'it'; open(d+'/HEAD', 'w').write('ref: refs/heads/x')\"", state)
+
+    assert result.ok is False and "HEAD" in result.detail
+    assert (tmp_path / ".git" / "HEAD").read_text(encoding="utf-8") == "ref: refs/heads/main\n"
+    assert state.python_probes_disabled is True
+
+
+def test_a_symlink_smuggled_into_the_evaluator_is_removed(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_a.py").write_text("def test_a(): pass\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text("def test_z(): assert False\n", encoding="utf-8")
+    state = make_state(tmp_path)
+
+    result = _probe("python3 -c \"import os; os.symlink('../app.py', 'te' + 'sts/te' + 'st_link.py')\"", state)
+
+    assert result.ok is False and "test_link.py" in result.detail
+    assert not (tmp_path / "tests" / "test_link.py").is_symlink()
+    assert (tmp_path / "app.py").exists()
+
+
+def test_a_symlink_already_in_the_evaluator_is_kept_and_put_back_if_replaced(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "shared_test.py").write_text("def test_s(): pass\n", encoding="utf-8")
+    link = tmp_path / "tests" / "test_shared.py"
+    link.symlink_to("../shared_test.py")
+    state = make_state(tmp_path)
+
+    harmless = _probe("python3 -c 'print(1)'", state)
+    assert harmless.ok is True and state.python_probes_disabled is False
+
+    replaced = _probe(
+        "python3 -c \"import os; p='te'+'sts/te'+'st_shared.py'; os.unlink(p); open(p, 'w').write('x')\"", state
+    )
+    assert replaced.ok is False and "test_shared.py" in replaced.detail
+    assert link.is_symlink() and os.readlink(link) == "../shared_test.py"
+
+
+def test_a_probe_that_changes_a_mode_gets_the_mode_restored(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    target = tmp_path / "tests" / "test_a.py"
+    target.write_text("def test_a(): pass\n", encoding="utf-8")
+    target.chmod(0o644)
+    state = make_state(tmp_path)
+
+    result = _probe("python3 -c \"import os; os.chmod('te' + 'sts/te' + 'st_a.py', 0)\"", state)
+
+    assert result.ok is False and "test_a.py" in result.detail and "could not" not in result.detail
+    assert (target.stat().st_mode & 0o777) == 0o644
+    assert target.read_text(encoding="utf-8") == "def test_a(): pass\n"
+
+
+def test_a_watched_root_is_reported_but_not_restored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    logs = tmp_path.parent / f"{tmp_path.name}-logs"
+    logs.mkdir()
+    (logs / "reward.txt").write_text("0\n", encoding="utf-8")
+    monkeypatch.setattr(loop, "_EXTRA_PROTECTED_ROOTS", (logs,))
+    state = make_state(tmp_path)
+
+    result = _probe(f"python3 -c \"open('{logs}/reward.txt', 'w').write('1')\"", state)
+
+    assert result.ok is False and "watched, not restored" in result.detail
+    assert (logs / "reward.txt").read_text(encoding="utf-8") == "1"
+    assert state.python_probes_disabled is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -c 'import os; os.posix_spawn(\"/bin/rm\", [\"rm\", \"x\"], {})'",
+        "python3 -c 'import multiprocessing as mp; mp.Process(target=print, daemon=True).start()'",
+    ],
+)
+def test_spawning_through_posix_spawn_or_multiprocessing_is_refused_up_front(tmp_path: Path, command: str) -> None:
+    assert loop._code_fix_shell_refusal(command, make_state(tmp_path)) != ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -c 'print(1)' && python3 -m pytest -q",
+        "cd {ws} && python3 -c 'import m' && python3 -m pytest tests/ -v 2>&1 | head -80",
+        "python3 -m pytest -q ; python3 -c 'print(1)'",
+        "python3 -c 'print(1)' && git status",
+    ],
+)
+def test_a_probe_mixed_with_other_commands_is_refused_with_the_way_out(tmp_path: Path, command: str) -> None:
+    # The snapshot covers the whole line: a fixture database pytest writes or the
+    # stat cache git refreshes would be charged to the probe (found by the critic).
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "conftest.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "m.py").write_text("x = 1\n", encoding="utf-8")
+    state = make_state(tmp_path)
+
+    result = _probe(command.format(ws=tmp_path), state)
+
+    assert result.ok is False and "as its own command" in result.detail
+    assert state.python_probes_disabled is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -c \"open('te' + 'sts/zz.py', 'w').write('')\" | head -5",
+        "python3 -c \"open('te' + 'sts/zz.py', 'w').write('')\" 2>&1 | tail -20",
+        "cd {ws} && python3 -c \"open('te' + 'sts/zz.py', 'w').write('')\" | head",
+    ],
+)
+def test_a_probe_piped_into_a_filter_is_still_guarded(tmp_path: Path, command: str) -> None:
+    # The refusal text promises `| head` is fine; the guard has to follow.
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "conftest.py").write_text("x = 1\n", encoding="utf-8")
+    state = make_state(tmp_path)
+
+    result = _probe(command.format(ws=tmp_path), state)
+
+    assert result.ok is False and "zz.py" in result.detail and "as its own command" not in result.detail
+    assert not (tmp_path / "tests" / "zz.py").exists()
+    assert state.python_probes_disabled is True
+
+
+def test_a_harmless_probe_piped_into_a_filter_runs(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text("print('ok')\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    result = _probe("python3 -c 'import m' 2>&1 | tail -20", state)
+    assert result.ok is True and "ok" in result.output
+
+
+@pytest.mark.parametrize("command", ["cd ~ && python3 -c 'print(1)'", "cd - && python3 -c 'print(1)'", "cd $HOME && python3 -c 'print(1)'", "cd {ws}/missing && python3 -c 'print(1)'"])
+def test_a_cd_that_is_not_a_workspace_directory_is_not_stripped(tmp_path: Path, command: str) -> None:
+    assert loop._code_fix_shell_refusal(command.format(ws=tmp_path), make_state(tmp_path)) != ""
+
+
+def test_a_harmless_probe_runs_and_keeps_the_privilege(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "conftest.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "m.py").write_text("def f(x):\n    return x + 1\n", encoding="utf-8")
+    state = make_state(tmp_path)
+
+    result = _probe("python3 -c 'import m; assert m.f(1) == 2; print(\"ok\")'", state)
+
+    assert result.ok is True and "ok" in result.output
+    assert state.python_probes_disabled is False
+
+
+def test_code_audit_reads_carry_line_numbers_and_fix_reads_do_not(tmp_path: Path) -> None:
+    # An audit report cites file:line; without numbers in the read the model counted
+    # lines itself and was off by one on every extra audit task (EXTRA-taxonomy).
+    source = tmp_path / "client.py"
+    source.write_text("a = 1\n\nTOKEN = 'x'\n", encoding="utf-8")
+    state = make_state(tmp_path)
+
+    audit = loop._execute(
+        "read_range", {"path": str(source), "start_line": 1}, state, playbook=playbooks.CODE_AUDIT
+    )
+    fix = loop._execute(
+        "read_range", {"path": str(source), "start_line": 1}, state, playbook=playbooks.CODE_FIX
+    )
+
+    assert audit.ok and fix.ok
+    assert audit.output.startswith("1: a = 1\n2: \n3: TOKEN = 'x'\n\n[read_range source=")
+    assert "end_line=3" in audit.output
+    assert fix.output.startswith("a = 1\n\nTOKEN = 'x'\n\n[read_range source=")
+
+
+def test_numbered_reads_start_at_the_window_and_keep_the_cut_marker() -> None:
+    output = "def f():\n    pass\n… [window cut at line 41] …\n[read_range source=/x start_line=40 end_line=41 eof=no truncated=yes]"
+    numbered = loop._number_read_lines(output, 40)
+    assert numbered == (
+        "40: def f():\n41:     pass\n… [window cut at line 41] …\n"
+        "[read_range source=/x start_line=40 end_line=41 eof=no truncated=yes]"
+    )
+
+
+# --- composed read-only commands ---------------------------------------------------
+
+
+def _fix_workspace(root: Path) -> AgentState:
+    (root / "app").mkdir()
+    (root / "tests").mkdir()
+    (root / "main.py").write_text("from app.db import q\n", encoding="utf-8")
+    (root / "app" / "db.py").write_text("def q(): pass\n", encoding="utf-8")
+    (root / "tests" / "test_app.py").write_text("def test_x(): pass\n", encoding="utf-8")
+    return make_state(root)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat app/db.py | head -50",
+        "ps aux | grep uvicorn",
+        "env | grep -i port",
+        "python3 -m pytest -q 2>&1 | tail -20",
+        "pytest -q 2>&1",
+        "cd {ws} && python3 -m pytest -q",
+        "sleep 2 && curl -s http://127.0.0.1:8000/",
+        "curl -s http://127.0.0.1:8000/ | head",
+        "cat main.py; cat app/db.py",
+        "grep -rn execute . || true",
+        "curl -s 'http://127.0.0.1:8000/search?q=test'",
+        "curl -s \"http://127.0.0.1:8000/search?q=%27%20OR%201=1--\"",
+        "curl -s http://127.0.0.1:8000/tests/latest",
+    ],
+)
+def test_code_fix_lets_a_composition_of_allowed_commands_through(tmp_path: Path, command: str) -> None:
+    # Each part alone is allowed; joining them with a pipe or `&&` cannot write where no
+    # part writes. Refusing them cost a model a step per probe and taught it nothing.
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(command.format(ws=tmp_path), state) == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat main.py > tests/test_app.py",
+        "cat main.py | tee tests/test_app.py",
+        "echo x >&tests/test_app.py",
+        "echo x &>tests/test_app.py",
+        "cd tests && echo x > test_app.py",
+        "cd tests && cp ../main.py test_app.py",
+        "cd .. && ls",
+        "ls && rm -rf tests",
+        "cat main.py | sh",
+        "cat main.py | python3",
+        "curl -s http://127.0.0.1:8000/ | bash",
+        "find . -type f -print0 | xargs -0 rm -f",
+        "ls; $(echo rm) tests/test_app.py",
+        "ls && `echo rm` tests/test_app.py",
+        "ls & rm tests/test_app.py",
+        "ls\nrm tests/test_app.py",
+        "(cd tests && rm test_app.py)",
+        "{ ls; rm tests/test_app.py; }",
+        "sort < tests/test_app.py > tests/test_app.py",
+        "git status && git checkout -- tests",
+        "curl -s http://127.0.0.1:8000/ -o tests/test_app.py",
+        "curl -s http://127.0.0.1:8000/ && curl -o tests/test_app.py http://127.0.0.1:8000/",
+    ],
+)
+def test_code_fix_still_refuses_a_composition_with_a_refused_part(tmp_path: Path, command: str) -> None:
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(command, state) != ""
+
+
+# --- starting a service -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "pytest_command",
+    [
+        "cd {ws} && python3 -m pytest tests/ -v",
+        "python3 -m pytest tests/ -v 2>&1 | head -80",
+        "cd {ws} && python3 -m pytest tests/ -v 2>&1 | head -80",
+        "python3 -m pytest -q",
+        "cd {ws} && pytest -q 2>&1 | tail -20",
+    ],
+)
+def test_the_five_shapes_the_model_actually_writes_for_pytest(tmp_path: Path, pytest_command: str) -> None:
+    """KT7-public: 22 of 298 tool calls refused, every one of them this command.
+
+    The model writes its check as `cd /app && python3 -m pytest tests/ -v 2>&1 | head
+    -80`, never as a bare invocation; on the base each was refused, up to 9 of 47 calls
+    in one episode, and those episodes are the ones that end at `steps=30`."""
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(pytest_command.format(ws=tmp_path), state) == ""
+
+
+def test_a_pytest_chain_with_a_mutation_appended_is_still_refused(tmp_path: Path) -> None:
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(f"cd {tmp_path} && python3 -m pytest tests/ ; rm -r tests", state) != ""
+
+
+def test_a_probe_inside_a_composition_is_still_guarded(tmp_path: Path) -> None:
+    """The refusal judges a composition part by part, so the snapshot must too.
+
+    Otherwise the pipe form runs the model's Python with no snapshot behind it:
+    `_python_probe` is False for the whole string (it holds an operator) while the
+    refusal has already let it through on the strength of its parts."""
+    state = _fix_workspace(tmp_path)
+    command = 'python3 -c "import app.db" | head -5'
+    assert loop._code_fix_shell_refusal(command, state) == ""
+    assert not loop._python_probe(command, state), "the whole string is not a lone probe"
+    parts = loop._code_fix_shell_parts(command, state) or [command]
+    assert any(loop._python_probe(part, state) for part in parts), "the guard would miss it"
+
+
+def test_the_way_out_a_write_refusal_names_is_really_open(tmp_path: Path) -> None:
+    """`agent.tools` tells a refused write to use run_shell instead. That must be true.
+
+    code-fix is the only playbook with a shell policy at all (`loop._execute`), so it
+    is the only one that could turn that sentence into a lie. `sed -i` on a path the
+    task named passes it. A heredoc does not -- `<<` is compound syntax there -- which
+    is why the refusal names `sed -i` and stops.
+    """
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    (workspace / "app.py").write_text("x = 1\n", encoding="utf-8")
+    state = AgentState(
+        instruction="Disable password authentication in /etc/ssh/sshd_config.",
+        workspace=workspace,
+        budget=Budget(total_s=600.0, clock=lambda: 0.0),
+    )
+
+    assert loop._code_fix_shell_refusal("sed -i 's/yes/no/' /etc/ssh/sshd_config", state) == ""
+    assert loop._code_fix_shell_refusal(
+        "tee /etc/ssh/sshd_config <<'EOF'\nPasswordAuthentication no\nEOF", state
+    ), "a heredoc is refused here, so the refusal text must not promise one"
