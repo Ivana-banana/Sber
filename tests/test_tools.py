@@ -424,6 +424,56 @@ def test_search_without_a_match_is_a_clean_empty_answer(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert "no match" in result.detail
+    assert result.detail == f"no match for 'absent-pattern' under {tmp_path}", (
+        "with nothing skipped the answer stays exactly what every measured run saw"
+    )
+
+
+def test_search_says_which_files_it_could_not_read_instead_of_only_no_match(tmp_path: Path) -> None:
+    # `no match` on a tree whose only candidate was skipped is a false proof of absence,
+    # and absence is the one answer a small model cannot argue with. CTF and forensics
+    # material is exactly this: an ELF with the flag in .rodata, a gzipped auth.log.
+    (tmp_path / "prog").write_bytes(b"\x7fELF\x00\x02FLAG{binary_rodata_flag}\x00")
+    (tmp_path / "evidence.log.gz").write_bytes(b"\x1f\x8b\x08\x00\x00\x00\x00\x00packed")
+    (tmp_path / "notes.txt").write_text("nothing of interest\n", encoding="utf-8")
+
+    result = search(r"FLAG\{", tmp_path)
+
+    assert result.ok is False
+    assert "no match" in result.detail
+    assert "2 binary or compressed" in result.detail
+    assert "prog" in result.detail and "evidence.log.gz" in result.detail
+    assert "strings" in result.detail and "zcat" in result.detail
+
+
+def test_search_names_only_the_first_few_skipped_files(tmp_path: Path) -> None:
+    for index in range(7):
+        (tmp_path / f"blob{index}.bin").write_bytes(b"\x00\x01needle\x00")
+
+    result = search("needle", tmp_path)
+
+    assert "7 binary or compressed" in result.detail
+    assert "blob0.bin" in result.detail
+    assert "blob6.bin" not in result.detail, "a wall of paths is not a hint"
+    assert "4 more" in result.detail
+
+
+def test_the_skipped_count_ignores_installed_dependencies(tmp_path: Path) -> None:
+    # /app in the image carries a virtualenv. If its compiled extensions counted, every
+    # search that found nothing would end with a paragraph about files the task never
+    # mentioned -- the note would be noise exactly where searches are routine.
+    vendored = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    vendored.mkdir(parents=True)
+    (vendored / "_speedups.so").write_bytes(b"\x7fELF\x00\x02vendored\x00")
+    hidden = tmp_path / ".venv" / "bin"
+    hidden.mkdir(parents=True)
+    (hidden / "python").write_bytes(b"\x7fELF\x00\x02interpreter\x00")
+    (tmp_path / "app.py").write_text("print('hello')\n", encoding="utf-8")
+
+    result = search("absent-pattern", tmp_path)
+
+    assert result.ok is False
+    assert result.detail == f"no match for 'absent-pattern' under {tmp_path}"
 
 
 def test_a_broken_pattern_fails_without_raising(tmp_path: Path) -> None:
