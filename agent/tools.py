@@ -612,7 +612,14 @@ def replace_text(
         # Only when the CRLF form is really there: an anchor that is absent either way
         # is not a line-ending problem, and a wrong hint costs a step to disprove.
         crlf_found = before.count(old.replace("\n", "\r\n")) if "\r\n" in before and "\r" not in old else 0
-        if crlf_found > 1:
+        if old.startswith("…") or old.endswith("…"):
+            # `search` marks a line it cut with "…", and the hit is the text the model
+            # has in front of it when it writes the anchor.
+            hint = (
+                " The `…` is where `search` cut the line for display; it is not in the file. "
+                "Read the region with read_range and copy the anchor from there."
+            )
+        elif crlf_found > 1:
             hint = (
                 f" This file's lines end with CRLF, and with \\r\\n between them `old` appears "
                 f"{crlf_found} times; extend it with surrounding lines until it is unique."
@@ -897,14 +904,23 @@ def _match_window(line: str, at: int) -> str:
     side that was cut with a "…" costs the same 200 characters and carries the evidence.
 
     A line that fits is returned exactly as before, marker and all: this is the tool's
-    ordinary output, and it must not move.
+    ordinary output, and it must not move. Neither does a line whose match the old window
+    already showed -- shifting there costs the head of the line, which is where a line
+    says what it is about and what a model copies as an anchor, and buys nothing. Over
+    this repository that was 1 433 023 of the 1 450 080 long match lines.
     """
     text = line.rstrip()
     if len(text) <= MATCH_LINE_CHARS:
         return text
-    # Clamped so the window is always full and always inside the line; a little context
-    # before the match is worth more than centring it exactly.
-    start = max(0, min(at - MATCH_LINE_CHARS // 4, len(text) - MATCH_LINE_CHARS))
+    # `rstrip` shortens the text the window is cut from, so a match inside the trailing
+    # whitespace can start past its end; clamp rather than trust the index.
+    at = max(0, min(at, len(text)))
+    if at < MATCH_LINE_CHARS - MATCH_LINE_CHARS // 4:
+        start = 0
+    else:
+        # Clamped so the window is always full and always inside the line; a little
+        # context before the match is worth more than centring it exactly.
+        start = max(0, min(at - MATCH_LINE_CHARS // 4, len(text) - MATCH_LINE_CHARS))
     head = "…" if start else ""
     tail = "…" if start + MATCH_LINE_CHARS < len(text) else ""
     return f"{head}{text[start : start + MATCH_LINE_CHARS]}{tail}"
@@ -987,7 +1003,20 @@ def search(
                     if len(hits) >= max_matches:
                         truncated = True
                         break
-                    hits.append(f"{relative}:{number}: {_match_window(line, match.start())}")
+                    # Redacted before the window is cut, not only after. Redaction is a
+                    # substring replacement, so a window that cuts through a key leaves a
+                    # prefix that no longer matches the value -- and a prefix of a key is
+                    # a key. The match is located again in the redacted line because the
+                    # placeholder is a different length; if it no longer matches there,
+                    # the placeholder swallowed it and the head of the line is the only
+                    # window that is honest about what is left.
+                    shown, at = line, match.start()
+                    if secrets:
+                        shown = redact(line, secrets)
+                        if shown != line:
+                            moved = expression.search(shown)
+                            at = moved.start() if moved is not None else 0
+                    hits.append(f"{relative}:{number}: {_match_window(shown, at)}")
         except OSError:
             continue
         if truncated:

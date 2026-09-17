@@ -461,6 +461,55 @@ def test_search_keeps_the_head_of_a_long_line_when_the_match_is_at_its_start(tmp
     assert body.endswith("…")
 
 
+def test_search_does_not_move_a_window_the_match_was_already_inside(tmp_path: Path) -> None:
+    # Shifting a window whose match was visible anyway buys nothing and costs the head of
+    # the line -- the part that says which object the line is about, and the part a model
+    # copies as a replace_text anchor. Over this repository the shift fired on 35 225 long
+    # lines, and on 1 433 023 of them the match was inside the first 200 characters.
+    line = "class Views:  # " + "z" * 104 + " def handler(request):" + "z" * 300
+    target = tmp_path / "views.py"
+    target.write_text(line + "\n", encoding="utf-8")
+
+    result = search("handler", tmp_path)
+
+    body = result.output.split(": ", 1)[1]
+    assert line.index("handler") == 125, "the match is past the middle but inside the old window"
+    assert body.startswith("class Views:"), "the line still begins where the file does"
+    assert not body.startswith("…")
+    assert body[:-1] == line[:200], "the old window, plus the marker that it was cut"
+    assert body.endswith("…")
+
+
+def test_search_windows_a_match_that_a_trailing_blank_put_past_the_line(tmp_path: Path) -> None:
+    # `rstrip` shortens the line the window is cut from, so a match inside the trailing
+    # whitespace sits past its end. The index is clamped rather than trusted; the window
+    # stays a real slice of the line.
+    target = tmp_path / "ws.txt"
+    target.write_text("A" * 300 + "   \n", encoding="utf-8")
+
+    result = search(r"\s", tmp_path)
+
+    body = result.output.split(": ", 1)[1]
+    assert result.ok is True
+    assert body.strip("…") in "A" * 300
+    assert len(body.strip("…")) == 200
+
+
+def test_a_secret_is_redacted_before_the_window_is_cut_not_after(tmp_path: Path) -> None:
+    # Redaction is a substring replacement over the finished output. A window that cuts
+    # through a key leaves a prefix that no longer matches the value, so the prefix
+    # survives redaction and reaches the model -- and the centred window can place that
+    # cut where the old head-of-line window never could.
+    secret = "sk-proj-" + "Z" * 112
+    line = "q" * 300 + "NEEDLE" + "x" * 90 + secret + "y" * 300
+    (tmp_path / "bundle.js").write_text(line + "\n", encoding="utf-8")
+
+    result = search("NEEDLE", tmp_path, secrets=(secret,))
+
+    assert secret not in result.output
+    assert secret[:40] not in result.output, "a cut key is still a key"
+
+
 def test_search_without_a_match_is_a_clean_empty_answer(tmp_path: Path) -> None:
     (tmp_path / "text.txt").write_text("nothing of interest\n", encoding="utf-8")
 
@@ -862,6 +911,20 @@ def test_replace_text_refuses_a_symlink_to_outside_workspace(tmp_path: Path) -> 
 
     assert not result.ok
     assert outside.read_text(encoding="utf-8") == "value = 1\n"
+
+
+def test_replace_text_explains_an_anchor_copied_out_of_a_search_hit(tmp_path: Path) -> None:
+    # `search` marks a cut line with "…". The model's next move is to copy that hit as an
+    # anchor, markers and all, and the refusal that followed spoke about indentation.
+    target = tmp_path / "app.js"
+    target.write_text("var a=1;" * 40 + "var q='SELECT '+name;" + "var b=2;" * 40 + "\n", encoding="utf-8")
+    hit = search("SELECT", tmp_path).output.split(": ", 1)[1]
+
+    result = replace_text(target, hit[:60], "var q='SELECT $1';", workspace=tmp_path)
+
+    assert result.ok is False
+    assert "…" in result.detail, "name the marker the model just copied"
+    assert "search" in result.detail
 
 
 def test_replace_text_matches_an_anchor_across_crlf_lines_and_keeps_the_endings(tmp_path: Path) -> None:
