@@ -35,6 +35,11 @@ from agent.tools import (
 POSIX_ONLY = pytest.mark.skipif(os.name != "posix", reason="target image is Linux; /bin/sh absent on Windows")
 
 
+def limits_match_chars() -> int:
+    """The window `search` allows one match line, as the module defines it."""
+    return tools.MATCH_LINE_CHARS
+
+
 def python_argv(source: str) -> list[str]:
     """Run a snippet with the interpreter running the tests, on any platform."""
     return [sys.executable, "-c", source]
@@ -415,6 +420,45 @@ def test_search_does_not_dump_a_binary_file(tmp_path: Path) -> None:
 
     assert "text.txt:1" in result.output
     assert "blob.bin" not in result.output
+
+
+def test_search_centres_a_long_line_on_the_match_and_marks_the_cut(tmp_path: Path) -> None:
+    # The window used to be the first 200 characters with no marker, so a flag past
+    # column 200 -- minified JS, one long JSON string, a line-delimited forensic event,
+    # a base64 blob -- reached the model as a screen of padding it had no reason to
+    # distrust: "there is a match, and here is the line", with nothing in the line.
+    target = tmp_path / "bundle.js"
+    target.write_text("X" * 300 + "FLAG{c0rrect_h0rse_battery}" + "Y" * 300 + "\n", encoding="utf-8")
+
+    result = search(r"FLAG\{", tmp_path)
+
+    assert result.ok is True
+    assert "FLAG{c0rrect_h0rse_battery}" in result.output
+    body = result.output.split(": ", 1)[1]
+    assert body.startswith("…") and body.endswith("…"), "a cut on both sides says so on both sides"
+    assert len(body) <= limits_match_chars() + 2
+
+
+def test_search_does_not_mark_a_cut_it_did_not_make(tmp_path: Path) -> None:
+    exactly = "a" * (limits_match_chars() - len("needle")) + "needle"
+    target = tmp_path / "edge.txt"
+    target.write_text(exactly + "\n", encoding="utf-8")
+
+    result = search("needle", tmp_path)
+
+    assert result.output == f"edge.txt:1: {exactly}", "a line that fits is passed through as it always was"
+    assert "…" not in result.output
+
+
+def test_search_keeps_the_head_of_a_long_line_when_the_match_is_at_its_start(tmp_path: Path) -> None:
+    target = tmp_path / "events.jsonl"
+    target.write_text('{"event":"needle"' + ',"pad":"' + "z" * 400 + '"}\n', encoding="utf-8")
+
+    result = search("needle", tmp_path)
+
+    body = result.output.split(": ", 1)[1]
+    assert body.startswith('{"event":"needle"'), "nothing was cut before the match"
+    assert body.endswith("…")
 
 
 def test_search_without_a_match_is_a_clean_empty_answer(tmp_path: Path) -> None:
