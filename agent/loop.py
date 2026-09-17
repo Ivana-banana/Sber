@@ -3016,7 +3016,14 @@ def _service_relaunch(command: str, state: AgentState) -> bool:
 
 
 def _relaunch_directory(spelled: str, cwd: str, state: AgentState) -> bool:
-    """Whether `cd <spelled>` lands inside the workspace, or in the service's own cwd."""
+    """Whether `cd <spelled>` lands inside the workspace, or in the service's own cwd.
+
+    Never in the evaluator: a service whose working directory is `tests/` writes its
+    relative paths -- a log, a database, a cache -- into the tree that has to stay as the
+    grader left it, and no spelling of the hint asks for that.
+    """
+    if _is_evaluator_path(Path(spelled), state) or _is_repository_control_path(Path(spelled), state):
+        return False
     if _code_fix_shell_cd_target(["cd", spelled], state) is not None:
         return True
     try:
