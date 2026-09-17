@@ -1,0 +1,32 @@
+{
+  "archive_sha256": "6b9ba85ccab6cadd4b39cfa4a0246303be7584521408aad52a54052c188c1a3d",
+  "harness_sha256": "91e5780215e99498afb751a1fa8c1293ead53ac70770f53592164adc9fa15ebe",
+  "expected_tasks": [
+    "bye-file",
+    "find-sqli-login",
+    "fix-sqli-login",
+    "fix-sqli-search",
+    "hello-file",
+    "incident-log-forensics"
+  ],
+  "repeats": 5,
+  "model": "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ3_XXS",
+  "timeout_scale": 1.0,
+  "controller": "archive default",
+  "tell_agent_budget": false,
+  "reuse_images": false,
+  "idle_wait_max_s": 240.0,
+  "sampling": "archive settings; request samples retained in logs",
+  "images": {
+    "bye-file": "sha256:1a7a258cffe7243a0ca8e5e946d22b132b00de67993017c040995781a477cc31",
+    "find-sqli-login": "sha256:477e74a8e49288c7b01be5f3b12a5e180730d7378cca82e2c93a4c511954f7a7",
+    "fix-sqli-login": "sha256:c34f44c6c932a55cdc45e7fdfe9a5932398df15726f364df96b6f44e178281ac",
+    "fix-sqli-search": "sha256:f60983595f40c75f5fd1079ed0bfa037761078d66fae4913cb6b1fc6b0692c0f",
+    "hello-file": "sha256:5da000449722e1348ffa031bd9423f5f89aea9a828fdf2820694c242ed40fd8e",
+    "incident-log-forensics": "sha256:533b3109afc390ef7c54b95ed9e4a2ee5608c3e1be1495a4be49fb583a6e6763"
+  },
+  "warm_up": {
+    "seconds": 0.2,
+    "outcome": "ok"
+  }
+}
