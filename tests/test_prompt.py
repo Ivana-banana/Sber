@@ -356,6 +356,48 @@ def test_the_focus_line_asks_for_an_action_and_not_for_reasoning() -> None:
     assert "finish" in prompt.FOCUS_NOTICE
 
 
+def test_the_measured_focus_line_is_frozen_byte_for_byte() -> None:
+    """Spelled out rather than asserted about.
+
+    This is the line the 35B stand answered, and the runaway numbers in `agent.loop`
+    describe runs that read exactly it. A second focus cause was added beside it; the
+    reason it needed a second string is that rewording this one would quietly invalidate
+    those measurements.
+    """
+    assert prompt.FOCUS_NOTICE == (
+        "[фокус] Предыдущий ответ был обрезан по длине без действия. Не рассуждай: "
+        "сразу верни один короткий вызов инструмента для следующего шага "
+        "(если результат уже записан — finish с командой проверки)."
+    )
+
+
+def test_the_context_line_makes_the_same_request_without_the_false_claim() -> None:
+    """A refused request never reached the model, so nothing of its was truncated.
+
+    The ask is word for word `FOCUS_NOTICE`'s -- one short call, no reasoning, finish if
+    the result is already written -- because that is what the loop needs back either way.
+    Only the sentence explaining why the history shrank differs.
+    """
+    assert "[фокус]" in prompt.CONTEXT_FOCUS_NOTICE
+    assert "контекст" in prompt.CONTEXT_FOCUS_NOTICE
+    assert "обрезан по длине" not in prompt.CONTEXT_FOCUS_NOTICE
+    ask = "Не рассуждай: сразу верни один короткий вызов инструмента для следующего шага"
+    assert ask in prompt.CONTEXT_FOCUS_NOTICE and ask in prompt.FOCUS_NOTICE
+
+
+def test_a_focused_request_carries_the_line_its_caller_named() -> None:
+    plain = prompt.build_messages("system text", ["obs"], focus=True)
+    named = prompt.build_messages(
+        "system text", ["obs"], focus=True, notice=prompt.CONTEXT_FOCUS_NOTICE
+    )
+
+    assert plain[-1]["content"] == prompt.FOCUS_NOTICE, "the default is unchanged"
+    assert named[-1]["content"] == prompt.CONTEXT_FOCUS_NOTICE
+    assert prompt.build_messages("system text", ["obs"]) == prompt.build_messages(
+        "system text", ["obs"], notice=prompt.CONTEXT_FOCUS_NOTICE
+    ), "an unfocused request is the same request whatever notice it was offered"
+
+
 # --- the inlined files in the ENVIRONMENT block ------------------------------
 
 

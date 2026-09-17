@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from agent import limits, llm
+from pathlib import Path
+
+from agent import limits, llm, loop
 from agent.ports import LlmError, LlmPort, LlmReply
 
 KEY = "sk-test-0123456789abcdef"
@@ -1150,3 +1152,56 @@ def test_the_flat_tool_call_shape_is_accepted() -> None:
     assert isinstance(result, LlmReply)
     assert json.loads(result.text) == {"action": "ls"}
     assert client.style == llm.NATIVE_TOOLS, "a usable answer must not cost a rung"
+
+
+# --- which refusals name the prompt, and which name the ceiling -----------------
+
+
+def test_the_client_still_reads_both_families_of_marker() -> None:
+    """`_looks_like_context_overflow` is unchanged: it runs behind three gates.
+
+    A SHAPE status, a ceiling this client raised, and room left to halve it. Behind
+    those, a bare `max_tokens` in the body can only mean the request we just sent asked
+    for more completion than the window had left, so halving the ceiling is the fix.
+    """
+    for body in (
+        "This model's maximum context length is 8192 tokens",
+        "max_tokens must be a positive integer",
+        "`max_new_tokens` must be <= 512",
+    ):
+        assert llm._looks_like_context_overflow(body)
+    assert llm._looks_like_context_overflow("response_format is not supported") is None
+
+
+def test_only_a_refusal_that_names_the_prompt_is_a_context_overflow() -> None:
+    """The question a caller with none of those gates has to ask instead.
+
+    `agent.loop` sees one string and decides whether to throw its history away. Eight of
+    the twelve real 4xx bodies the critic collected mention `max_tokens` while saying
+    nothing about the window; the last case here is not even a server, it is our own
+    schema validator quoting a key the model wrote.
+    """
+    assert llm.reason_is_context_overflow(
+        "endpoint returned 400: {\"message\":\"This model's maximum context length is "
+        "16384 tokens. However, you requested 17000 tokens.\"}"
+    )
+    assert llm.reason_is_context_overflow("endpoint returned 400: context window exceeded")
+
+    for reason in (
+        "endpoint returned 400: max_tokens must be <= 4096",
+        "endpoint returned 400: 'max_tokens' is not supported with this model",
+        'endpoint returned 422: {"detail":[{"input":{"model":"q","max_tokens":8192}}]}',
+        "schema: unexpected key 'max_tokens' at style text",
+        'endpoint returned 422: {"error":"`max_new_tokens` must be <= 512"}',
+        "endpoint returned 429: Rate limit reached: 200000 tokens per minute",
+        "connection refused",
+    ):
+        assert not llm.reason_is_context_overflow(reason), reason
+
+
+def test_the_narrow_question_is_the_one_the_loop_imports() -> None:
+    """A public name, so no private one leaks across the module boundary."""
+    source = Path(loop.__file__).read_text(encoding="utf-8")
+
+    assert "reason_is_context_overflow" in source
+    assert "_looks_like_context_overflow" not in source

@@ -276,6 +276,13 @@ def _transport_reason(exc: BaseException) -> str:
     return f"transport failed: {type(exc).__name__}"
 
 
+CONTEXT_MARKERS = ("context length", "context window", "maximum context", "context_length")
+"""Markers that name the prompt. The only ones safe to read outside this module."""
+
+_OUTPUT_BUDGET_MARKERS = ("max_tokens", "max_new_tokens")
+"""Markers that name the ceiling. Meaningful only behind the gates at the call site."""
+
+
 def _looks_like_context_overflow(detail: str) -> str | None:
     """The marker in a 400 body that says the raised output budget overran the context.
 
@@ -286,10 +293,26 @@ def _looks_like_context_overflow(detail: str) -> str | None:
     lowered = detail.lower()
     # Context-specific markers only: a generic 400 (an unsupported response_format on a
     # strict server, say) must still step the protocol down, not lower the ceiling.
-    for marker in ("context length", "context window", "maximum context", "context_length", "max_tokens", "max_new_tokens"):
+    for marker in CONTEXT_MARKERS + _OUTPUT_BUDGET_MARKERS:
         if marker in lowered:
             return marker
     return None
+
+
+def reason_is_context_overflow(reason: str) -> bool:
+    """Whether a refusal names the *prompt* rather than the output budget.
+
+    Narrower than `_looks_like_context_overflow` on purpose. That one runs behind three
+    gates -- a SHAPE status, a ceiling this client raised, and room left to halve it --
+    so a bare `max_tokens` in the body can only mean the ceiling there. A caller with
+    none of those gates, `agent.loop` deciding whether to throw its history away, would
+    otherwise read every ordinary `max_tokens` validation error as an overflow: a
+    llama.cpp "must be a positive integer", a LiteLLM "not supported with this model", a
+    422 echoing our own request body, even a schema failure quoting a key name. Measured
+    on twelve real error bodies, eight of them were.
+    """
+    lowered = reason.lower()
+    return any(marker in lowered for marker in CONTEXT_MARKERS)
 
 
 def _has_reasoning_field(message: dict[str, Any]) -> bool:
