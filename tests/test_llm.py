@@ -850,8 +850,8 @@ def test_a_backoff_rung_that_would_eat_the_whole_remainder_is_not_slept() -> Non
     # Clamping the sleep to what is left is not enough. Sleeping all of it leaves nothing
     # for the request the sleep exists to make: the call ends on its deadline having
     # spent its last seconds asleep, instead of handing the caller back the time. A busy
-    # queue under a narrow deadline is where this happens -- back-pressure keeps its rung
-    # and therefore keeps its place in the schedule.
+    # A fast-failing transport under a narrow deadline is where this shows: the first
+    # rung fits the 3.0 s, the second does not, and what is left goes back to the caller.
     clock = {"t": 0.0}
     sleeps: list[float] = []
 
@@ -859,10 +859,15 @@ def test_a_backoff_rung_that_would_eat_the_whole_remainder_is_not_slept() -> Non
         sleeps.append(seconds)
         clock["t"] += seconds
 
-    endpoint = FakeEndpoint(responses=[(429, b'{"error":"rate limit"}')])
+    calls: list[int] = []
+
+    def fast_fail_transport(url, body, headers, timeout_s):
+        calls.append(1)
+        raise TimeoutError("fails immediately")
+
     client = llm.HttpLlm(
         settings=llm.LlmSettings.from_env(ENV),
-        transport=endpoint,
+        transport=fast_fail_transport,
         sleep=fake_sleep,
         clock=lambda: clock["t"],
     )
@@ -872,7 +877,7 @@ def test_a_backoff_rung_that_would_eat_the_whole_remainder_is_not_slept() -> Non
     assert isinstance(result, LlmError)
     assert sleeps == [limits.LLM_RETRY_BACKOFF_S[0]], "the 3.0s rung does not fit in 2.0s"
     assert clock["t"] < 3.0, "the caller gets the rest of its deadline back"
-    assert len(endpoint.bodies) == 2
+    assert len(calls) == 2
 
 
 def test_fallback_can_be_switched_off_for_measurement() -> None:
@@ -940,10 +945,11 @@ def test_a_second_back_pressure_still_does_not_cripple_the_protocol() -> None:
     assert "tools" in endpoint.bodies[-1], "every attempt repeats the same shape"
 
 
-def test_back_pressure_that_outlives_the_schedule_is_reported_as_retryable() -> None:
-    # A queue that never clears within the deadline is reported for what it is. The
-    # ladder is not walked on the way out: descending would spend three more requests on
-    # the same busy server and leave the client crippled for a condition that clears.
+def test_back_pressure_that_outlives_the_attempts_is_reported_as_retryable() -> None:
+    # A queue that never clears is reported for what it is, having asked as many times
+    # as it was allowed to. The ladder is not walked on the way out: descending would
+    # leave the client crippled for a condition that clears on its own, and it would not
+    # have bought a single extra request that staying here does not.
     # 408/409/425 are the same verdict as 429 and get the same treatment.
     client, endpoint, events = make_client([(408, b'{"error":"request timeout"}')])
     result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
@@ -951,8 +957,82 @@ def test_back_pressure_that_outlives_the_schedule_is_reported_as_retryable() -> 
     assert isinstance(result, LlmError)
     assert result.retryable
     assert client.style == llm.NATIVE_TOOLS
-    assert len(endpoint.bodies) == len(limits.LLM_RETRY_BACKOFF_S) + 1
-    assert [kind for kind, _ in events] == ["retry", "retry"]
+    assert len(endpoint.bodies) == limits.LLM_MAX_ATTEMPTS
+    assert {kind for kind, _ in events} == {"retry"}, "no rung was given up on the way out"
+
+
+def _busy_queue_client(refusals: int, *, timeout_s=None):
+    """A client against an endpoint that refuses the first `refusals` requests."""
+    clock = {"t": 0.0}
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock["t"] += seconds
+
+    endpoint = FakeEndpoint(
+        responses=[(429, b'{"error":"rate limit"}')] * refusals + [(200, tool_reply('{"action":"ls"}'))]
+    )
+    client = llm.HttpLlm(
+        settings=llm.LlmSettings.from_env(ENV),
+        transport=endpoint,
+        sleep=fake_sleep,
+        clock=lambda: clock["t"],
+    )
+    result = client.complete_structured(
+        [], schema=SCHEMA, max_output_tokens=16, timeout_s=timeout_s
+    )
+    return client, endpoint, result, sleeps
+
+
+def test_a_busy_queue_is_asked_again_rather_than_answered_one_rung_lower() -> None:
+    # Keeping the rung must not mean asking fewer times than stepping down did. Walking
+    # the ladder made a fresh request per demotion and no wait between them, so a queue
+    # that clears on the fourth ask used to be answered; refusing to demote and stopping
+    # after the second wait turned that into a lost call, and three lost calls end the
+    # task. So back-pressure goes on asking where it is, for the whole attempt budget.
+    client, endpoint, result, sleeps = _busy_queue_client(4)
+
+    assert isinstance(result, LlmReply)
+    assert client.style == llm.NATIVE_TOOLS
+    assert len(endpoint.bodies) == 5
+    assert all("tools" in body for body in endpoint.bodies), "every ask keeps the shape"
+    assert sleeps == [1.0, 3.0, 3.0, 3.0], "the schedule, then its last rung"
+
+
+def test_a_queue_that_refuses_six_times_still_gets_an_answer() -> None:
+    client, endpoint, result, sleeps = _busy_queue_client(6)
+
+    assert isinstance(result, LlmReply)
+    assert client.style == llm.NATIVE_TOOLS
+    assert len(endpoint.bodies) == 7
+
+
+def test_the_wait_on_a_busy_queue_is_bounded_by_the_schedule_and_the_deadline() -> None:
+    # The upper bound, spelled out: one wait before each attempt after the first, the
+    # first rung then the last rung repeated -- 1.0 + 3.0 * 6 = 19.0 s across a whole
+    # logical call -- and every one of them has to fit what is left of the deadline, so
+    # the call can no more oversleep its budget than it could before.
+    client, endpoint, result, sleeps = _busy_queue_client(99)
+
+    assert isinstance(result, LlmError)
+    assert len(endpoint.bodies) == limits.LLM_MAX_ATTEMPTS
+    assert sum(sleeps) == 1.0 + 3.0 * (limits.LLM_MAX_ATTEMPTS - 2)
+    assert sum(sleeps) == 19.0
+    assert sum(sleeps) < limits.LLM_TIMEOUT_S
+
+
+def test_a_busy_queue_under_a_tight_deadline_still_spends_what_is_left() -> None:
+    # 3.0 s of call budget: the first wait fits, the second does not. Stopping there
+    # hands back two unusable seconds and loses the call; the ladder used to spend them
+    # on requests, and so does this -- asking without waiting while any time remains,
+    # which is the cadence a demotion had anyway.
+    client, endpoint, result, sleeps = _busy_queue_client(3, timeout_s=3.0)
+
+    assert isinstance(result, LlmReply)
+    assert client.style == llm.NATIVE_TOOLS
+    assert len(endpoint.bodies) == 4
+    assert sleeps == [1.0], "the 3.0s rung never fitted the 2.0s that were left"
 
 
 def test_an_unknown_model_is_fatal_and_not_laddered() -> None:
