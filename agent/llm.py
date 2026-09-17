@@ -1021,13 +1021,24 @@ class HttpLlm:
                     return stamped(last)
 
                 if verdict == RETRY:
-                    # One retry at the current rung. A server error that survives it is
-                    # more likely a deterministic parser failure than an outage, so the
-                    # second response is to change the request shape, not repeat it.
-                    if retries_at_style == 0 and self._backoff(attempt, deadline):
+                    # One retry at the current rung for a 5xx. A server error that
+                    # survives it is more likely a deterministic parser failure than an
+                    # outage, so the second response is to change the request shape, not
+                    # repeat it.
+                    #
+                    # Back-pressure (408/409/425/429) is not that: it says nothing about
+                    # the shape, as `classify_status` spells out, and it clears on its
+                    # own. It gets the whole retry schedule on its own rung and never
+                    # steps down -- a downgrade here would be sticky for the rest of the
+                    # task and take the batched extra tool calls with it, paid for a
+                    # busy queue. `Retry-After` is still not read: the schedule is
+                    # (1.0, 3.0) s and the call deadline is what bounds the wait.
+                    pressure = status in PRESSURE_STATUSES
+                    allowance = len(limits.LLM_RETRY_BACKOFF_S) if pressure else 1
+                    if retries_at_style < allowance and self._backoff(attempt, deadline):
                         retries_at_style += 1
                         continue
-                    if schema is not None and self._demote(f"persistent http {status}"):
+                    if not pressure and schema is not None and self._demote(f"persistent http {status}"):
                         retries_at_style = 0
                         continue
                     return stamped(last)
