@@ -1095,28 +1095,53 @@ class HttpLlm:
                     return stamped(last)
 
                 if verdict == RETRY:
+                    # Back-pressure (408/409/425/429) says nothing about the shape of the
+                    # request -- `classify_status` spells out why -- and it clears on its
+                    # own, so it keeps the rung. Keeping the rung is only half of it: the
+                    # ladder it replaces made a fresh request at every demotion, with no
+                    # wait between them, so stopping after the second wait asks a busy
+                    # endpoint fewer times than stepping down did. A lost logical call is
+                    # a hard failure and three of them end the task, which is a worse
+                    # price than the one demoting charged.
+                    #
+                    # So it goes on asking where it is, for the rest of the attempt
+                    # budget: the schedule's rungs first, then its last rung before each
+                    # further try, and each wait only if it fits what is left of the call
+                    # deadline. When it does not fit, the question is asked without the
+                    # wait as long as any time remains -- the cadence a demotion had --
+                    # rather than handing back seconds too short to sleep through.
+                    #
+                    # `Retry-After` is not read: `Transport` returns a status and a body
+                    # and never the headers.
+                    pressure = status in PRESSURE_STATUSES
+                    if pressure:
+                        if attempt + 1 >= limits.LLM_MAX_ATTEMPTS:
+                            # No attempt left for a wait to lead to, and sleeping through
+                            # the last of the budget only delays the same error.
+                            return stamped(last)
+                        schedule = limits.LLM_RETRY_BACKOFF_S
+                        delay = schedule[min(attempt, len(schedule) - 1)]
+                        remaining = deadline - self.clock()
+                        if delay < remaining:
+                            # Counted like any other retry at this rung, so a 5xx arriving
+                            # after one reads the same counter it read before.
+                            retries_at_style += 1
+                            self._note("retry", f"attempt {attempt + 1} failed, waiting {delay}s")
+                            self.sleep(delay)
+                            continue
+                        if remaining > 0:
+                            retries_at_style += 1
+                            continue
+                        return stamped(last)
+
                     # One retry at the current rung for a 5xx. A server error that
                     # survives it is more likely a deterministic parser failure than an
                     # outage, so the second response is to change the request shape, not
                     # repeat it.
-                    #
-                    # Back-pressure (408/409/425/429) is not that: it says nothing about
-                    # the shape, as `classify_status` spells out, and it clears on its
-                    # own. It keeps asking at the rung it is on and never steps down -- a
-                    # downgrade here would be sticky for the rest of the task and take
-                    # the batched extra tool calls with it, paid for a busy queue.
-                    #
-                    # What bounds the asking is `_backoff` itself: the schedule is two
-                    # rungs, 1.0 s and 3.0 s, and it refuses once they are used or once
-                    # the next one no longer fits the call deadline. `Retry-After` is not
-                    # read at all -- `Transport` hands back a status and a body, not the
-                    # headers -- so a queue asking for thirty seconds is still answered
-                    # in four and then reported.
-                    pressure = status in PRESSURE_STATUSES
-                    if (pressure or retries_at_style == 0) and self._backoff(attempt, deadline):
+                    if retries_at_style == 0 and self._backoff(attempt, deadline):
                         retries_at_style += 1
                         continue
-                    if not pressure and schema is not None and self._demote(f"persistent http {status}"):
+                    if schema is not None and self._demote(f"persistent http {status}"):
                         retries_at_style = 0
                         continue
                     return stamped(last)
