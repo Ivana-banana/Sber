@@ -37,7 +37,16 @@ import shlex
 import stat
 import time
 
-from agent import detectors, limits, prompt, result_contract, result_progress, sources, tools
+from agent import (
+    detectors,
+    limits,
+    prompt,
+    result_contract,
+    result_progress,
+    snapshot,
+    sources,
+    tools,
+)
 # Aliased, and used for exactly one question: whether a refusal the client could not
 # work around was about the size of the request. The loop reaches a model only through
 # the injected `LlmPort`, and `llm` is that parameter's name in half the functions here.
@@ -3466,6 +3475,11 @@ def _execute(
         # deliverable contract in these tasks is an absolute path, and a resolved
         # variant of it is a different string to a verifier that compares paths.
         state.artifacts.append(target)
+    if result.ok and tool in {prompt.WRITE_FILE, prompt.WRITE_JSON}:
+        # Every successful write, not only the first: the revision worth keeping is
+        # rarely the one that created the file. `replace_text` is left out because it
+        # edits code, and code never reaches the level `remember` stores.
+        snapshot.remember_from_disk(state, target)
     return result
 
 
@@ -4065,6 +4079,15 @@ def _finalise(
         deliverable = state.workspace / source_changes.paths[-1]
     elif state.artifacts:
         deliverable = state.artifacts[-1]
+    if deliverable is not None:
+        # Every path into `_finalise` is a run that never reached a green check, so a
+        # deliverable that is empty now was emptied by the run itself. The grader reads
+        # whatever is on disk: put the last structured revision back before verifying,
+        # so the check below sees the file the grader will. Never claims a solve, and
+        # never touches a non-empty file. See `agent.snapshot`.
+        note = snapshot.restore(state, deliverable)
+        if note:
+            state.record("verify", "best-snapshot", note)
     artifact_only_code_fix = (
         source_changes is not None and source_changes.known and not source_changes.paths
     )

@@ -364,6 +364,14 @@ class AgentState:
     artifacts: list[Path] = field(default_factory=list)
     """Files this run created or modified, for the final report and for cleanup."""
 
+    best_content: dict[Path, bytes] = field(default_factory=dict, repr=False)
+    """Per written path, the latest *structured* (level-2) content written there.
+
+    Keyed by the path as the model named it, so it lines up with `artifacts`. Written
+    on every level-2 write and read by `_finalise` to refill a deliverable the run
+    later emptied. Only structured content is kept, never a code patch or a terse
+    answer. See `agent.snapshot`."""
+
     read_paths: set[Path] = field(default_factory=set, repr=False)
     """Resolved paths this run has actually read (read_range, or a read-only shell that
     opened the file). A code-fix write_file to an unread existing source is refused, so
