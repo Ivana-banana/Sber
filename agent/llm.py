@@ -477,17 +477,28 @@ def _content_text(message: dict[str, Any]) -> str:
     OpenAI's own schema types an assistant `content` as a string, but proxies that
     translate an Anthropic-shaped backend answer with the parts list they were handed.
     Read as "not a string, so empty", such a reply looks like a server that produced
-    nothing: the ladder is walked to the bottom and the client stays there. Parts that
-    carry no text -- a refusal part, an image -- are not text and add nothing.
+    nothing: the ladder is walked to the bottom and the client stays there.
+
+    A part counts only when it says `type: "text"`, and that is the whole point of the
+    check rather than a detail of it. The same list is how those proxies ship reasoning
+    -- `reasoning`, `thinking`, `summary_text` -- and several of those shapes carry
+    their prose under `text` as well. Joined into the content, a draft action inside the
+    reasoning is the first `{` `_salvage_json` finds, so the model would act on a
+    thought it never committed to: the failure `_strip_thinking` exists to prevent,
+    arriving by another door. A part with no `type` is not text either; every dialect
+    that exists labels its parts, and refusing an unlabelled one costs the ladder the
+    reply was already costing, which is the cheaper of the two mistakes.
     """
     content = message.get("content")
     if isinstance(content, str):
         return content
     if isinstance(content, list):
         return "".join(
-            part.get("text", "")
+            part["text"]
             for part in content
-            if isinstance(part, dict) and isinstance(part.get("text"), str)
+            if isinstance(part, dict)
+            and part.get("type") == "text"
+            and isinstance(part.get("text"), str)
         )
     return ""
 
