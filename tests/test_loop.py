@@ -7913,6 +7913,44 @@ def test_the_five_shapes_the_model_actually_writes_for_pytest(tmp_path: Path, py
     assert loop._code_fix_shell_refusal(pytest_command.format(ws=tmp_path), state) == ""
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -m unittest discover -s tests",
+        "python3 -m unittest tests.test_app",
+        "python3 -m unittest -v",
+        "cd {ws} && python3 -m unittest discover 2>&1 | tail -20",
+        "python3 -m json.tool app/db.py",
+        "cd app && python3 -m unittest discover",
+    ],
+)
+def test_the_stdlib_test_runner_is_allowed_where_pytest_is(tmp_path: Path, command: str) -> None:
+    """`unittest` runs test code exactly as `pytest` does, and `pytest` is allowed.
+
+    A closed task whose suite is written on the stdlib runner, or an image without
+    pytest, left the model with no way to run a check at all, while the refusal told it
+    to "use a read-only test command" -- which is what it had just written (audit-0917
+    tools.md T-4). `json.tool` is a pretty-printer and executes nothing."""
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(command.format(ws=tmp_path), state) == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -m http.server 8000",
+        "python3 -m pip install requests",
+        "python3 -m unittest discover > tests/out.txt",
+        "python3 -m unittest.mock",
+        # json.tool's second operand is the file it writes, so it is not read-only
+        "python3 -m json.tool app/db.py tests/test_app.py",
+    ],
+)
+def test_no_other_python_module_is_allowed_with_it(tmp_path: Path, command: str) -> None:
+    state = _fix_workspace(tmp_path)
+    assert loop._code_fix_shell_refusal(command, state) != ""
+
+
 def test_a_pytest_chain_with_a_mutation_appended_is_still_refused(tmp_path: Path) -> None:
     state = _fix_workspace(tmp_path)
     assert loop._code_fix_shell_refusal(f"cd {tmp_path} && python3 -m pytest tests/ ; rm -r tests", state) != ""
