@@ -846,6 +846,35 @@ def test_backoff_never_sleeps_past_the_deadline() -> None:
     assert clock["t"] <= 2.0, "backoff must never sleep past the deadline it was given"
 
 
+def test_a_backoff_rung_that_would_eat_the_whole_remainder_is_not_slept() -> None:
+    # Clamping the sleep to what is left is not enough. Sleeping all of it leaves nothing
+    # for the request the sleep exists to make: the call ends on its deadline having
+    # spent its last seconds asleep, instead of handing the caller back the time. A busy
+    # queue under a narrow deadline is where this happens -- back-pressure keeps its rung
+    # and therefore keeps its place in the schedule.
+    clock = {"t": 0.0}
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock["t"] += seconds
+
+    endpoint = FakeEndpoint(responses=[(429, b'{"error":"rate limit"}')])
+    client = llm.HttpLlm(
+        settings=llm.LlmSettings.from_env(ENV),
+        transport=endpoint,
+        sleep=fake_sleep,
+        clock=lambda: clock["t"],
+    )
+
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16, timeout_s=3.0)
+
+    assert isinstance(result, LlmError)
+    assert sleeps == [limits.LLM_RETRY_BACKOFF_S[0]], "the 3.0s rung does not fit in 2.0s"
+    assert clock["t"] < 3.0, "the caller gets the rest of its deadline back"
+    assert len(endpoint.bodies) == 2
+
+
 def test_fallback_can_be_switched_off_for_measurement() -> None:
     client, endpoint, events = make_client([(400, b"no tools")])
     client.allow_fallback = False

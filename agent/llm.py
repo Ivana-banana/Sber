@@ -1238,6 +1238,11 @@ class HttpLlm:
         remaining = deadline - self.clock()
         if remaining <= 0:
             return False
+        if limits.LLM_RETRY_BACKOFF_S[attempt] >= remaining:
+            # Clamping is not enough when the rung is wider than the whole remainder:
+            # the clamped sleep spends every second that is left and the attempt it was
+            # waiting for never gets made. Hand the time back to the caller instead.
+            return False
         delay = min(limits.LLM_RETRY_BACKOFF_S[attempt], remaining)
         self._note("retry", f"attempt {attempt + 1} failed, waiting {delay}s")
         self.sleep(delay)
