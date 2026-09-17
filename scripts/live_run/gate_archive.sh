@@ -32,6 +32,20 @@ fi
 
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
+image=secureintelligent/acp@sha256:1324d7bb140422a9929f5bc538f55ec0480d2731742effee02bf67604130c8a3
+
+# Say which is missing, the environment or the archive. Without this every mode fails
+# with "the container did not start" and the verdict blames the bytes for a machine
+# that has no docker or has never seen the pinned image.
+if ! command -v docker >/dev/null 2>&1; then
+    echo "docker is not installed here; this gate needs the target image" >&2
+    exit 2
+fi
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+    echo "the pinned image is not available locally: $image" >&2
+    echo "the gate does not pull it — a machine without it cannot judge these bytes" >&2
+    exit 2
+fi
 stamp=$(date +%H%M%S)
 out="$repo/build/gate-$stamp"
 mkdir -p "$out"

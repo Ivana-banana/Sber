@@ -79,6 +79,7 @@ while [ "$i" -le "$repeats" ]; do
     if [ -z "$cid" ]; then
         echo "gate FAIL: the container did not start"
         status=1
+        rm -rf "$rundir"
         i=$((i + 1))
         continue
     fi
