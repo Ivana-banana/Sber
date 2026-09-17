@@ -2815,6 +2815,16 @@ _SHELL_OPERATOR_CHARS = re.compile(r"[;&|<>`$()]")
 _WORKSPACE_CD = re.compile(r"^\s*cd\s+(?P<dir>[^\s;&|<>$`(){}\\'\"]+)\s*&&\s*(?P<rest>.+)$", re.DOTALL)
 
 
+def _is_pipe_filter_part(part: str) -> bool:
+    """`head -5`, `2>&1 | tail -20`'s tail: a filter that only shapes stdout. A filter
+    that could write a file (`tee tests/x`) is refused earlier, by the part-wise policy."""
+    try:
+        words = _code_fix_shell_unwrap_simple_wrappers(shlex.split(part))
+    except ValueError:
+        return False
+    return bool(words) and PurePosixPath(words[0]).name in _PIPE_FILTERS
+
+
 def _strip_workspace_cd(command: str, state: AgentState) -> str:
     """`cd <dir inside the workspace> && <rest>` -> `<rest>`, else the command unchanged.
 
@@ -3048,7 +3058,11 @@ def _execute(
                 return tools.ToolResult(name=tool, ok=False, detail=refusal)
             probe_parts = _code_fix_shell_parts(command, state) or [command]
             probes = [part for part in probe_parts if _python_probe(part, state)]
-            if probes and len(probes) != len(probe_parts):
+            others = [
+                part for part in probe_parts
+                if part not in probes and not _is_pipe_filter_part(part)
+            ]
+            if probes and others:
                 # A probe next to pytest or git in one line: the snapshot would cover
                 # the whole line and charge the neighbours' side effects (a fixture
                 # database, `.git/index`) to the probe -- output lost, privilege gone.
