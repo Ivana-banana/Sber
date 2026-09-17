@@ -182,10 +182,16 @@ def run_argv(
         spawn["env"] = dict(env)
 
     # argv is a list, so the model's text is one argument and never a command line.
+    # stdin is /dev/null and not ours: no caller here feeds the child anything, and a
+    # command with a forgotten operand -- `grep ERROR` without a file, a bare `cat`,
+    # `python3`, `sqlite3` -- would otherwise read the agent's own stdin and wait out
+    # the whole tool timeout, which on a file task is the whole task budget. At EOF the
+    # same commands answer at once, which is the answer the model can act on.
     try:
         process = subprocess.Popen(
             list(argv),
             cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             **spawn,  # type: ignore[arg-type]
