@@ -553,6 +553,35 @@ def test_search_without_a_match_is_a_clean_empty_answer(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        # `re.compile` raises this one, not `re.error`, and it is the shape a model
+        # writes by accident: a repetition count copied out of a byte size.
+        "x{4294967296}",
+        "(?P<a>x)(?P<a>y)",
+        "[z-a]",
+        "*",
+        "(?<=a*)b",
+    ],
+)
+def test_search_refuses_a_pattern_the_engine_will_not_build(tmp_path: Path, pattern: str) -> None:
+    """A pattern the engine cannot compile is a refused tool call, never a raised step.
+
+    `re.error` is not the only way a compile fails: a repetition count past the engine's
+    limit raises `OverflowError` and a deeply nested one can exhaust the interpreter's
+    stack with `RecursionError`. Either escaped the tool and ended the step as a crash
+    rather than as the ordinary answer -- "bad pattern" -- that the model can read and
+    write a better pattern from (critic, 17.09).
+    """
+    (tmp_path / "text.txt").write_text("hello\n", encoding="utf-8")
+
+    result = search(pattern, tmp_path / "text.txt")
+
+    assert result.ok is False
+    assert result.detail.startswith("bad pattern: "), result.detail
+
+
 def test_search_says_which_files_it_could_not_read_instead_of_only_no_match(tmp_path: Path) -> None:
     # `no match` on a tree whose only candidate was skipped is a false proof of absence,
     # and absence is the one answer a small model cannot argue with. CTF and forensics

@@ -1020,7 +1020,12 @@ def search(
     """
     try:
         expression = re.compile(pattern)
-    except re.error as exc:
+    except (re.error, OverflowError, RecursionError) as exc:
+        # Not only `re.error`: a repetition count past the engine's limit raises
+        # `OverflowError` (`x{4294967296}`) and a deeply nested pattern can exhaust the
+        # stack with `RecursionError`. Both used to leave the tool as a raise, which
+        # ends the step instead of answering it -- and the answer is one the model can
+        # act on, which is to write a pattern the engine will take.
         return ToolResult(name="search", ok=False, detail=f"bad pattern: {exc}")
 
     if root.is_file():
