@@ -101,7 +101,7 @@ is 30 s, so this asks for 60 s of spendable time at step 30; an endpoint that co
 reach the cap that early does not exist on any stand we have measured.
 """
 
-OBSERVATION_BUDGET_CHARS = 8000
+OBSERVATION_BUDGET_CHARS = 24000
 """How much observation history travels back to the model, in characters.
 
 Was a window of the last eight observations, which was cheap to reason about and
@@ -114,19 +114,47 @@ A budget does not slide. While the kept history fits, every request is a strict
 extension of the one before it and the server pays for the new tail alone. When it no
 longer fits, the history is re-laid once -- one full prefill, then extensions again.
 
-Eight thousand characters is about two thousand tokens, which leaves room beside the
-thousand-token system block inside a 4096-token context. A single observation may be
-6000 bytes (`TOOL_OUTPUT_HEAD_BYTES` plus `TOOL_OUTPUT_TAIL_BYTES`), so the budget is
-not a guarantee that two large observations both fit; it is a bound on the ordinary
-case, and `OBSERVATION_RELAY_KEEP` is what holds the exceptional one.
+A single observation may be 6000 bytes (`TOOL_OUTPUT_HEAD_BYTES` plus
+`TOOL_OUTPUT_TAIL_BYTES`), so the budget is not a guarantee that two large
+observations both fit; it is a bound on the ordinary case, and
+`OBSERVATION_RELAY_KEEP` is what holds the exceptional one.
+
+**Raised from 8000 as an arm, and the old number's own reasoning is why.** Eight
+thousand was about two thousand tokens, chosen to leave room beside the
+thousand-token system block *inside a 4096-token context* -- and 4096 is the ollama
+default our stand happened to run, not anything the competition contract says. The
+evaluation endpoint's window is unknown and the model trains at 32768, so the working
+memory of the agent was sized by an artefact of our own measuring rig.
+
+What that cost: once the budget is spent, `prompt.history_base` drops everything but
+the last `OBSERVATION_RELAY_KEEP` observations. At 8000/4 an episode of twenty-plus
+steps spends almost all of them remembering four, so the run cannot recall which
+hypotheses it already tried -- which is the mechanism behind both `stuck` and the
+`reasoning` failure class.
+
+E026 is not evidence against this. It raised the *server* window 4096 -> 16384 and
+recorded "the window does not limit us", but it changed the stand only: this constant
+stayed at 8000, so the same truncated history was sent either way and the run could
+not have shown a gain. The suspicion it claimed to settle is still open.
+
+24000 characters is roughly 6000 tokens, which with the system block and
+`LLM_MAX_OUTPUT_TOKENS` wants about 9k of context. **Do not run this arm on a stand
+below 16384**, or it measures the overflow path instead of the hypothesis. On an
+endpoint that cannot take it, `agent.llm` answers the 400 by lowering the ceiling and
+`agent.loop` narrows to `focus_base`, so the failure mode is degraded, not fatal --
+but it is still not the thing being measured.
 """
 
-OBSERVATION_RELAY_KEEP = 4
+OBSERVATION_RELAY_KEEP = 8
 """How many observations survive a re-lay.
 
-Four and not one because the verifier reserve can need the error from several steps
-back; four and not more because a re-lay that keeps most of the history spends its
-prefill again almost immediately.
+Not one, because the verifier reserve can need the error from several steps back; not
+most of the history, because a re-lay that keeps nearly everything spends its prefill
+again almost immediately.
+
+Raised from 4 with `OBSERVATION_BUDGET_CHARS`, and for the same reason: four was what
+fitted beside a 4096-token context. A re-lay is the moment the run is most likely to
+repeat work it has already done, so it is exactly the wrong moment to forget the most.
 """
 
 FOCUS_RELAY_KEEP = 2
