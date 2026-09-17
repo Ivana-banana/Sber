@@ -237,18 +237,19 @@ _KEYWORDS: dict[str, dict[str, int]] = {
     "code-audit": {
         "audit": 3, "security review": 3, "code review": 3, "scan for": 3, "аудит*": 3,
         "finding*": 3,
+        "misconfigurat*": 3,
         "vulnerab*": 2, "injection*": 2, "insecure": 2, "weakness*": 2, "sink": 2,
         "уязвим*": 2, "слабые места": 2, "without modifying it": 2, "without changing it": 2,
         "review": 1, "analyze": 1, "secure": 1, "assess*": 1, "do not modify": 1,
-        "do not change": 1,
+        "do not change": 1, "recommendation*": 1, "impact": 1,
     },
     "forensics": {
         "forensic*": 3, "log analysis": 3, "incident*": 3, "auth.log": 3, "exfil*": 3,
         "форензик*": 3, "расследуй": 3, "расследование": 3, "инцидент*": 3,
         "timeline*": 2, "syslog": 2, "compromise*": 2, "breach*": 2, "attacker*": 2,
-        "log": 2, "logs": 2, "journal": 2, "журнал*": 2, "лог": 2, "evidence": 2,
+        "journal": 2, "журнал*": 2, "лог": 2, "evidence": 2,
         "triage": 2, "auditlog": 2, "egress": 2,
-        "investigate": 1, "artifact*": 1, "timestamp*": 1,
+        "investigate": 1, "artifact*": 1, "timestamp*": 1, "log": 1, "logs": 1,
     },
     "ctf": {
         "capture the flag": 3, "find the flag": 3, "the flag": 3, "ctf": 3, "флаг*": 3,

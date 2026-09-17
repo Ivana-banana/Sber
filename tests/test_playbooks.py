@@ -92,6 +92,60 @@ def test_select_routes_by_what_the_task_asks_not_its_exact_wording(instruction: 
     assert playbooks.select(instruction).name == expected
 
 
+@pytest.mark.parametrize(
+    ("instruction", "expected"),
+    [
+        # `\blog\b` matches inside `/var/log/gateway.log`, because `/` and `.` end a
+        # word: the path of a service the audit reads counted twice for forensics and
+        # outweighed `finding*`. Routing an audit into forensics is worse than routing
+        # it into general -- it also switches off the read_range line numbers the report
+        # cites locations from (`loop._number_read_lines`) and the audit checkpoint.
+        (
+            "The gateway logs to /var/log/gateway.log. Inspect /app/gateway.py and "
+            "write /app/report.json with findings.",
+            "code-audit",
+        ),
+        # A configuration review names neither "audit" nor "vulnerability", and the
+        # word it does name -- the evidence behind each entry -- belonged to forensics.
+        (
+            "Review /app/Dockerfile for misconfigurations and write the evidence for "
+            "each one to /app/report.json.",
+            "code-audit",
+        ),
+        (
+            "Analyze /app/handler.py and record the evidence and a recommendation for "
+            "each issue in /app/out.json. Do not modify the file.",
+            "code-audit",
+        ),
+        (
+            "# Hardening review of the SSH daemon\n\nInspect `/etc/ssh/sshd_config`. "
+            "Write `/app/report.json` listing each setting that weakens the host, with "
+            "the directive name, the current value, the recommended value and the "
+            "impact. Do not restart or modify the service.",
+            "code-audit",
+        ),
+        # The organisers' own audit schema, and nothing else: `evidence` is one of its
+        # field names. code-audit and forensics now tie on it, and a tie is honestly
+        # general -- what must not happen is a confident hand-off to forensics.
+        (
+            "Inspect /app/gateway.py. Write /app/report.json with one entry per issue. "
+            "Each entry needs category, location, evidence, impact and recommendation.",
+            "general",
+        ),
+        # A path is not a subject: a marker file that happens to live under /var/log is
+        # a trivial file task, not an investigation.
+        (
+            "Create a file at /var/log/app/marker.txt whose entire content is exactly `ok`.",
+            "general",
+        ),
+    ],
+)
+def test_report_vocabulary_and_log_paths_do_not_hand_an_audit_to_forensics(
+    instruction: str, expected: str
+) -> None:
+    assert playbooks.select(instruction).name == expected
+
+
 def test_select_always_returns_a_playbook() -> None:
     # Untrusted task text may match nothing; the design still injects exactly one.
     chosen = playbooks.select("do the needful with the thing")
