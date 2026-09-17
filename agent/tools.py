@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent import limits, result_progress
-from agent.paths import permits
+from agent.paths import permits, write_refusal
 from agent.redact import AGENT_CREDENTIAL_ENV_NAMES, redact
 
 CHUNK_BYTES = 65536
@@ -364,7 +364,7 @@ def write_file(
         return ToolResult(
             name="write_file",
             ok=False,
-            detail=f"refused: {target} is outside the workspace {root} and unnamed by the task",
+            detail=f"refused: {write_refusal(target, root, permitted)}",
         )
 
     started = time.monotonic()
@@ -458,7 +458,7 @@ def write_json(
         return ToolResult(
             name="write_json",
             ok=False,
-            detail=f"refused: {target} is outside the workspace {root} and unnamed by the task",
+            detail=f"refused: {write_refusal(target, root, permitted)}",
         )
 
     # The value is normally already parsed (the action arrived as JSON). A model that
@@ -544,7 +544,7 @@ def replace_text(
         return ToolResult(
             name="replace_text",
             ok=False,
-            detail=f"refused: {target} is outside the workspace {root} and unnamed by the task",
+            detail=f"refused: {write_refusal(target, root, permitted)}",
         )
 
     if not old:
