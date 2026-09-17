@@ -657,10 +657,18 @@ class HttpLlm:
     generation for nothing."""
 
     _thinking_unsupported: bool = field(default=False, repr=False)
-    """Set once, for the rest of the run, when the endpoint answered a body carrying
-    `chat_template_kwargs` with a shape error: the key is not a dialect this server
-    knows. Asking again buys the same refusal on every later call, so the switch is
-    taken off the escalation for good and truncation stops one rung earlier."""
+    """Set once, for the rest of the run, when the endpoint has been *shown* not to take
+    `chat_template_kwargs`: it named the key in a refusal, or the same rung went through
+    the moment the switch came off it. Then the switch is taken off the escalation for
+    good and truncation stops one rung earlier.
+
+    Only an outcome sets it. A 400 that merely arrived while the switch was up is not
+    one: it is as likely to be about the rung, and spending the flag on a guess throws
+    away the only answer to a reasoning runaway this client has."""
+
+    _thinking_probe: bool = field(default=False, repr=False)
+    """Set while the last request repeated a rung with the switch taken off, to find out
+    whether the switch was what the server refused. The next status settles it."""
 
     _output_cap: int = field(default=limits.LLM_THINKING_MAX_OUTPUT_TOKENS, repr=False)
     """Upper bound on the raised ceiling, lowered only when the server answers a raised
@@ -970,6 +978,10 @@ class HttpLlm:
 
         last = LlmError(reason="no attempt was made", retryable=False)
         retries_at_style = 0
+        # Per logical call, not per run: the switch is taken off once here, so a rung
+        # that keeps truncating cannot spend the whole attempt budget putting it on and
+        # taking it off again.
+        thinking_dropped = False
         # Usage summed across every attempt, not just the one that finally parses: a
         # demoted or truncated attempt was still generated and billed. `stamped` puts
         # the running total on whatever object is returned, reply or error.
@@ -1021,6 +1033,14 @@ class HttpLlm:
                     retryable=verdict == RETRY,
                 )
 
+                if self._thinking_probe:
+                    # The same rung was refused without the switch as well, so the switch
+                    # was not what the server objected to. Put it back and let the error
+                    # take the ordinary route.
+                    self._thinking_probe = False
+                    self._thinking_off = True
+                    self._note("thinking", "refused without the flag as well; keeping it")
+
                 # A strict server (vLLM) rejects the raised thinking budget with a 400
                 # naming the context length: lower the ceiling and retry the same rung
                 # rather than downgrade the protocol, which would not fix the size.
@@ -1034,16 +1054,39 @@ class HttpLlm:
                     self._note("thinking", f"context rejected the budget; capping output at {self._output_cap}")
                     continue
 
-                if verdict == SHAPE and self._thinking_off:
+                if (
+                    verdict == SHAPE
+                    and self._thinking_off
+                    and not thinking_dropped
+                    and not _looks_like_context_overflow(detail)
+                ):
                     # `chat_template_kwargs` is the one key in this body that no
                     # OpenAI-compatible server promises to accept, and a gateway
-                    # validating with `extra="forbid"` rejects it. The rung is not what
-                    # was refused: drop the switch and repeat the same request. Without
-                    # this the ladder is spent on a field that has nothing to do with the
-                    # rung, and the key -- sticky -- then refuses every later call too.
+                    # validating with `extra="forbid"` rejects it. Since the key is
+                    # sticky, that refusal would then ride on every later call and the
+                    # ladder would be spent on a field that has nothing to do with the
+                    # rung. So take the switch off and repeat the same request.
+                    #
+                    # Whether it stays off for the run is decided by what comes back,
+                    # not by the fact that a 400 arrived while it was up: a 400 about
+                    # something else in the body -- a `tools` this model does not take --
+                    # would otherwise spend the flag on a guess. A body that names the
+                    # key has already settled it; anything else is a probe, and the next
+                    # status is the answer.
+                    #
+                    # A context-length 400 never comes in here. It is answered by the
+                    # smaller ceiling above, and it still is not about the switch on the
+                    # call where the cap has already reached the floor and that branch
+                    # can no longer fire.
+                    thinking_dropped = True
                     self._thinking_off = False
-                    self._thinking_unsupported = True
-                    self._note("thinking", "endpoint refused enable_thinking; dropping the flag")
+                    lowered = detail.lower()
+                    if "chat_template_kwargs" in lowered or "enable_thinking" in lowered:
+                        self._thinking_unsupported = True
+                        self._note("thinking", "endpoint named the flag; dropping it for the run")
+                    else:
+                        self._thinking_probe = True
+                        self._note("thinking", "repeating the rung without the flag to see whether it was the cause")
                     continue
 
                 if verdict == FATAL:
@@ -1105,6 +1148,19 @@ class HttpLlm:
             # survived the raise.
             message = _first_message(payload)
             finish = _finish_reason(payload)
+
+            if self._thinking_probe:
+                # The rung went through the moment the switch came off it, so the switch
+                # was the refused part -- unless the answer was cut off again, which is
+                # the one condition the switch exists for. Nothing is settled there, and
+                # the escalation below asks for it again.
+                self._thinking_probe = False
+                if finish == "length":
+                    self._note("thinking", "accepted without the flag but still truncated; nothing settled")
+                else:
+                    self._thinking_unsupported = True
+                    self._note("thinking", "accepted without the flag; the endpoint does not take it")
+
             was_raised = self._thinking_endpoint or self._output_raised
             evidence = _thinking_evidence(
                 message,
