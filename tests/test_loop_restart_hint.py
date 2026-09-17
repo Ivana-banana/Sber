@@ -457,6 +457,16 @@ def test_the_hint_names_the_service_read_from_a_synthetic_process_table(
 RELAUNCH_IN_HINT = re.compile(r"Готовая команда: `(?P<command>[^`]+)`")
 
 
+def deliver(state: AgentState) -> tuple[str, str, str]:
+    """Scan, and record the offer the way the loop does when it shows the hint."""
+    offer: list[tuple[int, tuple[str, ...], str]] = []
+    looked = loop._stale_service(state, offer=offer)
+    assert looked is not None
+    for record in offer:
+        loop._remember_relaunch(state, record)
+    return looked
+
+
 def offered_relaunch(hint: str) -> str:
     match = RELAUNCH_IN_HINT.search(hint)
     assert match is not None, hint
@@ -482,7 +492,7 @@ def synthetic_stale_service(
     monkeypatch.setattr(tools, "PROC_ROOT", proc)
     state = codefix_state(tmp_path)
     state.artifacts.append(changed)
-    kind, _, hint = loop._stale_service(state)
+    kind, _, hint = deliver(state)
     assert kind == "stale-service", kind
     return state, hint
 
@@ -571,6 +581,33 @@ def test_a_relaunch_redirect_is_judged_by_inode_like_every_other_redirect(
 
 
 @LINUX_ONLY
+def test_a_hint_the_loop_never_showed_hands_out_no_offer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `stale-service-late` branch builds the hint and prints nothing.
+
+    Inside the verifier reserve, or after the one refusal this run may spend, the finding
+    is audited and the model is told nothing -- so there is no command it could have
+    copied, and the background start stays refused like any other.
+    """
+    changed = write_app(tmp_path)
+    proc = write_proc(
+        tmp_path.parent / f"{tmp_path.name}-late",
+        [FakeProcess(4243, ("uvicorn", "main:app"), cwd=tmp_path, inodes=(4242,))],
+        listening={4242: 8000},
+    )
+    monkeypatch.setattr(tools, "PROC_ROOT", proc)
+    state = codefix_state(tmp_path)
+    state.artifacts.append(changed)
+
+    kind, _, hint = loop._stale_service(state)  # built, never delivered
+
+    assert kind == "stale-service" and hint
+    assert state.service_restarts == []
+    assert loop._code_fix_shell_refusal(offered_relaunch(hint), state) != ""
+
+
+@LINUX_ONLY
 def test_no_relaunch_is_accepted_before_a_stale_service_was_ever_found(
     tmp_path: Path
 ) -> None:
@@ -622,7 +659,7 @@ def test_the_dictated_restart_really_runs_and_reopens_the_finish_gate(
     state = codefix_state(tmp_path)
     state.artifacts.append(changed)
 
-    kind, _, hint = loop._stale_service(state)
+    kind, _, hint = deliver(state)
     assert kind == "stale-service", kind
     relaunch = offered_relaunch(hint)
 
@@ -661,7 +698,7 @@ def prepare_stale(tmp_path: Path, machine: Machine, source: str) -> tuple[AgentS
     changed.write_text(source, encoding="utf-8")
     state = codefix_state(tmp_path)
     state.artifacts.append(changed)
-    kind, _, hint = loop._stale_service(state)
+    kind, _, hint = deliver(state)
     assert kind == "stale-service", kind
     Path("/tmp/service-restart.log").unlink(missing_ok=True)
     return state, offered_relaunch(hint), service_pid, port

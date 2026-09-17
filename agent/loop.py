@@ -363,7 +363,8 @@ def run(
                 # Could this check have exercised the change at all? A process older
                 # than the edit is running the code as it was before it. Observation
                 # only: nothing here restarts, signals or starts anything.
-                looked = _stale_service(state, source_changes)
+                offered: list[tuple[int, tuple[str, ...], str]] = []
+                looked = _stale_service(state, source_changes, offer=offered)
                 if looked is not None:
                     stale_service_checks += 1
                     kind, detail, hint = looked
@@ -375,6 +376,10 @@ def run(
                         and state.budget.spendable_s() >= limits.SERVICE_RESTART_MIN_SPARE_S
                     ):
                         stale_service_refusals += 1
+                        for record in offered:
+                            # Recorded only now: the shell policy accepts this restart
+                            # because the model was handed it, on this step.
+                            _remember_relaunch(state, record)
                         observations.append(f"[step {step}] {hint}")
                         continue
                     if hint:
@@ -3709,26 +3714,41 @@ def _workspace_relative(path: Path, workspace: Path) -> str:
     return name.replace("\r", " ").replace("\n", " ")
 
 
-def _remember_relaunch(state: AgentState, process: tools.ServingProcess) -> None:
-    """Record the argv the hint is about to dictate, so the policy can recognise it.
-
-    Only the process the hint names: that is the only command line that reaches the
-    model, and a background start the model was never told about stays refused.
-    """
+def _relaunch_record(process: tools.ServingProcess) -> tuple[int, tuple[str, ...], str] | None:
+    """The offer a hint about `process` would dictate: its pid, argv and directory."""
     try:
         argv = tuple(shlex.split(process.command))
     except ValueError:
-        return
-    offer = (process.pid, argv, str(process.cwd) if process.cwd else "")
-    if argv and offer not in state.service_restarts:
+        return None
+    if not argv:
+        return None
+    return process.pid, argv, str(process.cwd) if process.cwd else ""
+
+
+def _remember_relaunch(state: AgentState, offer: tuple[int, tuple[str, ...], str]) -> None:
+    """Record a restart command the model was actually shown.
+
+    Only when the hint reached the observations. A scan whose hint the loop decided not
+    to spend a refusal on (`stale-service-late`) prints nothing, so there is no command
+    the model could have copied, and a background start it was never told about stays
+    refused like any other.
+    """
+    if offer not in state.service_restarts:
         state.service_restarts.append(offer)
         del state.service_restarts[: -limits.SERVICE_SCAN_MAX_CHECKS]
 
 
 def _stale_service(
-    state: AgentState, changes: result_progress.SourceChanges | None = None
+    state: AgentState,
+    changes: result_progress.SourceChanges | None = None,
+    *,
+    offer: list[tuple[int, tuple[str, ...], str]] | None = None,
 ) -> tuple[str, str, str] | None:
     """`(audit name, audit detail, hint for the model)` about pre-change processes.
+
+    `offer` is filled with the restart this hint would dictate, and is *not* recorded on
+    the state here: only the caller knows whether the hint will be shown, and the policy
+    must accept a relaunch the model was told about, not one this scan merely considered.
 
     `None` means no scan happened at all -- this run has changed nothing a process could
     be executing, which is the ordinary case on an audit or a forensics task. The caller
@@ -3796,7 +3816,9 @@ def _stale_service(
         cwd_note = f" (`{process.cwd}`)" if process.cwd else ""
         relaunch = ""
         if process.command:
-            _remember_relaunch(state, process)
+            record = _relaunch_record(process)
+            if offer is not None and record is not None:
+                offer.append(record)
             where = f"cd {process.cwd} && " if process.cwd else ""
             relaunch = (
                 f" Готовая команда: `{where}nohup {process.command} "
