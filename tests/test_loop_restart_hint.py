@@ -471,6 +471,8 @@ def synthetic_stale_service(
 ) -> tuple[AgentState, str]:
     """A workspace whose edit is newer than the one process serving it, and its hint."""
     changed = write_app(tmp_path)
+    (tmp_path / "tests").mkdir(exist_ok=True)
+    (tmp_path / ".git").mkdir(exist_ok=True)
     proc = write_proc(
         tmp_path.parent / f"{tmp_path.name}-proc",
         [FakeProcess(4243, argv, cwd=tmp_path, inodes=(4242,))],
@@ -535,8 +537,10 @@ def test_the_natural_spellings_of_that_same_restart_are_accepted(
         "cd {cwd} && nohup {argv} >/tmp/service-restart.log 2>&1 & rm -rf tests",
         "cd {cwd} && nohup {argv} >/tmp/service-restart.log 2>&1 &; rm -rf tests",
         "cd {cwd} && nohup {argv} >/tmp/service-restart.log 2>&1 & cat tests/test_a.py > /tmp/x",
-        # leaving the workspace
+        # leaving the workspace, or landing in the tree that must not be written
         "cd /etc && nohup {argv} >/tmp/service-restart.log 2>&1 &",
+        "cd {cwd}/tests && nohup {argv} >/tmp/service-restart.log 2>&1 &",
+        "cd {cwd}/.git && nohup {argv} >/tmp/service-restart.log 2>&1 &",
     ],
 )
 def test_the_restart_shape_does_not_launder_anything_else(
