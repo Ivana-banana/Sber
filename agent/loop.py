@@ -688,8 +688,13 @@ def _deliverable(act: dict[str, Any], state: AgentState) -> tuple[Path | None, s
         # episode here -- the audit's fuzzer hit it on all four playbooks. 3.13 swallows
         # every OSError instead, which is why the failure is invisible on a newer
         # interpreter than the one this ships on. A path the filesystem will not answer
-        # about is not a deliverable, and the refusal below is one the model can act on.
-        exists = directory = False
+        # about is not a deliverable, and the refusal says that rather than "does not
+        # exist": on this branch we do not know whether it exists, and telling the model
+        # to create a file it may already have written is the wrong next action.
+        return None, (
+            f"finish refused: не удалось проверить путь {candidate}. "
+            f"Назови обычный файл внутри рабочего каталога."
+        )
     if not exists:
         return None, f"finish refused: {candidate} does not exist. Сначала создай файл."
     if directory:
@@ -3005,7 +3010,14 @@ def _execute(
     *,
     playbook: Playbook,
 ) -> tools.ToolResult:
-    """Run one action. Every failure comes back as a `ToolResult`, never as a raise."""
+    """Run one action. Every failure it can name comes back as a `ToolResult`.
+
+    Written never to raise, and guarded at both call sites all the same: the path in
+    `args` came from the model, and `Path.resolve` raises `ValueError` on an embedded
+    NUL byte and `UnicodeEncodeError` on a lone surrogate -- neither of them the
+    `OSError` the tools catch. The guards are what that promise is worth to a run, not
+    a licence to stop keeping it here.
+    """
     secrets = state.secrets
 
     if tool == prompt.RUN_SHELL:
@@ -3250,12 +3262,18 @@ def _batch_reads(
         act_started = state.start_phase("act")
         try:
             result = _execute(tool, args, state, playbook=playbook)
-        except Exception as error:
-            # `_execute` is documented never to raise and the primary path trusts that.
-            # The asymmetry here is deliberate: an extra is work the run did not have
-            # to be given, and losing a whole task to a defect in a bonus action would
-            # be the worst trade in the file. The exception type only -- its message
-            # may quote file content.
+        except MemoryError:
+            # As on the primary path: the process is out of memory, the next action
+            # cannot run either, and `agent.main` ends the run with a line a reader can
+            # parse. `KeyboardInterrupt` and `SystemExit` are `BaseException` and never
+            # reach the clause below.
+            raise
+        except Exception as error:  # noqa: BLE001 - a crash here costs the whole task
+            # The same guard the primary action has, for the same reason: `_execute` is
+            # written never to raise, and both call sites hand it a path that came from
+            # the model. Losing a whole task to a defect in a bonus action would be the
+            # worst trade in the file. The exception type only -- its message may quote
+            # file content.
             result = tools.ToolResult(
                 name=tool, ok=False, detail=f"batch action failed: {type(error).__name__}"
             )
