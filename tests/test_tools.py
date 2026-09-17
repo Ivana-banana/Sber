@@ -101,6 +101,32 @@ def test_a_hanging_command_is_killed_and_does_not_cost_its_full_sleep(tmp_path: 
     assert elapsed < 10, "the loop must get its step back, not wait out the child"
 
 
+@POSIX_ONLY
+def test_a_command_that_reads_stdin_gets_eof_instead_of_the_agent_terminal(tmp_path: Path) -> None:
+    # The child inherited our stdin, so a command with a forgotten operand -- `grep ERROR`
+    # without a file, a bare `cat`, `python3`, `sqlite3` -- waited on input nobody was
+    # going to send and burned the whole tool timeout, which on a file task is the whole
+    # task budget. fd 0 is made an open pipe here because that is what the runner leaves
+    # it as; under pytest it is already /dev/null, and the bug would not reproduce.
+    read_fd, write_fd = os.pipe()
+    saved_stdin = os.dup(0)
+    try:
+        os.dup2(read_fd, 0)
+        started = time.monotonic()
+        piped = run_argv(python_argv("import sys; print('read %d bytes' % len(sys.stdin.read()))"), cwd=tmp_path, timeout_s=5.0)
+        shelled = run_shell("cat", cwd=tmp_path, timeout_s=5.0)
+        elapsed = time.monotonic() - started
+    finally:
+        os.dup2(saved_stdin, 0)
+        for handle in (saved_stdin, read_fd, write_fd):
+            os.close(handle)
+
+    assert piped.ok is True, piped.detail
+    assert "read 0 bytes" in piped.output
+    assert shelled.ok is True, shelled.detail
+    assert elapsed < 4.0, "both commands must end at EOF, not at their timeout"
+
+
 def test_a_flood_of_output_is_bounded_before_it_reaches_the_model(tmp_path: Path) -> None:
     flood = "import sys\nfor i in range(200000): sys.stdout.write('%d line of noise\\n' % i)"
 
