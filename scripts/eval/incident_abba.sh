@@ -30,6 +30,14 @@ block() { label=$1; arch=$2; want=$3
   [ "$verdict" = VALID ] && touch "$out/.block-complete"
   echo "=== $label done $(date +%H:%M:%S) $verdict $(awk -F'\t' 'NR>1{n++; s+=$3; t+=$4; w+=$8} END{print s"/"n" tokens="t" wall="w}' "$out/results.tsv" 2>/dev/null) load=$(cut -d' ' -f1-3 /proc/loadavg)" >> $LOG
 }
+# Grace period: the human was on the stand minutes ago; never start on top of someone else's run.
+sleep "${ABBA_GRACE_S:-300}"
+if [ "$(foreign)" != 0 ]; then
+  echo "=== not started $(date +%H:%M:%S): a foreign run_suite is on the stand" >> $LOG
+  exit 0
+fi
+# Pulse while the stand works, as its own process: it must not die with a caller's process group.
+setsid sh -c 'while kill -0 "$1" 2>/dev/null; do touch .afk/heartbeat; sleep 240; done' pulse $$ >/dev/null 2>&1 &
 block INC-K1 build/kt7.zip $KT7
 block INC-R1 build/r2b.zip $R2B
 block INC-R2 build/r2b.zip $R2B
