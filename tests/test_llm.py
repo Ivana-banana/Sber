@@ -887,6 +887,45 @@ def test_rate_limiting_waits_instead_of_crippling_the_protocol() -> None:
     assert "tools" in endpoint.bodies[1], "the retry repeats the same shape"
 
 
+def test_a_second_back_pressure_still_does_not_cripple_the_protocol() -> None:
+    # The same reasoning as the test above, one 429 later: the guard held for the first
+    # refusal and gave way on the second, which is where it was needed. The retry
+    # schedule is (1.0, 3.0) s and `Retry-After` is not read, so a queue asking for
+    # thirty seconds produced a second 429 by construction -- and the rung it cost is
+    # sticky for the rest of the task, taking the batched extra tool calls with it.
+    # Back-pressure says nothing about the request shape, so it spends the whole
+    # schedule where it is and never steps down.
+    client, endpoint, events = make_client(
+        [
+            (429, b'{"error":"rate limit exceeded"}'),
+            (429, b'{"error":"rate limit exceeded"}'),
+            (200, tool_reply('{"action":"ls"}')),
+        ]
+    )
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmReply)
+    assert client.style == llm.NATIVE_TOOLS, "two 429s say no more about the shape than one"
+    assert [kind for kind, _ in events] == ["retry", "retry"]
+    assert len(endpoint.bodies) == 3
+    assert "tools" in endpoint.bodies[-1], "every attempt repeats the same shape"
+
+
+def test_back_pressure_that_outlives_the_schedule_is_reported_as_retryable() -> None:
+    # A queue that never clears within the deadline is reported for what it is. The
+    # ladder is not walked on the way out: descending would spend three more requests on
+    # the same busy server and leave the client crippled for a condition that clears.
+    # 408/409/425 are the same verdict as 429 and get the same treatment.
+    client, endpoint, events = make_client([(408, b'{"error":"request timeout"}')])
+    result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
+
+    assert isinstance(result, LlmError)
+    assert result.retryable
+    assert client.style == llm.NATIVE_TOOLS
+    assert len(endpoint.bodies) == len(limits.LLM_RETRY_BACKOFF_S) + 1
+    assert [kind for kind, _ in events] == ["retry", "retry"]
+
+
 def test_an_unknown_model_is_fatal_and_not_laddered() -> None:
     client, endpoint, events = make_client([(404, b'{"error":"model not found"}')])
     result = client.complete_structured([], schema=SCHEMA, max_output_tokens=16)
