@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from agent import limits
+from agent.state import Budget
 from scripts import check_submission
 from scripts.build_submission import ROOT, build
 from scripts.check_submission import CONTRACT_LABEL, apply_declared_modes, check
@@ -217,6 +218,25 @@ def test_a_good_archive_has_no_blocking_problems(archive: Path) -> None:
     report = check(archive, os.environ)
     assert report.failures == []
     assert any("run.sh is present at the root" in message for message in report.passed)
+
+
+def test_the_smoke_budget_leaves_the_cold_start_room_to_act() -> None:
+    # The cold start's claim is that a dead endpoint is survived. A budget equal to the
+    # verifier reserve does not test that claim: `spendable_s()` is zero on step zero,
+    # the loop stops before its first request, and the gate printed PASS having never
+    # opened a socket (`steps=0/30 stop=budget`, 0.13 s). Measured at 45 s the run
+    # reaches the endpoint and comes back down the ladder: `steps=3/30
+    # stop=llm-unusable`, 12.1 s.
+    budget = Budget.from_env(check_submission.smoke_env({}))
+
+    assert budget.spendable_s() > 0, (
+        f"the smoke budget must exceed VERIFY_RESERVE_MIN_S "
+        f"({limits.VERIFY_RESERVE_MIN_S:g}s) or the endpoint is never called"
+    )
+    assert budget.total_s < check_submission.SMOKE_TIMEOUT_S, (
+        "and stay under the launch timeout, so a run that hangs is reported against "
+        "the archive rather than killed by this script"
+    )
 
 
 def contract_messages(report) -> tuple[list[str], list[str], list[str]]:

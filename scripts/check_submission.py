@@ -78,10 +78,19 @@ SMOKE_ENV = {
     "LOCAL_AGENT_MODEL": "preflight-fake-model",
     "OPENAI_BASE_URL": "http://127.0.0.1:9/v1",
     "OPENAI_API_KEY": "preflight-not-a-real-key",
-    "AGENT_TIMEOUT_S": "30",
+    "AGENT_TIMEOUT_S": "45",
 }
 """Port 9 is the discard port: reachable syntax, nothing listening. A cold start must
-survive a dead endpoint, because that is what a broken evaluation node looks like."""
+survive a dead endpoint, because that is what a broken evaluation node looks like.
+
+The budget is 45 s and not 30 for the only reason that matters here: it has to be
+larger than `limits.VERIFY_RESERVE_MIN_S`. At 30 the reserve *is* the whole budget,
+`Budget.spendable_s()` is zero on step zero, and the loop stops before its first
+request -- `steps=0/30 stop=budget` in 0.13 s, with the socket never opened. The gate
+then printed PASS for a property it had not reached. At 45 the run really goes to the
+endpoint and comes back through the degradation ladder: `steps=3/30
+stop=llm-unusable`, 12.1 s measured, which is still a comfortable fifth of
+`SMOKE_TIMEOUT_S`."""
 
 PASSTHROUGH_ENV = (
     "PATH",
