@@ -1102,14 +1102,18 @@ class HttpLlm:
                     #
                     # Back-pressure (408/409/425/429) is not that: it says nothing about
                     # the shape, as `classify_status` spells out, and it clears on its
-                    # own. It gets the whole retry schedule on its own rung and never
-                    # steps down -- a downgrade here would be sticky for the rest of the
-                    # task and take the batched extra tool calls with it, paid for a
-                    # busy queue. `Retry-After` is still not read: the schedule is
-                    # (1.0, 3.0) s and the call deadline is what bounds the wait.
+                    # own. It keeps asking at the rung it is on and never steps down -- a
+                    # downgrade here would be sticky for the rest of the task and take
+                    # the batched extra tool calls with it, paid for a busy queue.
+                    #
+                    # What bounds the asking is `_backoff` itself: the schedule is two
+                    # rungs, 1.0 s and 3.0 s, and it refuses once they are used or once
+                    # the next one no longer fits the call deadline. `Retry-After` is not
+                    # read at all -- `Transport` hands back a status and a body, not the
+                    # headers -- so a queue asking for thirty seconds is still answered
+                    # in four and then reported.
                     pressure = status in PRESSURE_STATUSES
-                    allowance = len(limits.LLM_RETRY_BACKOFF_S) if pressure else 1
-                    if retries_at_style < allowance and self._backoff(attempt, deadline):
+                    if (pressure or retries_at_style == 0) and self._backoff(attempt, deadline):
                         retries_at_style += 1
                         continue
                     if not pressure and schema is not None and self._demote(f"persistent http {status}"):
@@ -1230,20 +1234,20 @@ class HttpLlm:
 
     def _backoff(self, attempt: int, deadline: float) -> bool:
         """Wait before the next attempt. False when the schedule or the deadline is
-        exhausted. The rung is clamped to what is actually left: sleeping the full
-        rung regardless would blow past a deadline narrower than the schedule --
-        a fast failure with little time left must not sleep 3s for a 1s budget."""
+        exhausted, and the whole of the retry policy: two rungs, 1.0 s and 3.0 s, then
+        no more. `Retry-After` is not consulted -- `Transport` returns a status and a
+        body and never the headers -- so a queue that asks for longer is answered on
+        this schedule and then reported.
+
+        A rung is either slept in full or not at all. Sleeping a rung cut down to what
+        is left would spend the last of the deadline on the wait and leave nothing for
+        the attempt the wait exists to make, which is a slower way of returning the
+        same error."""
         if attempt >= len(limits.LLM_RETRY_BACKOFF_S):
             return False
-        remaining = deadline - self.clock()
-        if remaining <= 0:
+        delay = limits.LLM_RETRY_BACKOFF_S[attempt]
+        if delay >= deadline - self.clock():
             return False
-        if limits.LLM_RETRY_BACKOFF_S[attempt] >= remaining:
-            # Clamping is not enough when the rung is wider than the whole remainder:
-            # the clamped sleep spends every second that is left and the attempt it was
-            # waiting for never gets made. Hand the time back to the caller instead.
-            return False
-        delay = min(limits.LLM_RETRY_BACKOFF_S[attempt], remaining)
         self._note("retry", f"attempt {attempt + 1} failed, waiting {delay}s")
         self.sleep(delay)
         return True
