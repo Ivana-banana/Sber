@@ -517,6 +517,7 @@ def test_the_restart_command_the_hint_dictates_is_not_refused_by_the_shell_polic
         "kill {pid} 2>/dev/null; sleep 1; cd {cwd} && nohup {argv} >/tmp/service-restart.log 2>&1 &",
         "kill {pid}; cd {cwd} && nohup {argv} >/tmp/restart.log 2>&1 &",
         "sleep 2; nohup {argv} >/tmp/service-restart.log 2>&1 &",
+        "sleep 10; nohup {argv} >/tmp/service-restart.log 2>&1 &",
     ],
 )
 def test_the_natural_spellings_of_that_same_restart_are_accepted(
@@ -548,6 +549,8 @@ def test_the_natural_spellings_of_that_same_restart_are_accepted(
         "cd {cwd} && nohup {argv} >/tmp/service-restart.log 2>&1 & rm -rf tests",
         "cd {cwd} && nohup {argv} >/tmp/service-restart.log 2>&1 &; rm -rf tests",
         "cd {cwd} && nohup {argv} >/tmp/service-restart.log 2>&1 & cat tests/test_a.py > /tmp/x",
+        # a settle that is really a way to hold the step open
+        "sleep 100000; nohup {argv} >/tmp/service-restart.log 2>&1 &",
         # leaving the workspace, or landing in the tree that must not be written
         "cd /etc && nohup {argv} >/tmp/service-restart.log 2>&1 &",
         "cd {cwd}/tests && nohup {argv} >/tmp/service-restart.log 2>&1 &",
