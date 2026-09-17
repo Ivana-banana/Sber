@@ -39,6 +39,7 @@ stub=$!
 sleep 1
 
 checksum_before=$(md5sum /work/task/check.py | cut -d' ' -f1)
+fixture_before=$(md5sum /work/task/calc.py | cut -d' ' -f1)
 
 start=$(python3 -c 'import time;print(time.monotonic())')
 cd /work/unpacked || { echo "FAIL: the unpacked archive has no directory to run from"; exit 3; }
@@ -65,6 +66,13 @@ if [ "$(md5sum /work/task/check.py | cut -d' ' -f1)" = "$checksum_before" ]; the
     echo "oracle intact: check.py unchanged"
 else
     echo "FAIL: the agent rewrote check.py, so post-run check proves nothing"
+fi
+# Byte comparison, not a grep of the transcript: `return a - b` also appears in the echo
+# of a read, so a run that truncated the file could still have matched the old text.
+if [ "$(md5sum /work/task/calc.py | cut -d' ' -f1)" = "$fixture_before" ]; then
+    echo "deliverable unchanged: calc.py is byte-identical to the fixture"
+else
+    echo "deliverable rewritten: calc.py differs from the fixture"
 fi
 echo "--- stub log ---"
 cat /work/$label.stub.log

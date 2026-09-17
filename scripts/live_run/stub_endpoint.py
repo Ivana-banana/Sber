@@ -39,6 +39,12 @@ SERVER_ERROR = {"__status__": 500}
 
 DEGRADED = [
     {"tool": "list_dir", "path": "."},
+    # Two failures in a row, not one: a single 500 is absorbed by the per-run retry and
+    # the client stays on native tools, while the production incident had two 8192-token
+    # turns fail in sequence, which demotes the run to `json_schema` — and the action
+    # that lost its payload arrived on that demoted run. One 500 would reproduce the
+    # broken action without the path that produced it.
+    SERVER_ERROR,
     SERVER_ERROR,
     {"tool": "read_range", "path": "calc.py", "start_line": 1},
     # A reply that lost its payload: the write_file action arrives with a path and no

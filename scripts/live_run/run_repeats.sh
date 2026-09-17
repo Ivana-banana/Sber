@@ -101,7 +101,8 @@ while [ "$i" -le "$repeats" ]; do
     # reader had to grade the prose: `post-run check: FAIL` is correct for `hang` and
     # `escape` and a defect for `script`, `shape` and `flat`.
     expect_grep() {
-        if grep -q "$1" "$transcript"; then
+        if [ "$1" = "--" ]; then shift; fi
+        if grep -q -e "$1" "$transcript"; then
             echo "gate ok: $2"
         else
             echo "gate FAIL: $2"
@@ -125,7 +126,20 @@ while [ "$i" -le "$repeats" ]; do
             # sends a usable payload after the failure. It is "a reply that lost its
             # payload did not truncate the deliverable": the fixture must still hold the
             # bug it started with, not zero bytes.
-            expect_grep "return a - b" "the payload-less write left the deliverable intact"
+            #
+            # The first two expectations are what stops the gate from passing an archive
+            # that never got that far. Without them an agent that treats the 500 as fatal
+            # and exits leaves the fixture untouched for the most trivial of reasons and
+            # reports a clean run.
+            served_500=$(grep -c "replying 500" "$transcript" || true)
+            if [ "$served_500" -ge 2 ]; then
+                echo "gate ok: the endpoint failed twice, as the probe intends"
+            else
+                echo "gate FAIL: the probe served $served_500 failures, not 2 — the sequence drifted"
+                status=1
+            fi
+            expect_grep -- "-> write_file" "the payload-less write_file reached the agent"
+            expect_grep "deliverable unchanged" "the payload-less write left the deliverable intact"
             ;;
         escape)
             expect_grep "solved=False" "the escape script did not reach a verified finish"
