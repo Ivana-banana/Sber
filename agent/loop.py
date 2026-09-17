@@ -3649,7 +3649,9 @@ def _edit_echo(
 
 def _advances_state_epoch(tool: str, args: dict[str, object]) -> bool:
     """Whether an executed action may have changed files or a local service."""
-    if tool in {prompt.WRITE_FILE, prompt.REPLACE_TEXT}:
+    # `write_json` with them: it writes a file, so the evidence the detectors gathered
+    # before it describes a tree that no longer exists.
+    if tool in {prompt.WRITE_FILE, prompt.WRITE_JSON, prompt.REPLACE_TEXT}:
         return True
     return tool == prompt.RUN_SHELL and _shell_can_change(str(args.get("command", "")))
 
