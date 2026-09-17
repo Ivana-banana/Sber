@@ -136,7 +136,11 @@ def test_a_finish_path_the_filesystem_will_not_answer_about_is_a_refusal(
     outcome = run(make_state(tmp_path), llm, FakeVerify((True, "command", "")))
 
     assert outcome.stop_reason == "verified"
-    assert "finish refused" in outcome.observations[0]
+    # What the refusal may not say is "does not exist. Сначала создай файл": on this
+    # branch the gate does not know whether it exists, and a model that has already
+    # written its report would be sent to write it again.
+    assert "не удалось проверить путь" in outcome.observations[0]
+    assert "does not exist" not in outcome.observations[0]
 
 
 # --- and the exceptions it must not take ---------------------------------------
@@ -163,6 +167,58 @@ def test_the_guard_does_not_stand_between_the_run_and_its_own_end(
 
     with pytest.raises(failure):
         run(state, llm, FakeVerify())
+
+
+@pytest.mark.parametrize("failure", [KeyboardInterrupt, SystemExit, MemoryError])
+def test_the_batch_guard_stands_exactly_where_the_primary_one_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: type[BaseException]
+) -> None:
+    """The extras of one reply take the same guard and the same two exceptions.
+
+    The batch path had the `Exception` half from the start and not the carve-out; the
+    two are one rule and drifting apart is how one of them quietly stops being true.
+    """
+    real_execute = loop._execute
+
+    def explode(tool: str, args: dict[str, object], *rest: object, **kwargs: object):
+        if str(args.get("path", "")).endswith("boom.txt"):
+            raise failure()
+        return real_execute(tool, args, *rest, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(loop, "_execute", explode)
+    (tmp_path / "boom.txt").write_text("x", encoding="utf-8")
+    reply = LlmReply(
+        text=json.dumps({"tool": "list_dir", "path": str(tmp_path)}),
+        input_tokens=1,
+        output_tokens=1,
+        extra_actions=(
+            json.dumps({"tool": "read_range", "path": str(tmp_path / "boom.txt"), "start_line": 1}),
+        ),
+    )
+    state = make_state(tmp_path)
+    state.budget.max_steps = 1
+
+    with pytest.raises(failure):
+        run(state, StubLlm(replies=[reply]), FakeVerify())
+
+
+def test_an_ordinary_failure_inside_a_batch_is_still_only_an_observation(
+    tmp_path: Path,
+) -> None:
+    reply = LlmReply(
+        text=json.dumps({"tool": "list_dir", "path": str(tmp_path)}),
+        input_tokens=1,
+        output_tokens=1,
+        extra_actions=(
+            json.dumps({"tool": "read_range", "path": "/tmp/a" + NUL + "b", "start_line": 1}),
+        ),
+    )
+    state = make_state(tmp_path)
+    state.budget.max_steps = 1
+
+    outcome = run(state, StubLlm(replies=[reply]), FakeVerify())
+
+    assert "batch action failed: ValueError" in "\n".join(outcome.observations)
 
 
 def test_the_loop_keeps_paying_for_the_failed_step(tmp_path: Path) -> None:
