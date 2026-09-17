@@ -626,8 +626,84 @@ def test_the_dictated_restart_really_runs_and_reopens_the_finish_gate(
     )
     assert restarted.ok, restarted.detail
     assert time.monotonic() - started < 10.0, "the step must not wait on the service"
+    assert "перезапуск выполнен" in restarted.output, restarted.output
     assert wait_for_port(port), "the relaunched service never came up"
     for found in tools.serving_processes([changed]).processes:
         machine.pids.append(found.pid)
 
     assert loop._stale_service(state) == ("", "", ""), "the finish gate is still shut"
+    assert state.service_restarts == [], "a restart that worked has spent its offer"
+
+
+def prepare_stale(tmp_path: Path, machine: Machine, source: str) -> tuple[AgentState, str, int, int]:
+    """A workspace whose edit -- `source` -- is newer than the service running it."""
+    changed = write_app(tmp_path)
+    service_pid, port = machine.detached(tmp_path)
+    wait_until_an_edit_is_newer(service_pid)
+    changed.write_text(source, encoding="utf-8")
+    state = codefix_state(tmp_path)
+    state.artifacts.append(changed)
+    kind, _, hint = loop._stale_service(state)
+    assert kind == "stale-service", kind
+    Path("/tmp/service-restart.log").unlink(missing_ok=True)
+    return state, offered_relaunch(hint), service_pid, port
+
+
+@LINUX_ONLY
+def test_a_relaunch_whose_service_dies_is_a_failed_action_and_says_why(
+    tmp_path: Path, machine: Machine
+) -> None:
+    """A background start exits 0 and prints nothing whatever happens to the service.
+
+    The service's own output went into the log, and the finish gate -- which asks only
+    whether a process older than the edit is running -- opens once the old process is
+    gone. End to end that finished a run `solved` with a dead service (critic, 17.09).
+    """
+    state, relaunch, service_pid, _ = prepare_stale(
+        tmp_path, machine, "import nonexistent_module_xyz\ndef login():\n    return 'new'\n"
+    )
+    stopped = loop._execute(
+        prompt.RUN_SHELL, {"command": f"kill {service_pid}"}, state, playbook=playbooks.CODE_FIX
+    )
+    assert stopped.ok, stopped.detail
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        try:
+            os.kill(service_pid, 0)
+        except OSError:
+            break
+        time.sleep(0.02)
+
+    result = loop._execute(
+        prompt.RUN_SHELL, {"command": relaunch}, state, playbook=playbooks.CODE_FIX
+    )
+
+    assert result.ok is False, result.output
+    assert "сервис сейчас не поднят" in result.output
+    assert "nonexistent_module_xyz" in result.output, "quote the log the model cannot open"
+    assert state.service_restarts, "a restart that failed keeps its offer for the retry"
+
+
+@LINUX_ONLY
+def test_a_relaunch_the_old_process_still_blocks_names_that_process(
+    tmp_path: Path, machine: Machine
+) -> None:
+    """`kill; sleep 1; start` is a race, and the loser is silent.
+
+    The old process still holds the port, the new one dies on `Address already in use`,
+    and the port answers -- with the old code. The way out is to stop that process and
+    run the same command again, so the observation names it and the offer survives.
+    """
+    state, relaunch, service_pid, port = prepare_stale(
+        tmp_path, machine, "def login():\n    return 'new'\n"
+    )
+
+    result = loop._execute(
+        prompt.RUN_SHELL, {"command": relaunch}, state, playbook=playbooks.CODE_FIX
+    )
+
+    assert result.ok is False, result.output
+    assert f"старый процесс {service_pid} ещё жив" in result.output
+    assert "повтори команду перезапуска" in result.output
+    assert wait_for_port(port, timeout_s=1.0), "the old service is what still answers"
+    assert state.service_restarts, "the retry needs the offer"
