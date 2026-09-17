@@ -471,6 +471,27 @@ def _strip_thinking(text: str) -> str:
     return text.strip()
 
 
+def _content_text(message: dict[str, Any]) -> str:
+    """The reply's text, whether the server sent a string or a list of parts.
+
+    OpenAI's own schema types an assistant `content` as a string, but proxies that
+    translate an Anthropic-shaped backend answer with the parts list they were handed.
+    Read as "not a string, so empty", such a reply looks like a server that produced
+    nothing: the ladder is walked to the bottom and the client stays there. Parts that
+    carry no text -- a refusal part, an image -- are not text and add nothing.
+    """
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
+    return ""
+
+
 def _tool_call_entries(message: dict[str, Any]) -> list[Any]:
     """The reply's tool calls as a list, whatever container the server used.
 
@@ -859,8 +880,7 @@ class HttpLlm:
     ) -> tuple[str | None, str]:
         """Return (text, "") on success, or (None, reason) when the reply is unusable."""
         message = _first_message(payload)
-        content = message.get("content")
-        content = content if isinstance(content, str) else ""
+        content = _content_text(message)
         # Before anything reads the content: drop a thinking model's <think> reasoning,
         # so a JSON draft inside it is never salvaged as the action. Harmless on a model
         # that emits none. tool_calls, when present, are read below and not affected.
