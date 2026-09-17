@@ -2936,18 +2936,18 @@ def _relaunch_offer(
     log = PurePosixPath(posixpath.normpath(match["log"]))
     if not log.is_relative_to("/tmp") or log == PurePosixPath("/tmp"):
         return None
-    if _is_evaluator_path(Path(log), state) or _is_repository_control_path(Path(log), state):
-        return None  # a workspace that itself lives under /tmp, as it does under pytest
+    if _shares_code_fix_protected_inode(Path(log), state):
+        # By inode, like every other redirect the policy judges: a hardlink under /tmp
+        # is the evaluator file, and `>` on it truncates the original. Also catches a
+        # workspace that itself lives under /tmp, as it does under pytest.
+        return None
     try:
         argv = shlex.split(match["argv"])
     except ValueError:
         return None
     if not argv or PurePosixPath(argv[0]).name in _OPAQUE_COMMAND_RUNNERS | _SHELL_WRAPPERS:
         return None
-    if any(
-        _is_evaluator_path(Path(token), state) or _is_repository_control_path(Path(token), state)
-        for token in argv
-    ):
+    if any(_shares_code_fix_protected_inode(Path(token), state) for token in argv):
         return None
     for offer in state.service_restarts:
         pid, offered, cwd = offer
