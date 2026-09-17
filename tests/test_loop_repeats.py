@@ -81,3 +81,40 @@ def test_a_repeat_separated_by_a_read_still_keeps_the_epoch(tmp_path: Path) -> N
 
     assert state.state_epoch == 1, "a read between two identical writes is not a new epoch"
     assert len(llm.calls) < 12, "the repeat detectors ended the loop before the step cap"
+
+
+def test_a_json_write_advances_the_epoch_exactly_as_a_text_one_does(tmp_path: Path) -> None:
+    """`write_json` writes a file, so the evidence gathered before it is stale too.
+
+    The audit of 17.09 found it missing from the classifier: an episode whose
+    deliverable is JSON kept one epoch for its whole length, so `seen_results` never
+    cleared, two report writes of the same length read as the same output, and the run
+    ended `stuck` while it was in fact working.
+    """
+    target = tmp_path / "security_report.json"
+    state = make_state(tmp_path)
+    state.budget.max_steps = 3
+    llm = StubLlm(
+        replies=[
+            action("write_json", path=str(target), data={"findings": []}),
+            action("write_json", path=str(target), data={"findings": [{"id": 1}]}),
+            action("write_json", path=str(target), data={"findings": [{"id": 1}, {"id": 2}]}),
+        ]
+    )
+
+    run(state, llm, FakeVerify())
+
+    assert state.state_epoch == 3
+
+
+def test_identical_json_writes_still_do_not_reset_the_detectors(tmp_path: Path) -> None:
+    """The other half of the same rule: a repeat is a repeat whatever wrote it."""
+    target = tmp_path / "security_report.json"
+    state = make_state(tmp_path)
+    state.budget.max_steps = 12
+    llm = StubLlm(replies=[action("write_json", path=str(target), data={"findings": []})] * 12)
+
+    run(state, llm, FakeVerify((False, "command", "wrong")))
+
+    assert state.state_epoch == 1, "only the first write changed anything"
+    assert len(state.actions) == limits.REPEAT_RESULT_BLOCK

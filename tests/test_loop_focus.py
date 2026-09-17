@@ -23,6 +23,8 @@ import json
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+import pytest
+
 from agent import limits, llm as llm_module, loop, playbooks, prompt
 from agent.ports import LlmError, LlmReply, Message
 from tests.stub_llm import StubLlm
@@ -70,8 +72,12 @@ def texts(messages: list[Message]) -> list[str]:
     return [message["content"] for message in messages]
 
 
+FOCUS_LINES = {prompt.FOCUS_NOTICE, prompt.CONTEXT_FOCUS_NOTICE}
+"""Either line makes a request a focused one; which one is the cause talking."""
+
+
 def focused(messages: list[Message]) -> bool:
-    return prompt.FOCUS_NOTICE in texts(messages)
+    return any(text in FOCUS_LINES for text in texts(messages))
 
 
 def relayed(messages: list[Message]) -> list[str]:
@@ -79,7 +85,7 @@ def relayed(messages: list[Message]) -> list[str]:
     return [
         text
         for text in texts(messages)[1:]
-        if text not in {prompt.OMISSION_NOTICE, prompt.FOCUS_NOTICE}
+        if text not in FOCUS_LINES and text != prompt.OMISSION_NOTICE
     ]
 
 
@@ -598,3 +604,278 @@ def test_loop_reads_the_typed_flag_and_never_the_reason_text() -> None:
         node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
     }
     assert not [text for text in literals if "truncated by length" in text]
+
+
+# --- the second cause of a focused request: a prompt that no longer fits --------
+#
+# Measured by the loop audit (17.09) against a faithful strict server -- one that
+# rejects `prompt_tokens + max_tokens > num_ctx` the way vLLM does. `agent.llm` answers
+# that 400 by halving its output ceiling, which is the right move while there is ceiling
+# to give; at `LLM_MAX_OUTPUT_TOKENS` there is none, and the refusal is about the prompt
+# anyway. A read-heavy `code-audit` episode against an 8192-token window died
+# `llm-unusable` on step 6 with nothing on disk; the identical episode at 16384 survived
+# on the existing ladder. The history is the only part of the request left to shrink,
+# and narrowing it is what focus already does.
+
+
+def context_overflow() -> LlmError:
+    """The error the client hands back once its own ladder has run out of ceiling.
+
+    The body is a real vLLM refusal, and it is deliberately never asserted on: what the
+    loop must agree with is `agent.llm`'s own reading of it, pinned by
+    `test_the_real_client_and_the_loop_agree_about_a_context_overflow` below.
+    """
+    return LlmError(
+        reason=(
+            'endpoint returned 400: {"error": {"message": "This model\'s maximum context '
+            'length is 8192 tokens. However, you requested 9310 tokens (7262 in the '
+            'messages, 2048 in the completion).", "type": "BadRequestError"}}'
+        ),
+        retryable=False,
+    )
+
+
+def test_a_context_overflow_narrows_the_next_request_instead_of_repeating_it(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "out.txt"
+    llm = StubLlm(
+        replies=[
+            action("list_dir", path=str(tmp_path)),
+            action("list_dir", path=str(tmp_path)),
+            context_overflow(),
+            action("write_file", path=str(target), content="x"),
+            action("finish", path=str(target), verify="test -s out.txt", summary="done"),
+        ]
+    )
+
+    outcome = run(make_state(tmp_path), llm, FakeVerify((True, "command", "")))
+
+    assert outcome.stop_reason == "verified"
+    before, after = llm.calls[2], llm.calls[3]
+    assert focused(after) and not focused(before)
+    assert len(relayed(after)) == limits.FOCUS_RELAY_KEEP
+    assert after[0] == before[0], "the system prompt and the task are untouched"
+    # The line the model is asked to act on says what actually happened. `FOCUS_NOTICE`
+    # opens with "your previous answer was cut off by length", which on this branch is
+    # something the model never did -- the server refused the request before it saw it.
+    assert texts(after)[-1] == prompt.CONTEXT_FOCUS_NOTICE
+    assert prompt.FOCUS_NOTICE not in texts(after)
+
+
+def test_a_400_that_is_not_about_size_asks_the_same_question_again(tmp_path: Path) -> None:
+    """A strict server refusing our response_format is a protocol problem.
+
+    `agent.llm` answers it by stepping the protocol down, and a narrower history is no
+    answer to it at all. The endpoint that never refuses on size never focuses.
+    """
+    target = tmp_path / "out.txt"
+    llm = StubLlm(
+        replies=[
+            LlmError(
+                reason='endpoint returned 400: {"error": "response_format is not supported"}',
+                retryable=False,
+            ),
+            action("write_file", path=str(target), content="x"),
+            action("finish", path=str(target), verify="test -s out.txt", summary="done"),
+        ]
+    )
+
+    run(make_state(tmp_path), llm, FakeVerify((True, "command", "")))
+
+    assert not any(focused(call) for call in llm.calls)
+
+
+def test_the_overflow_focus_says_in_the_trace_what_caused_it(tmp_path: Path) -> None:
+    """Two causes, two sentences: a trace that names the wrong one is worse than none."""
+    state = make_state(tmp_path)
+
+    run(state, StubLlm(replies=[context_overflow()] * 3), FakeVerify())
+
+    notes = [event.detail for event in state.audit if event.name == "focus"]
+    assert notes == ["focused retry after a context-overflow refusal"]
+
+
+def test_an_overflow_focus_costs_no_extra_failure(tmp_path: Path) -> None:
+    """Same bound as the runaway's: focus replaces the second of the three, never adds."""
+    state = make_state(tmp_path)
+    llm = StubLlm(replies=[context_overflow()] * 5)
+
+    outcome = run(state, llm, FakeVerify())
+
+    assert outcome.stop_reason == "llm-unusable"
+    assert len(llm.calls) == limits.MAX_CONSECUTIVE_LLM_FAILURES
+
+
+def test_the_real_client_and_the_loop_agree_about_a_context_overflow(tmp_path: Path) -> None:
+    """The whole chain against a window too small for the prompt, as the audit measured.
+
+    The loop reads the refusal through `agent.llm`'s own marker list rather than a copy
+    of it, so this test is what keeps the two from drifting apart: if the client stops
+    producing that reason, or stops recognising it, the loop stops focusing and this goes
+    red instead of a run going to zero.
+    """
+    sent: list[dict[str, object]] = []
+
+    def endpoint(url: str, body: bytes, headers: dict[str, str], timeout_s: float):
+        request = json.loads(body)
+        sent.append(request)
+        error = {
+            "error": {
+                "message": (
+                    "This model's maximum context length is 8192 tokens. However, you "
+                    f"requested more than that ({request['max_tokens']} in the completion)."
+                ),
+                "type": "BadRequestError",
+            }
+        }
+        return 400, json.dumps(error).encode()
+
+    client = llm_module.HttpLlm(
+        settings=llm_module.LlmSettings.from_env(ENV),
+        transport=endpoint,
+        sleep=lambda _: None,
+    )
+    state = make_state(tmp_path)
+
+    loop.run(
+        state,
+        client,
+        FakeVerify(),
+        brief=make_brief(tmp_path),
+        playbook=playbooks.FORENSICS,
+    )
+
+    assert [note.detail for note in state.audit if note.name == "focus"] == [
+        "focused retry after a context-overflow refusal"
+    ]
+    assert any(
+        prompt.CONTEXT_FOCUS_NOTICE in [message["content"] for message in request["messages"]]
+        for request in sent
+    ), "the narrowed request actually reached the endpoint"
+
+
+# --- and the refusals that are not about the window -----------------------------
+#
+# The critic's finding on the first version of this branch: the marker list the client
+# uses behind three gates (`_looks_like_context_overflow`) reads `max_tokens` as an
+# overflow, and the loop has none of those gates. Eight of twelve real 4xx bodies made
+# the loop throw two thirds of its history away for a refusal that had nothing to do
+# with the window (`build/audit-0917/tmp-critic-loop/l3_falsepos.py`). The loop now asks
+# the narrower question -- does this name the *prompt*? -- and the client is unchanged.
+
+
+@pytest.mark.parametrize(
+    ("server", "reason"),
+    [
+        (
+            "vllm-validation",
+            "endpoint returned 400: {\"object\":\"error\",\"message\":\"[{'type': "
+            "'less_than_equal', 'loc': ('body', 'max_tokens'), 'msg': 'Input should be "
+            "less than or equal to 4096'}]\"}",
+        ),
+        (
+            "litellm-param-drop",
+            "endpoint returned 400: litellm.BadRequestError: OpenAIException - Unsupported "
+            "value: 'max_tokens' is not supported with this model; use "
+            "'max_completion_tokens' instead.",
+        ),
+        (
+            "validator-echoes-our-body",
+            'endpoint returned 422: {"detail":[{"type":"extra_forbidden","loc":["body",'
+            '"chat_template_kwargs"],"msg":"Extra inputs are not permitted","input":'
+            '{"model":"q","max_tokens":8192,"temperature":0}}]}',
+        ),
+        ("schema-names-a-key", "schema: unexpected key 'max_tokens' at style text"),
+        (
+            "llama-cpp-bad-param",
+            'endpoint returned 400: {"error":{"code":400,"message":"Invalid parameter: '
+            'max_tokens must be a positive integer","type":"invalid_request_error"}}',
+        ),
+        (
+            "tgi-max-new-tokens",
+            'endpoint returned 422: {"error":"Input validation error: `max_new_tokens` '
+            'must be <= 512. Given: 2048","error_type":"validation"}',
+        ),
+    ],
+)
+def test_a_refusal_about_the_output_budget_keeps_the_whole_history(
+    tmp_path: Path, server: str, reason: str
+) -> None:
+    """None of these says the prompt did not fit, and the last one is not even a server.
+
+    `schema: unexpected key 'max_tokens'` is our own validator quoting a key the *model*
+    put in its reply: a model that writes `max_tokens` into an action would otherwise
+    have been able to make the loop discard its history on demand.
+    """
+    target = tmp_path / "out.txt"
+    llm = StubLlm(
+        replies=[
+            action("list_dir", path=str(tmp_path)),
+            LlmError(reason=reason, retryable=False),
+            action("write_file", path=str(target), content="x"),
+            action("finish", path=str(target), verify="test -s out.txt", summary="done"),
+        ]
+    )
+    state = make_state(tmp_path)
+
+    run(state, llm, FakeVerify((True, "command", "")))
+
+    assert not any(focused(call) for call in llm.calls), server
+    assert not [event for event in state.audit if event.name == "focus"]
+
+
+def test_the_runaway_line_is_the_one_that_was_measured_and_has_not_moved(
+    tmp_path: Path,
+) -> None:
+    """The branch reached on the 35B stand keeps its wording, byte for byte.
+
+    Its numbers -- four runaways in a row, ~70 s a call, three logical calls to
+    `llm-unusable` -- stand behind that sentence and nothing else. A second cause was
+    added beside it; it may not be paid for by rewording this one.
+    """
+    target = tmp_path / "out.txt"
+    llm = StubLlm(
+        replies=[
+            runaway(),
+            action("write_file", path=str(target), content="x"),
+            action("finish", path=str(target), verify="test -s out.txt", summary="done"),
+        ]
+    )
+
+    run(make_state(tmp_path), llm, FakeVerify((True, "command", "")))
+
+    assert texts(llm.calls[1])[-1] == (
+        "[фокус] Предыдущий ответ был обрезан по длине без действия. Не рассуждай: "
+        "сразу верни один короткий вызов инструмента для следующего шага "
+        "(если результат уже записан — finish с командой проверки)."
+    )
+    assert texts(llm.calls[1])[-1] == prompt.FOCUS_NOTICE
+
+
+def test_the_two_causes_never_borrow_each_others_line(tmp_path: Path) -> None:
+    """A run that focuses twice, once for each reason, labels both correctly.
+
+    The flag and the cause travel as one value, so a consumed focus cannot leave a
+    stale cause behind to mislabel the next one.
+    """
+    target = tmp_path / "out.txt"
+    llm = StubLlm(
+        replies=[
+            runaway(),
+            action("list_dir", path=str(tmp_path)),
+            context_overflow(),
+            action("write_file", path=str(target), content="x"),
+            action("finish", path=str(target), verify="test -s out.txt", summary="done"),
+        ]
+    )
+    state = make_state(tmp_path)
+
+    run(state, llm, FakeVerify((True, "command", "")))
+
+    assert texts(llm.calls[1])[-1] == prompt.FOCUS_NOTICE
+    assert texts(llm.calls[3])[-1] == prompt.CONTEXT_FOCUS_NOTICE
+    assert [event.detail for event in state.audit if event.name == "focus"] == [
+        "focused retry after a truncated reasoning reply",
+        "focused retry after a context-overflow refusal",
+    ]

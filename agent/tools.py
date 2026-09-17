@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent import limits, result_progress
-from agent.paths import permits, write_refusal
+from agent.paths import permits
 from agent.redact import AGENT_CREDENTIAL_ENV_NAMES, redact
 
 CHUNK_BYTES = 65536
@@ -163,8 +163,19 @@ def run_argv(
     secrets: Iterable[str] = (),
     name: str = "run",
     env: Mapping[str, str] | None = None,
+    detached: bool = False,
 ) -> ToolResult:
     """Run a command with no shell between us and it, bounded in time and size.
+
+    `detached` is for the one command that is supposed to leave something running: the
+    service relaunch the finish gate itself dictates. `cd /app && nohup <argv> >log
+    2>&1 &` backgrounds the whole AND-list, so the subshell that waits on the service
+    keeps our stdout pipe for as long as the service lives -- the reader threads block,
+    the call runs into its timeout and the session reap takes the new service down with
+    it (measured: 120 s and a dead service). With `detached` the child writes into a
+    temporary file instead of a pipe, so nothing of ours is held, the call returns when
+    the leader exits, and what the leader printed is still read back. Every other
+    command keeps the pipes and the reap.
 
     `env` replaces the child's whole environment rather than extending it, which is
     what makes it usable as a scrubber: `run_shell` and the macro controller both hand
@@ -181,6 +192,14 @@ def run_argv(
     if env is not None:
         spawn["env"] = dict(env)
 
+    handle = tempfile.TemporaryFile() if detached else None
+    if handle is not None:
+        spawn["stdout"] = handle
+        spawn["stderr"] = subprocess.STDOUT
+    else:
+        spawn["stdout"] = subprocess.PIPE
+        spawn["stderr"] = subprocess.PIPE
+
     # argv is a list, so the model's text is one argument and never a command line.
     # stdin is /dev/null and not ours: no caller here feeds the child anything, and a
     # command with a forgotten operand -- `grep ERROR` without a file, a bare `cat`,
@@ -192,11 +211,11 @@ def run_argv(
             list(argv),
             cwd=str(cwd),
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
             **spawn,  # type: ignore[arg-type]
         )
     except (OSError, ValueError) as exc:
+        if handle is not None:
+            handle.close()
         return ToolResult(
             name=name,
             ok=False,
@@ -214,12 +233,14 @@ def run_argv(
             pgid = None
 
     out_sink, err_sink = _BoundedSink(), _BoundedSink()
-    readers = [
-        threading.Thread(target=out_sink.drain, args=(process.stdout,), daemon=True),
-        threading.Thread(target=err_sink.drain, args=(process.stderr,), daemon=True),
-    ]
-    for reader in readers:
-        reader.start()
+    readers: list[threading.Thread] = []
+    if handle is None:
+        readers = [
+            threading.Thread(target=out_sink.drain, args=(process.stdout,), daemon=True),
+            threading.Thread(target=err_sink.drain, args=(process.stderr,), daemon=True),
+        ]
+        for reader in readers:
+            reader.start()
 
     timed_out = False
     try:
@@ -254,6 +275,16 @@ def run_argv(
                 stream.close()
             except (OSError, ValueError):
                 pass
+    if handle is not None:
+        # Whatever the leader wrote before it exited. A job it left behind may still be
+        # appending; this is a snapshot of the file, not a wait for that job to finish.
+        try:
+            handle.seek(0)
+            out_sink.drain(handle)
+        except (OSError, ValueError):
+            pass
+        finally:
+            handle.close()
 
     stdout, out_cut = out_sink.text()
     stderr, err_cut = err_sink.text()
@@ -296,8 +327,13 @@ def run_shell(
     cwd: Path,
     timeout_s: float,
     secrets: Iterable[str] = (),
+    detached: bool = False,
 ) -> ToolResult:
-    """Run a shell command line, so pipelines and redirection stay available."""
+    """Run a shell command line, so pipelines and redirection stay available.
+
+    `detached` is passed through to `run_argv` for a command the caller has already
+    recognised as one that is meant to leave a process running.
+    """
     return run_argv(
         [limits.SHELL_EXECUTABLE, "-c", command],
         cwd=cwd,
@@ -305,6 +341,7 @@ def run_shell(
         secrets=secrets,
         name="shell",
         env=endpoint_scrubbed_env(),
+        detached=detached,
     )
 
 
@@ -370,7 +407,7 @@ def write_file(
         return ToolResult(
             name="write_file",
             ok=False,
-            detail=f"refused: {write_refusal(target, root, permitted)}",
+            detail=f"refused: {target} is outside the workspace {root} and unnamed by the task",
         )
 
     started = time.monotonic()
@@ -464,7 +501,7 @@ def write_json(
         return ToolResult(
             name="write_json",
             ok=False,
-            detail=f"refused: {write_refusal(target, root, permitted)}",
+            detail=f"refused: {target} is outside the workspace {root} and unnamed by the task",
         )
 
     # The value is normally already parsed (the action arrived as JSON). A model that
@@ -557,7 +594,7 @@ def replace_text(
         return ToolResult(
             name="replace_text",
             ok=False,
-            detail=f"refused: {write_refusal(target, root, permitted)}",
+            detail=f"refused: {target} is outside the workspace {root} and unnamed by the task",
         )
 
     if not old:
@@ -784,6 +821,9 @@ def read_range(
     """
     start_line = max(1, start_line)
     max_lines = max(1, min(max_lines, limits.READ_MAX_LINES))
+    # Read once per line now, so a caller that passed an iterator would hand the second
+    # line an exhausted one.
+    secrets = tuple(secrets)
 
     if not _is_regular_file(path):
         return ToolResult(name="read_range", ok=False, detail=f"not a regular file: {path}")
@@ -805,12 +845,19 @@ def read_range(
                 if room <= 0:
                     truncated = True
                     break
-                if len(line) > room:
-                    collected.append(line[:room])
+                # Redacted before the cut, not after. A secret sitting across the byte
+                # limit would otherwise be halved by the slice, and half a secret is not
+                # a match for `redact`, so the surviving prefix travelled into the
+                # context -- the one thing the file tools promise never to do. With no
+                # secrets `redact` returns the line it was given, so every window that
+                # has ever been measured is byte for byte what it was.
+                visible = redact(line, secrets)
+                if len(visible) > room:
+                    collected.append(visible[:room])
                     truncated = True
                     break
-                collected.append(line)
-                used += len(line)
+                collected.append(visible)
+                used += len(visible)
     except OSError as exc:
         return ToolResult(
             name="read_range",
@@ -983,7 +1030,12 @@ def search(
     """
     try:
         expression = re.compile(pattern)
-    except re.error as exc:
+    except (re.error, OverflowError, RecursionError) as exc:
+        # Not only `re.error`: a repetition count past the engine's limit raises
+        # `OverflowError` (`x{4294967296}`) and a deeply nested pattern can exhaust the
+        # stack with `RecursionError`. Both used to leave the tool as a raise, which
+        # ends the step instead of answering it -- and the answer is one the model can
+        # act on, which is to write a pattern the engine will take.
         return ToolResult(name="search", ok=False, detail=f"bad pattern: {exc}")
 
     if root.is_file():

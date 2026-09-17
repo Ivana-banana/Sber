@@ -75,6 +75,40 @@ def test_a_cutoff_inside_a_think_tag_is_thinking() -> None:
     assert client._thinking_endpoint is True
 
 
+def test_a_truncated_answer_shipped_as_parts_is_a_long_answer_not_a_hidden_one() -> None:
+    """The same reply, read twice, must not be read two different ways.
+
+    A proxy translating an Anthropic-shaped backend ships the assistant's content as a
+    list of parts, and `_read_reply` has read that shape through `_content_text` for
+    exactly that reason. The two verdicts about the reply did not: to them a content
+    that is not a string is an empty one, so an ordinary answer that ran out of room
+    became "the whole budget was billed and nothing of it is visible" -- a thinking
+    span. That buys the raised ceiling and the thinking call timeout for the rest of the
+    run, which is the `F4-7b-regression-4080` cost (+250 s for the same zero) arriving
+    by another door, and it marks the truncation a runaway on top.
+    """
+    parts = {
+        "choices": [
+            {
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "an ordinary answer that ran out of room"}
+                    ]
+                },
+                "finish_reason": "length",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2048},
+    }
+    client, _, _ = make_client([(200, json.dumps(parts).encode())] * 8)
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(result, LlmError)
+    assert client._thinking_endpoint is False, "the tokens are visible; nothing was hidden"
+    assert result.truncated_reasoning is False, "and a visible answer is not a runaway"
+
+
 def test_a_cutoff_with_no_usage_block_is_not_read_as_thinking() -> None:
     # An endpoint that reports no usage cannot corroborate that the cap was reached.
     # Without corroboration the cheap hypothesis wins (critic, 16.09): the thinking
@@ -391,6 +425,55 @@ def test_a_shape_error_that_was_not_the_switch_does_not_cost_the_switch() -> Non
     assert any("chat_template_kwargs" in body for body in endpoint.bodies[3:]), (
         "the switch was asked for again after the unrelated refusal cleared"
     )
+
+
+def test_a_validation_error_quoting_the_request_is_not_read_as_an_overflow() -> None:
+    """A gateway validating with `extra="forbid"` answers 422 and quotes the body back.
+
+    FastAPI's `extra_forbidden` detail carries the rejected input, so a refusal that is
+    entirely about `chat_template_kwargs` still contains the string `max_tokens` while
+    saying nothing about the prompt. The wide reading of an overflow exists for the
+    branch above this one, where a SHAPE status, a ceiling this client raised and room
+    left to halve it make a bare `max_tokens` unambiguous. Reused here it is not: the
+    ceiling is halved to the floor, the switch is never taken off, and every later call
+    of the run still carries the one key this gateway refuses -- three consecutive
+    failures and `llm-unusable`, with the cap stuck at the floor on the way.
+    """
+
+    def rule(n, body):
+        if n <= 1:
+            return _truncated(body)
+        if "chat_template_kwargs" in body:
+            refusal = {
+                "detail": [
+                    {
+                        "type": "extra_forbidden",
+                        "loc": ["body", "chat_template_kwargs"],
+                        "msg": "Extra inputs are not permitted",
+                        "input": {"max_tokens": body["max_tokens"], "temperature": 0},
+                    }
+                ]
+            }
+            return 422, json.dumps(refusal).encode()
+        return 200, tool_reply(ACTION)
+
+    client, endpoint, _ = _client(rule)
+
+    first = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(first, LlmReply)
+    assert client._thinking_unsupported is True, "the body named the key; that settles it"
+    assert client.style == llm.NATIVE_TOOLS, "a refused key is not a refused rung"
+    assert any(
+        body.get("max_tokens") == limits.LLM_THINKING_MAX_OUTPUT_TOKENS
+        and "chat_template_kwargs" in body
+        for body in endpoint.bodies
+    ), "the echo under test is the raised ceiling coming back in the refusal"
+
+    second = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(second, LlmReply)
+    assert "chat_template_kwargs" not in endpoint.bodies[-1], "and never sent again"
 
 
 def test_a_context_length_400_is_never_read_as_a_verdict_on_the_switch() -> None:

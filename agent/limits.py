@@ -568,6 +568,24 @@ a model that has already answered it burns the budget the repair needs. The audi
 is written either way, so a run that finished over the warning is visible afterwards.
 """
 
+SERVICE_RESTART_SETTLE_S = 1.5
+"""Seconds the restart step waits before asking whether the service actually came up.
+
+A background start returns instantly and says nothing, so the step has to look for
+itself, and it has to look late enough for the answer to mean something: an interpreter
+that dies on an import error or on `Address already in use` needs a moment to do it,
+and one that lives needs a moment to appear in procfs with its final argv. Bounded by
+the command's own tool timeout, so a run inside its reserve pays less or nothing.
+"""
+
+SERVICE_RESTART_LOG_BYTES = 600
+"""Trailing bytes of the restart log quoted back into the observation.
+
+The end of the file is where the traceback is. Enough for an `ImportError` line or an
+`OSError: [Errno 98]`, little enough that a service logging a request per line cannot
+push the rest of the step's observation out.
+"""
+
 SERVICE_SCAN_MAX_CHECKS = 2
 """Scans one run may pay for: the one that can refuse, and the one that records what
 the run finished with anyway."""

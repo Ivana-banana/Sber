@@ -314,8 +314,13 @@ class Budget:
         return self.input_tokens + self.output_tokens
 
 
-EDIT_TOOLS = frozenset({"write_file", "replace_text"})
-"""The two tools whose success is a change to the deliverable; see `shows_progress`."""
+EDIT_TOOLS = frozenset({"write_file", "write_json", "replace_text"})
+"""The tools whose success is a change to the deliverable; see `shows_progress`.
+
+`write_json` belongs here for the same reason the other two do -- it writes a file --
+and it is the tool the prompt offers for the JSON deliverables half the audit tasks
+ask for. Leaving it out meant an episode that wrote its report through it never showed
+progress and never earned the step extension (loop audit, 17.09)."""
 
 
 @dataclass
@@ -369,6 +374,19 @@ class AgentState:
     violation ends the privilege for the rest of the run: the probe exists to let a
     repair be checked, and a run that has already used it to touch the evaluator has
     shown the convenience is not free."""
+
+    service_restarts: list[tuple[int, tuple[str, ...], str]] = field(
+        default_factory=list, repr=False
+    )
+    """`(pid, argv, cwd)` of every stale service this run has offered a restart for.
+
+    The finish gate reads the process table, finds a service older than the edit and
+    hands the model a ready `nohup <argv> >/tmp/... 2>&1 &` line. The code-fix shell
+    policy accepts that background start only for an argv recorded here, so the
+    privilege reaches the one command the agent itself dictated and nothing else. Kept
+    after the process is gone on purpose: the model stops the service with its own
+    `kill` first, and the argv it must start again is the argv the scan read.
+    """
 
     audit: list[Event] = field(default_factory=list)
     """Append-only trace. Nothing removes entries; truncation happens at render time."""
@@ -434,7 +452,7 @@ class AgentState:
         progress a step extension may feed.
 
         Read from the detector window alone, so nothing new is bookkept for it. Only a
-        successful `write_file` or `replace_text` counts. Not a novel read: thirty
+        successful edit -- `EDIT_TOOLS` -- counts. Not a novel read: thirty
         `read_range` calls over different windows of one file are each novel and are
         exactly the loop this exists to refuse. Not a state-changing shell either: a
         `pytest` re-run advances the epoch and prints a fresh timing every time, and a

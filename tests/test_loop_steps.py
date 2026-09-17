@@ -460,3 +460,48 @@ def test_the_checkpoint_of_the_other_playbooks_is_left_alone(tmp_path: Path) -> 
 
     assert "write_file" in checkpoints(outcome)[-1]
     assert "replace_text" not in checkpoints(outcome)[-1]
+
+
+# --- and the deliverable that is JSON is the same run ---------------------------
+
+
+def writes_json(tmp_path: Path, count: int) -> StubLlm:
+    """The same model, one tool over: a JSON deliverable instead of a text one."""
+    return StubLlm(
+        replies=[
+            action("write_json", path=str(tmp_path / f"f{index}.json"), data={"n": index})
+            for index in range(count)
+        ]
+    )
+
+
+def test_a_json_deliverable_earns_the_extension_the_same_way(tmp_path: Path) -> None:
+    """Two identical episodes that differ only in which write tool they use.
+
+    `write_json` is the tool the prompt offers for exactly the deliverable a good half
+    of the audit tasks ask for (`security_report.json` and its kind), and until the
+    audit of 17.09 it was in neither `EDIT_TOOLS` nor the state-epoch classifier: the
+    same run wrote the same report and stopped fifteen steps earlier, with the same
+    four hundred seconds unspent that this extension was measured on.
+    """
+    cap = limits.MAX_STEPS + limits.STEP_EXTENSION
+    text_state, json_state = make_state(tmp_path), make_state(tmp_path)
+
+    text = run(text_state, writes(tmp_path, cap + 5), FakeVerify())
+    js = run(json_state, writes_json(tmp_path, cap + 5), FakeVerify())
+
+    assert (js.stop_reason, json_state.budget.max_steps, json_state.budget.steps_used) == (
+        text.stop_reason,
+        text_state.budget.max_steps,
+        text_state.budget.steps_used,
+    )
+    assert json_state.budget.steps_extension_granted == limits.STEP_EXTENSION
+    assert json_state.budget.max_steps == cap
+
+
+def test_an_accepted_json_write_is_progress_like_any_other_edit(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+
+    state.observe("write_json", {"path": str(tmp_path / "report.json")}, "wrote 21 bytes of JSON")
+
+    assert state.shows_progress() is True
