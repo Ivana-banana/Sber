@@ -471,6 +471,38 @@ def _strip_thinking(text: str) -> str:
     return text.strip()
 
 
+def _content_text(message: dict[str, Any]) -> str:
+    """The reply's text, whether the server sent a string or a list of parts.
+
+    OpenAI's own schema types an assistant `content` as a string, but proxies that
+    translate an Anthropic-shaped backend answer with the parts list they were handed.
+    Read as "not a string, so empty", such a reply looks like a server that produced
+    nothing: the ladder is walked to the bottom and the client stays there.
+
+    A part counts only when it says `type: "text"`, and that is the whole point of the
+    check rather than a detail of it. The same list is how those proxies ship reasoning
+    -- `reasoning`, `thinking`, `summary_text` -- and several of those shapes carry
+    their prose under `text` as well. Joined into the content, a draft action inside the
+    reasoning is the first `{` `_salvage_json` finds, so the model would act on a
+    thought it never committed to: the failure `_strip_thinking` exists to prevent,
+    arriving by another door. A part with no `type` is not text either; every dialect
+    that exists labels its parts, and refusing an unlabelled one costs the ladder the
+    reply was already costing, which is the cheaper of the two mistakes.
+    """
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part["text"]
+            for part in content
+            if isinstance(part, dict)
+            and part.get("type") == "text"
+            and isinstance(part.get("text"), str)
+        )
+    return ""
+
+
 def _tool_call_entries(message: dict[str, Any]) -> list[Any]:
     """The reply's tool calls as a list, whatever container the server used.
 
@@ -623,6 +655,20 @@ class HttpLlm:
     to seeing a reasoning field. Never sent to an endpoint that showed no sign of
     thinking: there is nothing there to turn off, and the request buys another full-length
     generation for nothing."""
+
+    _thinking_unsupported: bool = field(default=False, repr=False)
+    """Set once, for the rest of the run, when the endpoint has been *shown* not to take
+    `chat_template_kwargs`: it named the key in a refusal, or the same rung went through
+    the moment the switch came off it. Then the switch is taken off the escalation for
+    good and truncation stops one rung earlier.
+
+    Only an outcome sets it. A 400 that merely arrived while the switch was up is not
+    one: it is as likely to be about the rung, and spending the flag on a guess throws
+    away the only answer to a reasoning runaway this client has."""
+
+    _thinking_probe: bool = field(default=False, repr=False)
+    """Set while the last request repeated a rung with the switch taken off, to find out
+    whether the switch was what the server refused. The next status settles it."""
 
     _output_cap: int = field(default=limits.LLM_THINKING_MAX_OUTPUT_TOKENS, repr=False)
     """Upper bound on the raised ceiling, lowered only when the server answers a raised
@@ -853,8 +899,7 @@ class HttpLlm:
     ) -> tuple[str | None, str]:
         """Return (text, "") on success, or (None, reason) when the reply is unusable."""
         message = _first_message(payload)
-        content = message.get("content")
-        content = content if isinstance(content, str) else ""
+        content = _content_text(message)
         # Before anything reads the content: drop a thinking model's <think> reasoning,
         # so a JSON draft inside it is never salvaged as the action. Harmless on a model
         # that emits none. tool_calls, when present, are read below and not affected.
@@ -933,6 +978,10 @@ class HttpLlm:
 
         last = LlmError(reason="no attempt was made", retryable=False)
         retries_at_style = 0
+        # Per logical call, not per run: the switch is taken off once here, so a rung
+        # that keeps truncating cannot spend the whole attempt budget putting it on and
+        # taking it off again.
+        thinking_dropped = False
         # Usage summed across every attempt, not just the one that finally parses: a
         # demoted or truncated attempt was still generated and billed. `stamped` puts
         # the running total on whatever object is returned, reply or error.
@@ -984,6 +1033,14 @@ class HttpLlm:
                     retryable=verdict == RETRY,
                 )
 
+                if self._thinking_probe:
+                    # The same rung was refused without the switch as well, so the switch
+                    # was not what the server objected to. Put it back and let the error
+                    # take the ordinary route.
+                    self._thinking_probe = False
+                    self._thinking_off = True
+                    self._note("thinking", "refused without the flag as well; keeping it")
+
                 # A strict server (vLLM) rejects the raised thinking budget with a 400
                 # naming the context length: lower the ceiling and retry the same rung
                 # rather than downgrade the protocol, which would not fix the size.
@@ -997,15 +1054,90 @@ class HttpLlm:
                     self._note("thinking", f"context rejected the budget; capping output at {self._output_cap}")
                     continue
 
+                if (
+                    verdict == SHAPE
+                    and self._thinking_off
+                    and not thinking_dropped
+                    and not _looks_like_context_overflow(detail)
+                ):
+                    # `chat_template_kwargs` is the one key in this body that no
+                    # OpenAI-compatible server promises to accept, and a gateway
+                    # validating with `extra="forbid"` rejects it. Since the key is
+                    # sticky, that refusal would then ride on every later call and the
+                    # ladder would be spent on a field that has nothing to do with the
+                    # rung. So take the switch off and repeat the same request.
+                    #
+                    # Whether it stays off for the run is decided by what comes back,
+                    # not by the fact that a 400 arrived while it was up: a 400 about
+                    # something else in the body -- a `tools` this model does not take --
+                    # would otherwise spend the flag on a guess. A body that names the
+                    # key has already settled it; anything else is a probe, and the next
+                    # status is the answer.
+                    #
+                    # A context-length 400 never comes in here. It is answered by the
+                    # smaller ceiling above, and it still is not about the switch on the
+                    # call where the cap has already reached the floor and that branch
+                    # can no longer fire.
+                    thinking_dropped = True
+                    self._thinking_off = False
+                    lowered = detail.lower()
+                    if "chat_template_kwargs" in lowered or "enable_thinking" in lowered:
+                        self._thinking_unsupported = True
+                        self._note("thinking", "endpoint named the flag; dropping it for the run")
+                    else:
+                        self._thinking_probe = True
+                        self._note("thinking", "repeating the rung without the flag to see whether it was the cause")
+                    continue
+
                 if verdict == FATAL:
                     # A rejected key, an unknown model or an unknown route. The ladder
                     # cannot fix any of them and retrying only spends the deadline.
                     return stamped(last)
 
                 if verdict == RETRY:
-                    # One retry at the current rung. A server error that survives it is
-                    # more likely a deterministic parser failure than an outage, so the
-                    # second response is to change the request shape, not repeat it.
+                    # Back-pressure (408/409/425/429) says nothing about the shape of the
+                    # request -- `classify_status` spells out why -- and it clears on its
+                    # own, so it keeps the rung. Keeping the rung is only half of it: the
+                    # ladder it replaces made a fresh request at every demotion, with no
+                    # wait between them, so stopping after the second wait asks a busy
+                    # endpoint fewer times than stepping down did. A lost logical call is
+                    # a hard failure and three of them end the task, which is a worse
+                    # price than the one demoting charged.
+                    #
+                    # So it goes on asking where it is, for the rest of the attempt
+                    # budget: the schedule's rungs first, then its last rung before each
+                    # further try, and each wait only if it fits what is left of the call
+                    # deadline. When it does not fit, the question is asked without the
+                    # wait as long as any time remains -- the cadence a demotion had --
+                    # rather than handing back seconds too short to sleep through.
+                    #
+                    # `Retry-After` is not read: `Transport` returns a status and a body
+                    # and never the headers.
+                    pressure = status in PRESSURE_STATUSES
+                    if pressure:
+                        if attempt + 1 >= limits.LLM_MAX_ATTEMPTS:
+                            # No attempt left for a wait to lead to, and sleeping through
+                            # the last of the budget only delays the same error.
+                            return stamped(last)
+                        schedule = limits.LLM_RETRY_BACKOFF_S
+                        delay = schedule[min(attempt, len(schedule) - 1)]
+                        remaining = deadline - self.clock()
+                        if delay < remaining:
+                            # Counted like any other retry at this rung, so a 5xx arriving
+                            # after one reads the same counter it read before.
+                            retries_at_style += 1
+                            self._note("retry", f"attempt {attempt + 1} failed, waiting {delay}s")
+                            self.sleep(delay)
+                            continue
+                        if remaining > 0:
+                            retries_at_style += 1
+                            continue
+                        return stamped(last)
+
+                    # One retry at the current rung for a 5xx. A server error that
+                    # survives it is more likely a deterministic parser failure than an
+                    # outage, so the second response is to change the request shape, not
+                    # repeat it.
                     if retries_at_style == 0 and self._backoff(attempt, deadline):
                         retries_at_style += 1
                         continue
@@ -1045,6 +1177,19 @@ class HttpLlm:
             # survived the raise.
             message = _first_message(payload)
             finish = _finish_reason(payload)
+
+            if self._thinking_probe:
+                # The rung went through the moment the switch came off it, so the switch
+                # was the refused part -- unless the answer was cut off again, which is
+                # the one condition the switch exists for. Nothing is settled there, and
+                # the escalation below asks for it again.
+                self._thinking_probe = False
+                if finish == "length":
+                    self._note("thinking", "accepted without the flag but still truncated; nothing settled")
+                else:
+                    self._thinking_unsupported = True
+                    self._note("thinking", "accepted without the flag; the endpoint does not take it")
+
             was_raised = self._thinking_endpoint or self._output_raised
             evidence = _thinking_evidence(
                 message,
@@ -1086,7 +1231,11 @@ class HttpLlm:
                         # readable when only one of them fired.
                         self._note("budget", "reply truncated by length; raising the output ceiling")
                         continue
-                    if self._thinking_endpoint and not self._thinking_off:
+                    if (
+                        self._thinking_endpoint
+                        and not self._thinking_off
+                        and not self._thinking_unsupported
+                    ):
                         self._thinking_off = True
                         self._note("thinking", "still truncated; asking the endpoint to skip thinking")
                         continue
@@ -1110,15 +1259,20 @@ class HttpLlm:
 
     def _backoff(self, attempt: int, deadline: float) -> bool:
         """Wait before the next attempt. False when the schedule or the deadline is
-        exhausted. The rung is clamped to what is actually left: sleeping the full
-        rung regardless would blow past a deadline narrower than the schedule --
-        a fast failure with little time left must not sleep 3s for a 1s budget."""
+        exhausted, and the whole of the retry policy: two rungs, 1.0 s and 3.0 s, then
+        no more. `Retry-After` is not consulted -- `Transport` returns a status and a
+        body and never the headers -- so a queue that asks for longer is answered on
+        this schedule and then reported.
+
+        A rung is either slept in full or not at all. Sleeping a rung cut down to what
+        is left would spend the last of the deadline on the wait and leave nothing for
+        the attempt the wait exists to make, which is a slower way of returning the
+        same error."""
         if attempt >= len(limits.LLM_RETRY_BACKOFF_S):
             return False
-        remaining = deadline - self.clock()
-        if remaining <= 0:
+        delay = limits.LLM_RETRY_BACKOFF_S[attempt]
+        if delay >= deadline - self.clock():
             return False
-        delay = min(limits.LLM_RETRY_BACKOFF_S[attempt], remaining)
         self._note("retry", f"attempt {attempt + 1} failed, waiting {delay}s")
         self.sleep(delay)
         return True

@@ -22,7 +22,7 @@ import urllib.error
 
 from agent import limits, llm
 from agent.ports import LlmError, LlmReply
-from tests.test_llm import ACTION_LIKE, ENV, make_client
+from tests.test_llm import ACTION_LIKE, ENV, make_client, tool_reply
 
 
 def _reply(
@@ -280,3 +280,155 @@ def test_nothing_is_sent_to_an_endpoint_that_never_showed_a_thought() -> None:
     client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
 
     assert not any("chat_template_kwargs" in body for body in endpoint.bodies)
+
+
+def test_an_endpoint_that_refuses_the_thinking_switch_drops_it_and_keeps_the_rung() -> None:
+    """A strict server answers the unknown key with a 400, and the key is sticky.
+
+    `chat_template_kwargs` is the newest thing in the body and the only one no
+    OpenAI-compatible server promises to accept: a gateway validating with
+    `extra="forbid"` rejects it. Read as "this rung is unsupported" the client spends the
+    whole ladder on it and then keeps sending the same key on every later call, so every
+    request of the task is refused -- three consecutive failures and `llm-unusable`.
+    The switch is a request about the model's reasoning, not about the request shape,
+    so a shape error is answered by dropping it and repeating the same rung.
+    """
+
+    class StrictEndpoint:
+        """Truncates twice, refuses any body carrying the thinking switch, then answers."""
+
+        def __init__(self) -> None:
+            self.bodies: list[dict] = []
+
+        def __call__(self, url, body, headers, timeout_s):
+            parsed = json.loads(body)
+            self.bodies.append(parsed)
+            if "chat_template_kwargs" in parsed:
+                return 400, b'{"error":"Extra inputs are not permitted: chat_template_kwargs"}'
+            if len(self.bodies) <= 2:
+                return 200, _reply("", finish="length", completion=2048)
+            return 200, tool_reply(ACTION)
+
+    endpoint = StrictEndpoint()
+    events: list[tuple[str, str]] = []
+    client = llm.HttpLlm(
+        settings=llm.LlmSettings.from_env(ENV),
+        transport=endpoint,
+        sleep=lambda _: None,
+        on_event=lambda kind, detail: events.append((kind, detail)),
+    )
+
+    first = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(first, LlmReply)
+    assert client.style == llm.NATIVE_TOOLS, "a refused key is not a refused rung"
+    assert "chat_template_kwargs" in endpoint.bodies[2], "the switch was tried once"
+    assert "chat_template_kwargs" not in endpoint.bodies[3], "and dropped for the retry"
+
+    second = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(second, LlmReply)
+    assert "chat_template_kwargs" not in endpoint.bodies[4], "and never sent again"
+    assert client.style == llm.NATIVE_TOOLS
+
+
+class _RuleEndpoint:
+    """A fake server driven by a rule over (request number, parsed body)."""
+
+    def __init__(self, rule) -> None:
+        self.rule = rule
+        self.bodies: list[dict] = []
+
+    def __call__(self, url, body, headers, timeout_s):
+        parsed = json.loads(body)
+        self.bodies.append(parsed)
+        return self.rule(len(self.bodies) - 1, parsed)
+
+
+def _client(rule):
+    endpoint = _RuleEndpoint(rule)
+    events: list[tuple[str, str]] = []
+    client = llm.HttpLlm(
+        settings=llm.LlmSettings.from_env(ENV),
+        transport=endpoint,
+        sleep=lambda _: None,
+        on_event=lambda kind, detail: events.append((kind, detail)),
+    )
+    return client, endpoint, events
+
+
+def _truncated(body: dict) -> tuple[int, bytes]:
+    return 200, _reply("", finish="length", completion=int(body["max_tokens"]))
+
+
+def test_a_shape_error_that_was_not_the_switch_does_not_cost_the_switch() -> None:
+    """A 400 for an unrelated reason, landing on the request the switch first rode on.
+
+    This server honours `enable_thinking=false` -- on a reasoning model that is the only
+    escape from a runaway this client has -- but it refuses `tools` once, and that
+    refusal lands on the first request the switch was attached to. Reading a 400 as a
+    verdict on the switch merely because the switch was in the body throws the lever
+    away, and every later call then runs out of escalation and returns truncated.
+    """
+    refused_tools = []
+
+    def rule(n, body):
+        if n <= 1:
+            return _truncated(body)
+        if "tools" in body and not refused_tools:
+            refused_tools.append(1)
+            return 400, b'{"error":"tools: unsupported parameter for this model"}'
+        if "chat_template_kwargs" in body:
+            return 200, _reply(ACTION)
+        return _truncated(body)
+
+    client, endpoint, _ = _client(rule)
+
+    first = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(first, LlmReply), "the switch still had to be reachable"
+    assert client._thinking_unsupported is False, "nothing showed the endpoint refuses it"
+    assert any("chat_template_kwargs" in body for body in endpoint.bodies[3:]), (
+        "the switch was asked for again after the unrelated refusal cleared"
+    )
+
+
+def test_a_context_length_400_is_never_read_as_a_verdict_on_the_switch() -> None:
+    # The raised budget overran the context and the cap has already come down to the
+    # floor, so the branch that lowers it cannot fire again and the 400 falls through
+    # with the switch up. It is still a statement about the prompt, and the ladder is
+    # what answers it -- exactly as it did before the switch existed.
+    def rule(n, body):
+        if n <= 1:
+            return _truncated(body)
+        return 400, b'{"error":"This model maximum context length is 8192 tokens, however you requested more"}'
+
+    client, _, events = _client(rule)
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(result, LlmError)
+    assert client._thinking_unsupported is False
+    assert client._output_cap == limits.LLM_MAX_OUTPUT_TOKENS, "the cap came down, as before"
+    assert client.style == llm.TEXT, "and the ladder answered the rest, as before"
+    assert not any("enable_thinking" in detail for _, detail in events)
+
+
+def test_a_refusal_that_survives_dropping_the_switch_gives_the_switch_back() -> None:
+    # A nameless 400 that does not clear: the body says nothing about which key it
+    # dislikes, and repeating the rung without the switch is refused just the same. The
+    # switch was not the cause, so it is put back rather than spent, and the error takes
+    # the ordinary route down the ladder.
+    def rule(n, body):
+        if n <= 1:
+            return _truncated(body)
+        return 400, b'{"error":"bad request"}'
+
+    client, _, _ = _client(rule)
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(result, LlmError)
+    assert client._thinking_unsupported is False, "the refusal was never shown to be the switch"
+    assert client._thinking_off is True, "so the last resort is still available"
+    assert client.style == llm.TEXT
