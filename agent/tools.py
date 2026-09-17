@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import re
 import signal
 import stat
@@ -476,11 +477,18 @@ def write_json(
             name="write_json", ok=False, detail="write_json needs a data value: the JSON to write"
         )
     try:
-        text = json.dumps(value, ensure_ascii=False, indent=2)
+        text = json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False)
     except (TypeError, ValueError) as exc:
         return ToolResult(name="write_json", ok=False, detail=f"data is not JSON-serialisable: {exc}")
 
-    payload = text.encode("utf-8")
+    try:
+        payload = text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        return ToolResult(
+            name="write_json",
+            ok=False,
+            detail=redact(f"data is not encodable as UTF-8: {exc}", secrets),
+        )
     started = time.monotonic()
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -527,8 +535,8 @@ def replace_text(
     temporary file and installed atomically with the original mode.
 
     Ambiguity is refused rather than resolved. Replacing the first of several matches
-    is a coin flip the model cannot see the result of, and the count of matches is
-    something it can act on by lengthening the anchor.
+    is a coin flip the model cannot see the result of. Finding a second match,
+    including an overlapping one, is enough to ask for a longer anchor.
     """
     try:
         root = workspace.resolve()
@@ -581,8 +589,8 @@ def replace_text(
             duration_s=time.monotonic() - started,
         )
 
-    found = before.count(old)
-    if found == 0:
+    match_index = before.find(old)
+    if match_index == -1:
         return ToolResult(
             name="replace_text",
             ok=False,
@@ -592,12 +600,12 @@ def replace_text(
             ),
             duration_s=time.monotonic() - started,
         )
-    if found > 1:
+    if before.find(old, match_index + 1) != -1:
         return ToolResult(
             name="replace_text",
             ok=False,
             detail=(
-                f"`old` appears {found} times in {target}; the edit would be ambiguous. "
+                f"`old` appears at least 2 times in {target}; the edit would be ambiguous. "
                 f"Extend it with surrounding lines until it is unique."
             ),
             duration_s=time.monotonic() - started,
@@ -650,7 +658,7 @@ def replace_text(
             except OSError:
                 pass
 
-    line = before[: before.index(old)].count("\n") + 1
+    line = before[:match_index].count("\n") + 1
     # replace_text is the tool the docstring steers a code-fix toward, so an indentation
     # error introduced in `new` breaks the module exactly as a bad write_file would --
     # report it the same way rather than answer only "replaced 1 occurrence".
@@ -1041,6 +1049,13 @@ class ServingProcess:
 
     reason: str = ""
     """Why this process was matched, in one short English phrase, for the trace."""
+
+    command: str = ""
+    """The full command line, shell-quoted, when every token is safe to show; "" when
+    any token looks like a credential or a URL with one, or when procfs gave none. The
+    restart hint quotes it verbatim: on the measured 30B stand the model stopped the
+    service it was told about and never started it again, because "run the same command
+    again" left it to reconstruct the command from the entrypoint (16.09)."""
 
     @property
     def label(self) -> str:
@@ -1537,6 +1552,42 @@ def serving_processes(
                 started_at=info.started_at,
                 ports=tuple(sorted({port for inode, port in ports.items() if inode in inodes})),
                 reason=found,
+                command=_relaunch_command(info.argv, secrets),
             )
         )
     return ServiceScan(tuple(found_processes), complete, reason)
+
+
+_SECRET_OPTION_MARKERS = ("pass", "secret", "token", "key", "dsn", "url", "auth", "cred")
+
+
+def _relaunch_command(argv: Sequence[str], secrets: Sequence[str]) -> str:
+    """The command line as one shell-quotable string, or "" when it must not travel.
+
+    Refused whenever a token carries a URL with credentials or follows an option whose
+    name suggests a secret (`--requirepass hunter2`, `--dsn=...`): the model's prompt
+    and the trace must not become the place a service password is written down. The
+    agent's own endpoint credential is redacted as everywhere else.
+    """
+    if not argv or len(argv) > limits.SERVICE_SCAN_MAX_ARGV_SCANNED:
+        return ""
+    previous = ""
+    for token in argv:
+        lowered = token.lower()
+        if "://" in token or "@" in token:
+            return ""
+        if previous.startswith("-") and any(marker in previous.lower() for marker in _SECRET_OPTION_MARKERS):
+            return ""
+        if token.startswith("-") and "=" in token and any(
+            marker in lowered.split("=", 1)[0] for marker in _SECRET_OPTION_MARKERS
+        ):
+            return ""
+        if "\n" in token or "\x00" in token:
+            return ""
+        previous = token
+    quoted = " ".join(shlex.quote(token) for token in argv)
+    if len(quoted) > limits.SERVICE_SCAN_TOKEN_CHARS * 8 or redact(quoted, secrets) != quoted:
+        # A cut or redacted command line is not a command: offering it as "ready" would
+        # start something else, or nothing, in place of the service.
+        return ""
+    return quoted

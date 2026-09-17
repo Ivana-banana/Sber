@@ -156,6 +156,7 @@ def test_the_image_workdir_still_wins_over_the_task_text(tmp_path, monkeypatch) 
     # every public task actually uses.
     image_workdir = tmp_path / "app"
     image_workdir.mkdir()
+    (image_workdir / "main.py").write_text("app = None\n", encoding="utf-8")
     named = tmp_path / "var" / "log"
     named.mkdir(parents=True)
     agent_dir = tmp_path / "agent"
@@ -641,3 +642,39 @@ def test_the_status_line_names_the_controller_that_ran(tmp_path: Path, capsys) -
     main(["run.sh", "do a thing"], {}, tmp_path)
 
     assert "controller=loop" in capsys.readouterr().out
+
+
+def test_a_base_image_workdir_with_only_hidden_entries_yields_to_the_task_text(
+    tmp_path, monkeypatch
+) -> None:
+    # `secureintelligent/acp` ships `/app` holding nothing but `.venv`, so it exists in
+    # every image built from it. A task living elsewhere then got `/app` as workspace:
+    # the brief described the wrong tree, and code-fix refused every finish with "has
+    # not changed a production source" after a correct edit outside it.
+    image_workdir = tmp_path / "app"
+    (image_workdir / ".venv").mkdir(parents=True)
+    task = tmp_path / "srv" / "portal"
+    task.mkdir(parents=True)
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.setattr(limits, "IMAGE_WORKDIR", str(image_workdir))
+
+    workspace, why = resolve_workspace(
+        {}, cwd=agent_dir, agent_dir=agent_dir,
+        instruction=f"Repair the lookup in {task}/session_store.py.",
+    )
+
+    assert workspace == task
+    assert "named by the task text" in why
+
+
+def test_a_base_image_workdir_stays_when_the_task_names_nothing_else(tmp_path, monkeypatch) -> None:
+    image_workdir = tmp_path / "app"
+    (image_workdir / ".venv").mkdir(parents=True)
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.setattr(limits, "IMAGE_WORKDIR", str(image_workdir))
+
+    workspace, _ = resolve_workspace({}, cwd=agent_dir, agent_dir=agent_dir, instruction="Find the flag.")
+
+    assert workspace == image_workdir

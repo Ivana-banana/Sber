@@ -1,0 +1,47 @@
+{
+ "Run `pytest tests/`": [
+  {
+   "tool": "run_shell",
+   "command": "sleep 25 && ps aux | grep -i uvicorn | head -5"
+  },
+  {
+   "tool": "read_range",
+   "path": "/app/routers/auth.py",
+   "start_line": 1
+  },
+  {
+   "tool": "replace_text",
+   "path": "/app/routers/auth.py",
+   "old": "        query = (\n            f\"SELECT id FROM users \"\n            f\"WHERE username = '{req.username}' AND password = '{req.password}'\"\n        )\n        row = await conn.fetchrow(query)",
+   "new": "        row = await conn.fetchrow(\n            \"SELECT id FROM users WHERE username = $1 AND password = $2\",\n            req.username,\n            req.password,\n        )"
+  },
+  {
+   "tool": "finish",
+   "path": "/app/routers/auth.py",
+   "verify": "cd /app && python3 -m pytest -q tests/ 2>&1 | tail -5",
+   "summary": "parametrized"
+  },
+  {
+   "tool": "run_shell",
+   "command": "kill $KILL"
+  },
+  {
+   "tool": "run_shell",
+   "command": "$READY"
+  },
+  {
+   "tool": "run_shell",
+   "command": "sleep 3 && curl -s http://127.0.0.1:8000/healthz"
+  },
+  {
+   "tool": "run_shell",
+   "command": "cd /app && python3 -m pytest -q tests/ 2>&1 | tail -5"
+  },
+  {
+   "tool": "finish",
+   "path": "/app/routers/auth.py",
+   "verify": "cd /app && python3 -m pytest -q tests/",
+   "summary": "parametrized"
+  }
+ ]
+}

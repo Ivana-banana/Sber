@@ -125,6 +125,51 @@ def test_missing_source_file_is_an_error_not_an_empty_archive(tmp_path: Path) ->
         build(empty, tmp_path / "out.zip")
 
 
+@pytest.fixture
+def minimal_source_tree(tmp_path: Path) -> Path:
+    source = tmp_path / "src"
+    (source / "agent").mkdir(parents=True)
+    (source / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (source / "THIRD_PARTY_NOTICES.md").write_text("Notices\n", encoding="utf-8")
+    (source / "agent" / "__init__.py").write_text("", encoding="utf-8")
+    (source / "agent" / "main.py").write_text("print('ready')\n", encoding="utf-8")
+    return source
+
+
+@pytest.mark.parametrize("name", [".env", ".env.production", "private.key", "debug.json", "cache.bin", ".hidden/secret.py", "venv/lib/module.py"])
+def test_builder_excludes_nonruntime_files(minimal_source_tree: Path, tmp_path: Path, name: str) -> None:
+    unwanted = minimal_source_tree / "agent" / name
+    unwanted.parent.mkdir(parents=True, exist_ok=True)
+    unwanted.write_text("synthetic-private-marker", encoding="utf-8")
+    archive = tmp_path / "submission.zip"
+
+    build(minimal_source_tree, archive)
+
+    with zipfile.ZipFile(archive) as packed:
+        assert "agent/main.py" in packed.namelist()
+        assert f"agent/{name}" not in packed.namelist()
+        assert all(b"synthetic-private-marker" not in packed.read(member) for member in packed.namelist())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="symlink setup needs POSIX")
+@pytest.mark.parametrize("name", ["run.sh", "THIRD_PARTY_NOTICES.md", "agent", "agent/main.py", "agent/plugin"])
+def test_builder_refuses_source_symlinks(minimal_source_tree: Path, tmp_path: Path, name: str) -> None:
+    link = minimal_source_tree / name
+    external = tmp_path / "external"
+    if link.exists():
+        link.rename(external)
+    else:
+        external.mkdir()
+        (external / "secret.py").write_text("synthetic-private-marker", encoding="utf-8")
+    link.symlink_to(external, target_is_directory=external.is_dir())
+    archive = tmp_path / "submission.zip"
+
+    with pytest.raises(ValueError, match="symlink"):
+        build(minimal_source_tree, archive)
+
+    assert not archive.exists()
+
+
 # --- the checker ------------------------------------------------------------
 
 

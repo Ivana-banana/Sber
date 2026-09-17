@@ -215,6 +215,147 @@ def test_a_short_history_produces_no_notice() -> None:
     assert "omitted" not in messages[1]["content"]
 
 
+# --- the focused request, after a reply that reasoned instead of acting -------
+
+
+def test_an_ordinary_request_is_byte_identical_to_the_one_before_focus_existed() -> None:
+    """The fast path: an endpoint that never truncates must not pay for this feature.
+
+    Spelled out against the literal message list rather than against `build_messages`
+    itself, so the assertion still means something if the default ever changes.
+    """
+    observations = ["x" * 3000 for _ in range(6)]
+    base = prompt.history_base(observations, 0)
+
+    messages = prompt.build_messages("system text", observations, base)
+
+    assert messages == [
+        {"role": "system", "content": "system text"},
+        {"role": "user", "content": prompt.OMISSION_NOTICE},
+        *({"role": "user", "content": text} for text in observations[base:]),
+    ]
+    assert messages == prompt.build_messages("system text", observations, base, focus=False)
+    assert all(message["content"] != prompt.FOCUS_NOTICE for message in messages)
+
+
+def _focused(system: str, observations: list[str], base: int = 0, evidence: int | None = None):
+    """A focused request the way `agent.loop` builds one: narrow, then close."""
+    return prompt.build_messages(
+        system, observations, prompt.focus_base(observations, base, evidence), focus=True
+    )
+
+
+def _relayed(messages: list[dict[str, str]]) -> list[str]:
+    return [
+        m["content"]
+        for m in messages[1:]
+        if m["content"] not in {prompt.OMISSION_NOTICE, prompt.FOCUS_NOTICE}
+    ]
+
+
+def test_a_focused_request_keeps_the_system_prompt_and_relays_only_the_tail() -> None:
+    observations = [f"observation {index}" for index in range(8)]
+
+    messages = _focused("system text", observations, evidence=6)
+
+    assert messages[0] == {"role": "system", "content": "system text"}
+    assert _relayed(messages) == observations[-limits.FOCUS_RELAY_KEEP :]
+    assert messages[-1]["content"] == prompt.FOCUS_NOTICE
+
+
+def test_the_narrowing_never_drops_the_newest_observed_fact() -> None:
+    """The finding this walk-back exists for.
+
+    A runaway appends its own error line and a checkpoint step prepends a hint, so the
+    newest two entries can both be the loop talking to itself. Relaying only those two
+    would ask a model that must not reason to write its best answer with nothing observed
+    left in the request -- which is inventing, not reporting.
+    """
+    observations = ["read_range -> ok\n" + "x" * 500, "endpoint error: ...", "[бюджет] ..."]
+
+    messages = _focused("system text", observations, evidence=0)
+
+    assert _relayed(messages) == observations, "everything from the evidence onwards"
+    assert messages[-1]["content"] == prompt.FOCUS_NOTICE
+
+
+def test_the_walk_back_stops_at_the_newest_evidence_and_not_earlier() -> None:
+    # It protects the last observed fact, not the whole history: older tool results are
+    # exactly what a focused request is supposed to stop paying for.
+    observations = [f"result {index}" for index in range(6)] + ["endpoint error: ..."]
+
+    assert prompt.focus_base(observations, 0, 5) == 5
+    assert _relayed(_focused("s", observations, evidence=5)) == ["result 5", "endpoint error: ..."]
+
+
+def test_a_run_that_has_observed_nothing_gets_the_plain_window() -> None:
+    # No evidence to protect. The loop's own checkpoint hint says "go and look" rather
+    # than "write your best" on a run in that state, so nothing is lost by narrowing.
+    observations = ["[бюджет] ...", "endpoint error: ...", "[бюджет] ..."]
+
+    assert prompt.focus_base(observations, 0, None) == len(observations) - limits.FOCUS_RELAY_KEEP
+
+
+def test_the_narrowing_never_walks_forward_past_the_window_either() -> None:
+    # Evidence newer than the window cannot make the request *wider* than the window.
+    observations = [f"observation {index}" for index in range(8)]
+
+    assert prompt.focus_base(observations, 0, 7) == 8 - limits.FOCUS_RELAY_KEEP
+
+
+def test_the_focus_line_closes_the_request_and_is_not_an_observation() -> None:
+    """It is asked for once, not remembered.
+
+    An entry in `observations` would travel on every later request, be fingerprinted by
+    the repeat detectors and be re-read by the server for the rest of the task. A suffix
+    costs one message once.
+    """
+    observations = ["first", "second", "third"]
+
+    messages = _focused("system text", list(observations), evidence=2)
+
+    assert messages[-1] == {"role": "user", "content": prompt.FOCUS_NOTICE}
+    assert observations == ["first", "second", "third"], "the history was not mutated"
+
+
+def test_a_focused_request_says_that_it_dropped_history() -> None:
+    # Silently trimmed evidence reads as complete evidence. The same notice as a re-lay,
+    # for the same reason.
+    observations = [f"observation {index}" for index in range(8)]
+
+    messages = _focused("system text", observations, evidence=7)
+
+    assert messages[1]["content"] == prompt.OMISSION_NOTICE
+
+
+def test_a_focused_request_never_reaches_behind_the_anchored_base() -> None:
+    """An observation a re-lay has already dropped must not come back because of focus."""
+    observations = [f"observation {index}" for index in range(8)]
+    base = 7
+
+    messages = _focused("system text", observations, base, evidence=1)
+
+    assert _relayed(messages) == ["observation 7"], "the anchor wins over the walk-back"
+
+
+def test_a_focus_on_a_history_shorter_than_the_window_is_not_an_error() -> None:
+    messages = _focused("system text", ["only one"], evidence=0)
+
+    assert [m["content"] for m in messages] == ["system text", "only one", prompt.FOCUS_NOTICE]
+    assert _focused("system text", []) == [
+        {"role": "system", "content": "system text"},
+        {"role": "user", "content": prompt.FOCUS_NOTICE},
+    ]
+
+
+def test_the_focus_line_asks_for_an_action_and_not_for_reasoning() -> None:
+    # The whole point of the request: the previous reply spent 8192 tokens reasoning and
+    # emitted nothing, so the line has to name both halves -- do not reason, call a tool.
+    assert "[фокус]" in prompt.FOCUS_NOTICE
+    assert "Не рассуждай" in prompt.FOCUS_NOTICE
+    assert "finish" in prompt.FOCUS_NOTICE
+
+
 # --- the inlined files in the ENVIRONMENT block ------------------------------
 
 

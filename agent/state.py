@@ -314,8 +314,8 @@ class Budget:
         return self.input_tokens + self.output_tokens
 
 
-EDIT_TOOLS = frozenset({"write_file", "replace_text"})
-"""The two tools whose success is a change to the deliverable; see `shows_progress`."""
+EDIT_TOOLS = frozenset({"write_file", "write_json", "replace_text"})
+"""The tools whose success is a change to the deliverable; see `shows_progress`."""
 
 
 @dataclass
@@ -363,6 +363,14 @@ class AgentState:
     """Resolved paths this run has actually read (read_range, or a read-only shell that
     opened the file). A code-fix write_file to an unread existing source is refused, so
     the run cannot overwrite a module it never opened -- the 14B fix-sqli failure."""
+
+    relaunch_commands: set[str] = field(default_factory=set, repr=False)
+    python_probes_disabled: bool = field(default=False, repr=False)
+    """Set once a code-fix Python probe changed a protected file; no more probes then."""
+    """Exact shell lines this run itself offered as a service restart (`agent.loop`,
+    stale-service hint). The code-fix shell policy refuses compound commands and
+    `nohup`, which is every way to background a service, so the one command the hint
+    hands the model is let through verbatim and nothing resembling it is."""
 
     audit: list[Event] = field(default_factory=list)
     """Append-only trace. Nothing removes entries; truncation happens at render time."""
@@ -428,7 +436,7 @@ class AgentState:
         progress a step extension may feed.
 
         Read from the detector window alone, so nothing new is bookkept for it. Only a
-        successful `write_file` or `replace_text` counts. Not a novel read: thirty
+        successful `write_file`, `write_json` or `replace_text` counts. Not a novel read: thirty
         `read_range` calls over different windows of one file are each novel and are
         exactly the loop this exists to refuse. Not a state-changing shell either: a
         `pytest` re-run advances the epoch and prints a fresh timing every time, and a

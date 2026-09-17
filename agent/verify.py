@@ -24,6 +24,9 @@ Four outcomes, in the order they are checked:
 
 from __future__ import annotations
 
+import re
+import shlex
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -105,6 +108,28 @@ def _resolve_deliverable(
     if not permits(target, root, permitted):
         return None
     return target
+
+
+_PIPE = re.compile(r"(?<!\|)\|(?![|&])")
+
+
+def _every_stage_decides(command: str) -> str:
+    """The check with every pipeline stage's exit code counted, not only the last one's.
+
+    `pytest -q 2>&1 | tail -5` is how a model reads the end of a test run, and under
+    `sh` it exits with `tail`'s 0 whatever pytest said. A stage killed by SIGPIPE (141)
+    because a later `head` or `grep -q` stopped reading is not a failure. `/bin/sh` is
+    dash in the target image and has neither `pipefail` nor `PIPESTATUS`, so this needs
+    bash; without it the command runs as given.
+    """
+    if not _PIPE.search(command) or shutil.which("bash") is None:
+        return command
+    script = (
+        f"{command}\n"
+        'status=("${PIPESTATUS[@]}")\n'
+        'for code in "${status[@]}"; do case "$code" in 0|141) ;; *) exit "$code" ;; esac; done'
+    )
+    return f"bash -c {shlex.quote(script)}"
 
 
 def verify(state: AgentState, *, deliverable: Path, command: str) -> VerifyResult:
@@ -215,7 +240,7 @@ def verify(state: AgentState, *, deliverable: Path, command: str) -> VerifyResul
         )
 
     result = run_shell(
-        stripped,
+        _every_stage_decides(stripped),
         cwd=state.workspace,
         timeout_s=state.budget.tool_timeout_s(),
         secrets=state.secrets,

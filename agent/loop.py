@@ -23,12 +23,13 @@ the deliverable.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 import json
+import dataclasses
 import os
 import re
 import shlex
@@ -108,6 +109,16 @@ def run(
     # Consecutive calls that failed in a way that says the endpoint cannot be used. A
     # call that merely timed out is counted separately -- see `_llm_failure_kind`.
     llm_failures = 0
+    # Whether the NEXT request is a focused one: a narrowed history plus one line asking
+    # for an action and no reasoning (`prompt.FOCUS_NOTICE`). Set only by a reply that
+    # reasoned past the raised output ceiling without emitting anything, and only when
+    # the call that did it was not itself focused.
+    focus_next = False
+    # Index in `observations` of the newest entry that is a tool result rather than
+    # something this loop said to itself. Only the narrowing of a focused request reads
+    # it, and it reads it so that the narrowing cannot drop the last observed fact: the
+    # difference between asking the model to act on what it saw and asking it to invent.
+    last_evidence: int | None = None
     # Successful tool results carrying content. Zero means the run has observed nothing,
     # so anything it writes would be invented rather than reported.
     grounded = 0
@@ -118,6 +129,7 @@ def run(
     # the loop and is read by the reporter.
     stale_service_checks = 0
     stale_service_refusals = 0
+    vacuous_verify_refusals = 0
     last_verdict: VerifyResult | None = None
     stop_reason = ""
     summary = ""
@@ -186,9 +198,24 @@ def run(
         # fitting its budget, so every other request extends the previous one and the
         # server pays for the new tail alone.
         history_base = prompt.history_base(observations, history_base)
+        # Focus is consumed here, before the reply is read: whatever comes back, the next
+        # request is an ordinary one unless a fresh runaway asks for another. That is what
+        # makes a focus loop impossible rather than merely unlikely.
+        focused, focus_next = focus_next, False
+        base = history_base
+        if focused:
+            # Narrowed for this call only -- `history_base` keeps its anchor, so the next
+            # ordinary request is the one that would have been sent anyway.
+            base = prompt.focus_base(observations, history_base, last_evidence)
+            state.record("budget", "focus", "focused retry after a truncated reasoning reply")
         reply = llm.complete_structured(
-            prompt.build_messages(system, observations, history_base),
+            prompt.build_messages(system, observations, base, focus=focused),
             schema=prompt.ACTION_SCHEMA,
+            # The same ceiling on a focused call as on any other. The raised output
+            # budget is `agent.llm`'s and is sticky, and the model needs the room: what
+            # ran away was the prompt, not the space to answer in. Asking for less would
+            # truncate the answer we are trying to get; asking for more buys a longer
+            # runaway.
             max_output_tokens=limits.LLM_MAX_OUTPUT_TOKENS,
             timeout_s=max(1.0, state.budget.llm_timeout_s()),
         )
@@ -214,6 +241,27 @@ def run(
                     stop_reason = "llm-unusable"
                     summary = f"endpoint unusable after {llm_failures} failed calls: {reply.reason}"
                     break
+                if reply.truncated_reasoning and not focused:
+                    # The model reasoned to the ceiling and emitted nothing. Repeating the
+                    # request buys the same non-answer -- measured four times in a row on
+                    # the 35B stand -- so the next one is narrowed instead.
+                    #
+                    # Counted as the hard failure it is, and only once: the focused call
+                    # replaces the second of the three logical calls the counter allows,
+                    # it does not add a fourth. Worst case is therefore exactly today's
+                    # worst case -- runaway, focused runaway, one more failure,
+                    # `llm-unusable` -- which on that stand is 4 endpoint calls of ~70 s
+                    # once the endpoint is already known to reason (the first logical call
+                    # pays two, the raised retry and the thinking-off retry; the rest one
+                    # each), or 5 from cold. ~280-350 s, unchanged either way. What the
+                    # focus buys for those seconds is a request the model has not already
+                    # failed to answer; the second of the three is also the cheapest of
+                    # them, since its history is `limits.FOCUS_RELAY_KEEP` long.
+                    #
+                    # Decided here, audited where the request is actually built: the clock
+                    # or the step cap can end the run in between, and a trace must not
+                    # claim a retry nobody sent.
+                    focus_next = True
             else:
                 # A call that ran out of wall clock with nothing delivered says the
                 # endpoint is slow, not broken, and the two must not end the run the same
@@ -252,7 +300,12 @@ def run(
             assert deliverable is not None
             command = str(act.get("verify", "") or "")
             refusal = _cannot_fail(command, deliverable)
-            if refusal and result_contract.exact_file_requirement(state.instruction) is None:
+            if (
+                refusal
+                and result_contract.exact_file_requirement(state.instruction) is None
+                and vacuous_verify_refusals < limits.VACUOUS_VERIFY_MAX_REFUSALS
+            ):
+                vacuous_verify_refusals += 1
                 state.record("verify", "refused", refusal)
                 observations.append(f"[step {step}] {refusal}")
                 continue
@@ -423,6 +476,11 @@ def run(
         observations.append(
             f"[step {step}] {tool} -> {'ok' if result.ok else 'FAIL'}\n{body}{echo}".rstrip()
         )
+        # Evidence, whether or not the action succeeded: a failed tool result is what the
+        # model has to react to. Anything a focused request adds after this index -- the
+        # batch's own entry, a refusal, a red verifier, a checkpoint hint -- travels with
+        # it, because all of those are one-liners and this is the observation that costs.
+        last_evidence = len(observations) - 1
 
         if result.ok and tool == prompt.WRITE_FILE:
             exact = _verify_exact_write(state, verify, args, playbook=playbook)
@@ -445,7 +503,12 @@ def run(
             # The rest of the reply. Read-only, bounded, and inside the step the
             # primary action already paid for -- see `_batch_reads`.
             grounded += _batch_reads(
-                state, reply.extra_actions, observations, step=step, playbook=playbook
+                state,
+                reply.extra_actions,
+                observations,
+                step=step,
+                playbook=playbook,
+                visible_from=base,
             )
 
         signal = detectors.stuck(state)
@@ -705,8 +768,8 @@ REQUIRED: dict[str, str] = {
 """The one argument each tool cannot be run without.
 
 Absent from the list: `list_dir` and `search`'s path, which default to the workspace,
-and `write_file`'s content, because writing an empty file is a legitimate thing to ask
-for even though no verifier accepts one.
+and `write_file`'s content, because `content: ""` is a legitimate request for an empty
+file; a write_file with no content key at all is refused separately, see below.
 """
 
 
@@ -742,6 +805,18 @@ def _arguments(act: dict[str, Any], state: AgentState) -> tuple[dict[str, object
         return None, f"{tool} needs `{needed}`, and it was missing or empty"
 
     path = _in_workspace(str(fields.get("path", "") or "").strip(), state)
+
+    if tool == prompt.WRITE_FILE and "content" not in fields:
+        # `content: ""` is a request for an empty file and is honoured. A write_file
+        # with no content key at all is a reply that lost its payload -- seen after a
+        # truncated or schema-constrained turn (REVIEW-public-q36: the report file was
+        # written empty and the run scored 0) -- and an empty deliverable is never what
+        # the model meant.
+        return None, (
+            "write_file needs `content` (the exact text to write); the action had no "
+            "content key, so nothing was written. Send it again with `content`, or "
+            'with `content: ""` if an empty file is really what you want.'
+        )
 
     if tool == prompt.RUN_SHELL:
         return {"command": str(fields["command"])}, ""
@@ -2137,6 +2212,35 @@ def _code_fix_shell_word_is_workspace_root(word: str, workspace: Path) -> bool:
     return target == workspace
 
 
+_CURL_WRITING_LONG = (
+    "--output", "--remote-name", "--remote-header-name", "--output-dir", "--dump-header",
+    "--cookie-jar", "--config", "--trace", "--libcurl", "--stderr", "--etag-save",
+    "--hsts", "--alt-svc", "--create-dirs", "--upload-file",
+)
+_CURL_WRITING_SHORT = frozenset("oODcKTJ")
+
+
+def _curl_can_write(arguments: Sequence[str]) -> bool:
+    """Whether this curl invocation can put bytes into a local file.
+
+    A plain HTTP probe of the service writes only to stdout, and after a restart it is
+    the direct way to see that the port answers. Anything that names an output, a
+    header/cookie dump, a config file, an upload or a `file:` URL is still refused, as
+    is a `%output{}` write-out; so is an option cluster we cannot read letter by letter.
+    """
+    for word in arguments:
+        lowered = word.lower()
+        if "file:" in lowered or "%output{" in lowered:
+            return True
+        if word.startswith("--"):
+            if word.split("=", 1)[0].startswith(_CURL_WRITING_LONG):
+                return True
+        elif word.startswith("-") and len(word) > 1:
+            if _CURL_WRITING_SHORT.intersection(word[1:]):
+                return True
+    return False
+
+
 def _code_fix_shell_has_broad_workspace_mutation(command: str, state: AgentState) -> bool:
     try:
         raw_words = shlex.split(command)
@@ -2149,6 +2253,8 @@ def _code_fix_shell_has_broad_workspace_mutation(command: str, state: AgentState
     words = _code_fix_shell_unwrap_simple_wrappers(raw_words)
     executable = PurePosixPath(words[0]).name if words else ""
     if executable not in _BROAD_MUTATORS:
+        return False
+    if executable == "curl" and raw_words[0] == "curl" and not _curl_can_write(words[1:]):
         return False
     if executable in {
         "cmake",
@@ -2386,6 +2492,14 @@ def _code_fix_shell_has_configured_git_execution(command: str, state: AgentState
 
 def _code_fix_shell_refusal(command: str, state: AgentState) -> str:
     """Reject an explicit shell mutation aimed at the evaluator, not source edits."""
+    if _background_server(command):
+        return ""
+    parts = _code_fix_shell_parts(command, state)
+    if parts is not None and parts != [command]:
+        refusals = [_code_fix_shell_refusal(part, state) for part in parts]
+        return next((refusal for refusal in refusals if refusal), "")
+    if _curl_probe(command) or _python_probe(command, state):
+        return ""
     try:
         workspace_text = str(state.workspace.resolve()).lower()
     except OSError:
@@ -2433,6 +2547,478 @@ def _code_fix_shell_refusal(command: str, state: AgentState) -> str:
     )
 
 
+_FD_DUPLICATION = re.compile(r"(?:(?<=\s)|^)\d*>&\d+(?=\s|$)")
+# What may read a pipe: filters that treat stdin as data. A shell, python or anything
+# else on the right of `|` would run the stream as a program the check never saw.
+_PIPE_FILTERS = frozenset({
+    "awk", "base64", "cat", "column", "cut", "egrep", "fgrep", "grep", "head", "jq", "less",
+    "md5sum", "more", "nl", "od", "rev", "sed", "sha256sum", "sort", "strings", "tail", "tee",
+    "tr", "uniq", "wc", "xxd",
+})
+
+
+def _code_fix_shell_parts(command: str, state: AgentState) -> list[str] | None:
+    """The simple commands of `a | b`, `a && b`, `a || b` or `a; b`, each checked alone.
+
+    A composition writes nowhere its parts do not, so a pipe into `head` or a leading
+    `cd <workspace> &&` is no reason to refuse. None -- keep the whole-command check --
+    for anything a part-by-part check cannot see through: substitution, a subshell or
+    group, stdin redirection, a newline, a lone `&`, or a `cd` anywhere but first and
+    into the workspace itself (relative paths in later parts would resolve elsewhere).
+    `2>&1`-style fd duplication writes no file and is dropped from each part. A part
+    reading a pipe must be a plain filter (`_PIPE_FILTERS`).
+    """
+    parts: list[str] = []
+    piped: list[bool] = [False]
+    start = index = 0
+    quote = ""
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            quote = "" if char == "'" else quote
+        elif quote == '"':
+            if char == "\\":
+                index += 1
+            elif char == '"':
+                quote = ""
+            elif char == "`" or command.startswith("$(", index):
+                return None
+        elif char == "\\":
+            index += 1
+        elif char in "'\"":
+            quote = char
+        elif char in "`\n<(){}" or command.startswith("$(", index):
+            return None
+        elif char in ";|&" and not command.startswith((">&", "&>"), index - (char == "&")):
+            width = 2 if command.startswith(("&&", "||"), index) else 1
+            if char == "&" and width == 1:
+                return None
+            parts.append(command[start:index])
+            piped.append(char == "|" and width == 1)
+            index += width
+            start = index
+            continue
+        index += 1
+    if quote:
+        return None
+    parts = [_FD_DUPLICATION.sub("", part).strip() for part in [*parts, command[start:]]]
+    if not all(parts):
+        return None
+    try:
+        words = [shlex.split(part) for part in parts]
+    except ValueError:
+        return None
+    if any(part_words[0] == "cd" for part_words in words[1:]):
+        return None
+    if any(
+        reads_pipe and PurePosixPath(part_words[0]).name not in _PIPE_FILTERS
+        for reads_pipe, part_words in zip(piped, words)
+    ):
+        return None
+    if words[0][0] == "cd":
+        try:
+            into_workspace = len(words[0]) == 2 and (
+                (state.workspace / words[0][1]).resolve() == state.workspace.resolve()
+            )
+        except OSError:
+            into_workspace = False
+        if not into_workspace or len(parts) == 1:
+            return None
+        parts = parts[1:]
+    return parts
+
+
+def _curl_probe(command: str) -> bool:
+    """A lone curl that writes only to stdout: its URL is not a path, whatever it spells."""
+    if any(_code_fix_shell_operator_flags(command)):
+        return False
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    return bool(words) and words[0] == "curl" and not _curl_can_write(words[1:])
+
+
+_PYTHON_SPAWN = re.compile(
+    r"""(?x)
+    \bsubprocess\b | \bctypes\b | \bpty\b | \bbuiltins\b
+  | \bos\.(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*|kill|killpg)\b
+  | \bmultiprocessing\b
+  | \bshutil\.rmtree\b
+  | \b(?:exec|eval|compile|__import__)\s*\(
+    """
+)
+"""What a Python probe may not spell up front: spawning another program, hiding a call
+behind `exec`/`eval`, or a recursive delete. Everything else -- reads, `os.path`,
+`str.replace`, `getattr`, sqlite, zipfile -- is decided by effect, not by text: the
+probe runs under `_guard_protected_paths`, which snapshots the evaluator, `.git` and
+`/logs` before the command and restores the evaluator after it if anything changed. A
+text denylist cannot be made tight (a variable file mode, `chr()`-built names, a
+side-effecting import all pass any regex), so it is kept to the cases the snapshot
+cannot undo.
+"""
+
+_PROTECTED_SNAPSHOT_MAX_FILES = 400
+_PROTECTED_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024
+_EXTRA_PROTECTED_ROOTS = (Path("/logs"),)
+"""Watched, never restored: `/logs` belongs to the runner and the verifier, which may be
+writing there during the probe. A change under it is reported as a violation; putting
+it back would be a second intervention into someone else's directory."""
+
+
+@dataclass(frozen=True)
+class _Guarded:
+    """One protected path as it was before the probe. Symlinks keep their target, not
+    the file behind it, so a probe cannot smuggle one into `tests/`."""
+
+    mode: int
+    content: bytes | None = None
+    link: str | None = None
+
+
+def _is_raw_evaluator_path(path: Path, root: Path) -> bool:
+    """`_is_evaluator_path` on the spelling, not the target: a symlink `tests/test_x.py`
+    resolves to whatever it points at, and the guard must still see it as a test."""
+    try:
+        parts = tuple(part.lower() for part in path.relative_to(root).parts)
+    except ValueError:
+        return False
+    filename = parts[-1] if parts else ""
+    return any(part in _EVALUATOR_DIRS for part in parts) or (
+        filename in _EVALUATOR_FILES or filename.startswith("test_") or filename.endswith("_test.py")
+    )
+
+
+def _protected_files(state: AgentState) -> list[Path] | None:
+    """Every path a probe must leave alone; None when there are too many to snapshot.
+
+    Known gap, on purpose: `__pycache__` and the other `_INODE_SCAN_SKIP` directories
+    are not walked, so compiled bytecode of the tests is outside the guard.
+    """
+    found: list[Path] = []
+    total = 0
+    extra_roots = []
+    for root in _EXTRA_PROTECTED_ROOTS:
+        try:
+            if root.is_dir():
+                extra_roots.append(root.resolve())
+        except OSError:
+            continue
+    roots = [state.workspace, *extra_roots]
+    for root in roots:
+        try:
+            root = root.resolve()
+        except OSError:
+            continue
+        for current, dirs, files in os.walk(root):
+            here = Path(current)
+            dirs[:] = [d for d in dirs if d not in _INODE_SCAN_SKIP]
+            for name in files:
+                path = here / name
+                if root in extra_roots or (
+                    _is_evaluator_path(path, state)
+                    or _is_raw_evaluator_path(path, root)
+                    or _is_repository_control_path(path, state)
+                ):
+                    try:
+                        if not path.is_symlink():
+                            if not path.is_file():
+                                continue
+                            total += path.stat().st_size
+                    except OSError:
+                        continue
+                    found.append(path)
+                    if len(found) > _PROTECTED_SNAPSHOT_MAX_FILES or total > _PROTECTED_SNAPSHOT_MAX_BYTES:
+                        return None
+    return found
+
+
+def _protected_snapshot(state: AgentState) -> dict[Path, _Guarded] | None:
+    files = _protected_files(state)
+    if files is None:
+        return None
+    snapshot: dict[Path, _Guarded] = {}
+    for path in files:
+        try:
+            if path.is_symlink():
+                snapshot[path] = _Guarded(mode=path.lstat().st_mode, link=os.readlink(path))
+            else:
+                snapshot[path] = _Guarded(mode=path.stat().st_mode, content=path.read_bytes())
+        except OSError:
+            return None
+    return snapshot
+
+
+def _guarded_now(path: Path) -> _Guarded | None:
+    try:
+        if path.is_symlink():
+            return _Guarded(mode=path.lstat().st_mode, link=os.readlink(path))
+        if not path.exists():
+            return None
+        return _Guarded(mode=path.stat().st_mode, content=path.read_bytes())
+    except OSError:
+        return _Guarded(mode=-1)
+
+
+def _restorable(path: Path, state: AgentState) -> bool:
+    """`/logs` is only watched; the evaluator and `.git` inside the workspace are put back."""
+    try:
+        path.resolve().relative_to(state.workspace.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _restore_protected(snapshot: dict[Path, _Guarded], state: AgentState) -> list[str]:
+    """Put the snapshot back; return what had changed (empty when nothing did).
+
+    An entry that could not be put back says so in the returned list: "restored" and
+    "still changed" must not look the same to the model or in the trace.
+    """
+    changed: list[str] = []
+    for path, before in snapshot.items():
+        if _guarded_now(path) == before:
+            continue
+        if not _restorable(path, state):
+            changed.append(f"{path} (watched, not restored)")
+            continue
+        try:
+            if path.is_symlink() or path.exists():
+                path.unlink()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if before.link is not None:
+                os.symlink(before.link, path)
+            else:
+                path.write_bytes(before.content or b"")
+                os.chmod(path, before.mode & 0o7777)
+            changed.append(str(path))
+        except OSError as error:
+            changed.append(f"{path} (could not restore: {type(error).__name__})")
+    after = _protected_files(state) or []
+    for path in after:
+        if path in snapshot:
+            continue
+        if not _restorable(path, state) or _is_repository_control_path(path, state):
+            changed.append(f"{path} (new, watched, not removed)")
+            continue
+        try:
+            path.unlink()
+            changed.append(str(path))
+        except OSError as error:
+            changed.append(f"{path} (new, could not remove: {type(error).__name__})")
+    return changed
+
+
+_PYTHON_PROBE_MAX_BYTES = 65536
+_SHELL_OPERATOR_CHARS = re.compile(r"[;&|<>`$()]")
+
+_WORKSPACE_CD = re.compile(r"^\s*cd\s+(?P<dir>[^\s;&|<>$`(){}\\'\"]+)\s*&&\s*(?P<rest>.+)$", re.DOTALL)
+
+
+def _is_pipe_filter_part(part: str) -> bool:
+    """`head -5`, `2>&1 | tail -20`'s tail: a filter that only shapes stdout. A filter
+    that could write a file (`tee tests/x`) is refused earlier, by the part-wise policy."""
+    try:
+        words = _code_fix_shell_unwrap_simple_wrappers(shlex.split(part))
+    except ValueError:
+        return False
+    return bool(words) and PurePosixPath(words[0]).name in _PIPE_FILTERS
+
+
+def _strip_workspace_cd(command: str, state: AgentState) -> str:
+    """`cd <dir inside the workspace> && <rest>` -> `<rest>`, else the command unchanged.
+
+    The model prefixes most probes with `cd /app &&`; the directory changes nothing the
+    policy cares about when it lies inside the workspace, and a multi-line `-c` payload
+    defeats the generic part splitter, so the probe strips the prefix itself.
+    """
+    match = _WORKSPACE_CD.match(command)
+    if not match:
+        return command
+    spelled = match["dir"]
+    if spelled in {"-", "~"} or spelled.startswith(("~", "$")):
+        return command  # `$OLDPWD`, `$HOME`, `~user`: not a workspace path however it resolves
+    try:
+        root = state.workspace.resolve()
+        target = Path(spelled)
+        resolved = (target if target.is_absolute() else root / target).resolve()
+        resolved.relative_to(root)
+        if not resolved.is_dir():
+            return command
+    except (OSError, ValueError):
+        return command
+    return match["rest"]
+
+
+def _python_probe(command: str, state: AgentState) -> bool:
+    """A lone `python -c <code>` or `python <script inside the workspace>` that only reads.
+
+    The code-fix policy refused every Python one-liner and every local script outright,
+    so on a fix task without a test suite the model's own check -- import the patched
+    module, call it, assert -- was refused on every attempt (EXTRA-taxonomy: fix tasks
+    spent 6-12 refusals per episode). The policy's job is to keep the evaluator
+    immutable, not to forbid reading the program under repair. A snippet or script that
+    spawns nothing and names no evaluator path goes through like a curl probe does; what
+    it does to the evaluator is checked by effect afterwards (`_guard_protected_paths`)
+    and undone, and one violation ends the privilege for the run.
+    """
+    command = _strip_workspace_cd(command, state)
+    try:
+        words = _code_fix_shell_unwrap_simple_wrappers(shlex.split(command))
+    except ValueError:
+        return False
+    if len(words) < 2 or not _code_fix_is_python_executable(words[0], state.workspace):
+        return False
+    # Shell operators are judged word by word after quote-aware splitting: a `;`, `|`
+    # or `>` inside the quoted `-c` payload is Python, not a pipeline, while an unquoted
+    # one survives the split as its own word (or glued to a neighbour) and refuses.
+    payload_index = words.index("-c") + 1 if "-c" in words else -1
+    for index, word in enumerate(words):
+        if index != payload_index and _SHELL_OPERATOR_CHARS.search(word):
+            return False
+    options = [word for word in words[1:] if word.startswith("-")]
+    if any(option not in {"-c", "-B", "-u", "-I", "-S", "-E", "-s"} for option in options):
+        return False
+    operands = [word for word in words[1:] if not word.startswith("-")]
+    if len(operands) != 1:
+        return False
+    if "-c" in words:
+        if words[words.index("-c") + 1 :] != [operands[0]]:
+            return False
+        text = operands[0]
+    else:
+        script = Path(operands[0])
+        try:
+            root = state.workspace.resolve()
+            target = (script if script.is_absolute() else root / script).resolve()
+            target.relative_to(root)
+            if _is_evaluator_path(target, state) or not target.is_file():
+                return False
+            if target.stat().st_size > _PYTHON_PROBE_MAX_BYTES:
+                return False
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            return False
+    if state.python_probes_disabled or _PYTHON_SPAWN.search(text):
+        return False
+    for token in re.findall(r"[\w./:-]+", text):
+        if "://" in token:
+            continue  # a URL in a test value is not a path
+        if "/" in token or token.endswith(".py"):
+            try:
+                if _is_evaluator_path(Path(token), state) or _is_repository_control_path(Path(token), state):
+                    return False
+            except (OSError, ValueError):
+                return False
+    return True
+
+
+_SERVER_EXECUTABLES = frozenset({"uvicorn", "gunicorn", "hypercorn", "daphne", "waitress-serve"})
+_PYTHON = re.compile(r"python(3(\.\d+)?)?$")
+_BACKGROUND_SERVER = re.compile(
+    r"^nohup ([^;&|<>$`(){}\\\n'\"]+?) *> */tmp/[\w.-]+ +2>&1( +</dev/null)? *&$"
+)
+
+
+def _is_server(words: Sequence[str]) -> bool:
+    """Whether an argv starts a known long-running Python web server.
+
+    Deliberately short: these are the launchers whose command line says "serve until
+    killed" with no doubt, directly or through `python -m`. Anything else is not
+    guessed at.
+    """
+    if not words:
+        return False
+    name = PurePosixPath(words[0]).name
+    rest = list(words[1:])
+    if _PYTHON.match(name) and len(rest) >= 2 and rest[0] == "-m":
+        name, rest = rest[1], rest[2:]
+    if name in _SERVER_EXECUTABLES:
+        return True
+    return name == "flask" and bool(rest) and rest[0] == "run"
+
+
+def _foreground_server(command: str) -> bool:
+    """A single simple command that runs a server in the foreground.
+
+    It never returns: `run_shell` waits out its whole timeout (up to 120 s) and then
+    kills it, so the model pays two minutes for a service that is gone afterwards.
+    """
+    if _code_fix_shell_operator_flags(command)[0]:
+        return False
+    try:
+        return _is_server(shlex.split(command))
+    except ValueError:
+        return False
+
+
+def _background_server(command: str) -> bool:
+    """`nohup SERVER >/tmp/LOG 2>&1 [</dev/null] &` and nothing more.
+
+    The one compound shape code-fix lets through: a known server argv with no shell
+    syntax in it, its output in a file under /tmp, backgrounded alone. It cannot write
+    into the workspace, and without it a model told to restart a service has no command
+    that is both allowed and not killed by the tool timeout.
+    """
+    found = _BACKGROUND_SERVER.match(command.strip())
+    if not found:
+        return False
+    try:
+        return _is_server(shlex.split(found.group(1)))
+    except ValueError:
+        return False
+
+
+_LONE_AMPERSAND = re.compile(r"(?<![&>|<])&(?![&>])")
+_STDOUT_REDIRECT = re.compile(r"(?:^|[^0-9&])>(?!&)|&>|1>(?!&)")
+_QUOTED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+
+
+def _background_holds_pipe(command: str) -> bool:
+    """Whether a job this command puts in the background still writes to our pipe.
+
+    `run_shell` reads the command's output until every writer closes it, so `app &` or
+    `app & sleep 2; curl ...` holds the call for the whole tool timeout (up to 120 s),
+    and the timeout then reaps the session -- the service the model just started dies
+    with it. Measured in the target image (dash) and on bash alike. A job whose segment
+    sends stdout to a file (`>log 2>&1`) does not hold the pipe; `2>&1` alone does and is left alone. Quoted text
+    is blanked first, so `echo 'a & b'` is not a job.
+    """
+    segments = _LONE_AMPERSAND.split(_QUOTED.sub("''", command))
+    if len(segments) < 2:
+        return False
+    return any(not _STDOUT_REDIRECT.search(segment) for segment in segments[:-1])
+
+
+_READ_FOOTER = "\n[read_range source="
+
+
+def _number_read_lines(output: str, start_line: int) -> str:
+    """Prefix each line of a `read_range` body with its number: `6: RELAY_API_TOKEN = …`.
+
+    Only the code-audit playbook gets this. An audit report cites a location, and the
+    plain body left the model to count lines itself: on the extra set every
+    file:line it wrote was off by one (`client.py:7` and `:5` for line 6,
+    EXTRA-taxonomy). A fix task keeps the plain body, because there the model copies
+    text back into `replace_text` and a prefix would break the anchor. The footer and
+    the window-cut marker stay as they are.
+    """
+    cut = output.rfind(_READ_FOOTER)
+    body, footer = (output, "") if cut < 0 else (output[:cut], output[cut:])
+    numbered: list[str] = []
+    number = start_line
+    for line in body.split("\n"):
+        if line.startswith("… [window cut at line "):
+            numbered.append(line)
+            continue
+        numbered.append(f"{number}: {line}")
+        number += 1
+    if body.endswith("\n") and numbered and numbered[-1] == f"{number - 1}: ":
+        numbered.pop()
+        return "\n".join(numbered) + "\n" + footer
+    return "\n".join(numbered) + footer
+
+
 def _execute(
     tool: str,
     args: dict[str, object],
@@ -2445,10 +3031,62 @@ def _execute(
 
     if tool == prompt.RUN_SHELL:
         command = str(args["command"])
-        if playbook.name == "code-fix":
+        if _foreground_server(command):
+            return tools.ToolResult(
+                name=tool,
+                ok=False,
+                detail=(
+                    "refused: a server in the foreground never exits, so this tool would "
+                    "wait out its timeout and then kill it. Start it in the background: "
+                    f"`nohup {command} >/tmp/server.log 2>&1 &`, then check the port."
+                ),
+            )
+        if _background_holds_pipe(command):
+            return tools.ToolResult(
+                name=tool,
+                ok=False,
+                detail=(
+                    "refused: a background job (`&`) without redirected output keeps this "
+                    "tool waiting until its timeout, and the timeout then kills the job. "
+                    "Start it as `nohup CMD >/tmp/CMD.log 2>&1 &`, then check it separately."
+                ),
+            )
+        guarded: dict[Path, _Guarded] | None = None
+        if playbook.name == "code-fix" and command.strip() not in state.relaunch_commands:
             refusal = _code_fix_shell_refusal(command, state)
             if refusal:
                 return tools.ToolResult(name=tool, ok=False, detail=refusal)
+            probe_parts = _code_fix_shell_parts(command, state) or [command]
+            probes = [part for part in probe_parts if _python_probe(part, state)]
+            others = [
+                part for part in probe_parts
+                if part not in probes and not _is_pipe_filter_part(part)
+            ]
+            if probes and others:
+                # A probe next to pytest or git in one line: the snapshot would cover
+                # the whole line and charge the neighbours' side effects (a fixture
+                # database, `.git/index`) to the probe -- output lost, privilege gone.
+                return tools.ToolResult(
+                    name=tool,
+                    ok=False,
+                    detail=(
+                        "code-fix refused: run the Python check as its own command "
+                        "(a pipe into a filter such as `| head` is fine); combined with "
+                        "other commands its effect on the evaluator cannot be told apart "
+                        "from theirs."
+                    ),
+                )
+            if probes:
+                guarded = _protected_snapshot(state)
+                if guarded is None:
+                    return tools.ToolResult(
+                        name=tool,
+                        ok=False,
+                        detail=(
+                            "code-fix refused: too many evaluator files to guard a Python "
+                            "probe here; use pytest or a read-only shell command instead."
+                        ),
+                    )
         # A second of slack before the command so a file `cp` writes in the same coarse
         # filesystem tick still counts as touched (mtime >= since), never missed into a
         # false refusal.
@@ -2459,6 +3097,21 @@ def _execute(
             timeout_s=state.budget.tool_timeout_s(),
             secrets=secrets,
         )
+        if guarded is not None:
+            changed = _restore_protected(guarded, state)
+            if changed:
+                state.python_probes_disabled = True
+                shown = ", ".join(redact(item, secrets) for item in changed[:5])
+                return tools.ToolResult(
+                    name=tool,
+                    ok=False,
+                    detail=(
+                        f"code-fix refused: the probe changed evaluator/repository files "
+                        f"({shown}); they were restored, and Python probes are refused for "
+                        "the rest of this run. Keep tests, fixtures, expected answers and "
+                        ".git metadata immutable; edit production source instead."
+                    ),
+                )
         if result.ok:
             state.read_paths.update(_read_paths_from_shell(command, state))
             if _shell_can_change(command):
@@ -2470,12 +3123,17 @@ def _execute(
         return result
     if tool == prompt.READ_RANGE:
         target = Path(str(args["path"]))
-        result = tools.read_range(target, start_line=int(args["start_line"]), secrets=secrets)
+        start_line = int(args["start_line"])
+        result = tools.read_range(target, start_line=start_line, secrets=secrets)
         if result.ok:
             try:
                 state.read_paths.add(target.resolve())
             except OSError:
                 pass
+            if playbook.name == "code-audit":
+                result = dataclasses.replace(
+                    result, output=_number_read_lines(result.output, start_line)
+                )
         return result
     if tool == prompt.LIST_DIR:
         return tools.list_dir(Path(str(args["path"])), secrets=secrets)
@@ -2524,8 +3182,17 @@ def _execute(
     return result
 
 
-def _already_observed(state: AgentState, tool: str, args: str) -> bool:
-    """Whether this exact call already ran in the current state epoch.
+_STEP_PREFIX = re.compile(r"\[step (\d+)\]")
+
+
+def _already_observed(
+    state: AgentState, tool: str, args: str, visible_steps: frozenset[int]
+) -> int | None:
+    """The earlier step whose identical call the model can still read, or None.
+
+    Only a result still inside the request the model just answered counts
+    (`visible_steps`): after a re-lay the earlier read is gone from its view, and
+    skipping the repeat then left it with neither the content nor a word about why.
 
     Inside one epoch nothing the run did changed a file or a service, so a repeat of a
     read returns what the history already carries. That covers the primary action of
@@ -2538,12 +3205,15 @@ def _already_observed(state: AgentState, tool: str, args: str) -> bool:
     nobody asked to pay for and re-reading a file for the same bytes is the failure
     this batch exists to stop, not one it may reproduce inside a step.
     """
-    return any(
-        record.state_epoch == state.state_epoch
-        and record.tool == tool
-        and record.args_digest == args
-        for record in state.actions
-    )
+    for record in reversed(state.actions):
+        if (
+            record.state_epoch == state.state_epoch
+            and record.tool == tool
+            and record.args_digest == args
+            and record.step in visible_steps
+        ):
+            return record.step
+    return None
 
 
 def _batch_reads(
@@ -2553,6 +3223,7 @@ def _batch_reads(
     *,
     step: int,
     playbook: Playbook,
+    visible_from: int = 0,
 ) -> int:
     """Run the read-only tail of one reply inside the step its first action used.
 
@@ -2589,6 +3260,11 @@ def _batch_reads(
     grounded = 0
     seen: set[tuple[str, str]] = set()
     parts: list[str] = []
+    visible_steps = frozenset(
+        int(found.group(1))
+        for text in observations[visible_from:]
+        if (found := _STEP_PREFIX.match(text))
+    )
 
     for index, raw in enumerate(extras[: limits.BATCH_READONLY_MAX], start=2):
         if state.budget.spendable_s() <= 0:
@@ -2619,8 +3295,18 @@ def _batch_reads(
             continue
 
         digest = detectors.args_digest(args)
-        if (tool, digest) in seen or _already_observed(state, tool, digest):
+        if (tool, digest) in seen:
+            state.record("budget", "batch-repeat", f"{tool} already ran in this batch")
+            continue
+        earlier = _already_observed(state, tool, digest, visible_steps)
+        if earlier is not None:
             state.record("budget", "batch-repeat", f"{tool} already ran in this epoch")
+            if earlier != step:
+                # This step's own primary sits right above the batch; an older one is
+                # worth naming, or the model reads the silence as "not run".
+                parts.append(
+                    f"[step {step}.{index}] {tool}: same call as [step {earlier}] above, not repeated"
+                )
             continue
         seen.add((tool, digest))
 
@@ -2880,6 +3566,18 @@ def _stale_service(
         listens = f", слушает {ports}" if ports else ""
         others = f" Ещё процессов в том же состоянии: {len(stale) - 1}." if len(stale) > 1 else ""
         cwd_note = f" (`{process.cwd}`)" if process.cwd else ""
+        relaunch = ""
+        if process.command:
+            where = f"cd {shlex.quote(str(process.cwd))} && " if process.cwd else ""
+            # Braces background the service alone: `a && b &` backgrounds a subshell that
+            # bash keeps holding our output pipe with, and the tool then waits out its
+            # whole timeout and kills the service it just started. dash does not, bash does.
+            ready = f"{where}{{ nohup {process.command} >/tmp/service-restart.log 2>&1 </dev/null & }}"
+            state.relaunch_commands.add(ready)
+            relaunch = (
+                f" Готовая команда: `{ready}` — после неё проверь, что порт снова "
+                "отвечает, прежде чем гонять тесты."
+            )
         hint = (
             f"[verify] сервис `{process.label}` (pid {process.pid}{listens}) запущен в "
             f"{_wall_clock(process.started_at)}, раньше твоей правки {relative} в "
@@ -2888,6 +3586,7 @@ def _stale_service(
             "убивай, никаких pkill/killall), затем запусти ту же команду заново в фоне "
             f"из его каталога{cwd_note} так, как это делает entrypoint проекта, дождись, "
             "пока порт снова отвечает, повтори проверку и только потом finish."
+            f"{relaunch}"
         )
         detail = (
             f"pid {process.pid} `{process.label}` started {_wall_clock(process.started_at)} "

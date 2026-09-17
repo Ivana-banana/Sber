@@ -4,7 +4,8 @@
 
 Two properties matter more than convenience here.
 
-**Allowlist, not denylist.** Only `run.sh` and `agent/` are packed. A denylist has to
+**Allowlist, not denylist.** Only `run.sh`, `THIRD_PARTY_NOTICES.md` and Python
+sources under `agent/` are packed; source symlinks are refused. A denylist has to
 anticipate every way a virtualenv, a cache, a log or a `.env` can appear in the tree,
 and it is wrong exactly once before it leaks a secret or blows the size limit.
 
@@ -24,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import stat
 import sys
 import zipfile
@@ -38,8 +40,8 @@ from agent import limits  # noqa: E402
 INCLUDE_FILES = ("run.sh", "THIRD_PARTY_NOTICES.md")
 INCLUDE_TREES = ("agent",)
 
-SKIP_DIRS = frozenset({"__pycache__", ".git", ".venv", ".pytest_cache", ".ruff_cache"})
-SKIP_SUFFIXES = (".pyc", ".pyo", ".log")
+SKIP_DIRS = frozenset({"__pycache__", "venv"})
+INCLUDE_SUFFIXES = frozenset({".py"})
 
 EXECUTABLE = frozenset({"run.sh"})
 
@@ -63,22 +65,35 @@ def collect(root: Path) -> list[tuple[Path, str]]:
 
     for name in INCLUDE_FILES:
         path = root / name
+        if path.is_symlink():
+            raise ValueError(f"source symlink is not allowed: {name}")
         if not path.is_file():
             raise FileNotFoundError(f"required file is missing: {name}")
         found.append((path, name))
 
     for tree in INCLUDE_TREES:
         base = root / tree
+        if base.is_symlink():
+            raise ValueError(f"source symlink is not allowed: {tree}")
         if not base.is_dir():
             raise FileNotFoundError(f"required directory is missing: {tree}")
-        for path in base.rglob("*"):
-            if not path.is_file():
-                continue
-            if SKIP_DIRS & set(path.relative_to(root).parts):
-                continue
-            if path.suffix in SKIP_SUFFIXES:
-                continue
-            found.append((path, path.relative_to(root).as_posix()))
+        for directory, subdirectories, filenames in os.walk(base):
+            subdirectories[:] = [
+                name for name in subdirectories
+                if not name.startswith(".") and name not in SKIP_DIRS
+            ]
+            for name in subdirectories:
+                path = Path(directory) / name
+                if path.is_symlink():
+                    raise ValueError(f"source symlink is not allowed: {path.relative_to(root)}")
+            for name in filenames:
+                path = Path(directory) / name
+                if name.startswith(".") or path.suffix not in INCLUDE_SUFFIXES:
+                    continue
+                if path.is_symlink():
+                    raise ValueError(f"source symlink is not allowed: {path.relative_to(root)}")
+                if path.is_file():
+                    found.append((path, path.relative_to(root).as_posix()))
 
     return sorted(found, key=lambda pair: pair[1])
 

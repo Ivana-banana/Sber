@@ -460,3 +460,13 @@ def test_the_checkpoint_of_the_other_playbooks_is_left_alone(tmp_path: Path) -> 
 
     assert "write_file" in checkpoints(outcome)[-1]
     assert "replace_text" not in checkpoints(outcome)[-1]
+
+
+def test_a_written_json_deliverable_is_progress_too(tmp_path: Path) -> None:
+    # Audit tasks deliver findings through `write_json`; leaving it out of the edit tools
+    # meant an audit run never qualified for the extension however close it was.
+    state = make_state(tmp_path)
+    state.budget.start_step()
+    state.observe("write_json", {"path": str(tmp_path / "findings.json")}, "wrote", ok=True)
+
+    assert state.shows_progress() is True

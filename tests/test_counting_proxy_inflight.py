@@ -561,3 +561,59 @@ def test_help_mentions_the_idle_wait(monkeypatch, capsys) -> None:
         run_suite.main()
 
     assert "idle" in capsys.readouterr().out
+
+
+def test_warm_up_is_disabled_without_a_counter_container_or_by_flag(tmp_path) -> None:
+    for container, flag in (("", True), ("proxy", False)):
+        runner = Runner(
+            argparse.Namespace(out=str(tmp_path), counter_container=container, warm_up=flag,
+                               model="m", idle_wait_max=0.0),
+            tmp_path,
+        )
+        assert runner.warm_model() == (0.0, "disabled")
+
+
+def test_warm_up_sends_one_token_through_the_proxy_and_resets_the_counters(
+    tmp_path, monkeypatch
+) -> None:
+    runner = Runner(
+        argparse.Namespace(out=str(tmp_path), counter_container="proxy", warm_up=True,
+                           model="the-model", idle_wait_max=0.0),
+        tmp_path,
+    )
+    calls: list[list[str]] = []
+    resets: list[tuple[str, str]] = []
+
+    class Done:
+        returncode = 0
+        stderr = ""
+
+    monkeypatch.setattr(run_suite, "run", lambda argv, timeout=0: calls.append(argv) or Done())
+    runner.counter_call = lambda path, method: resets.append((path, method)) or {}  # type: ignore[assignment]
+
+    seconds, outcome = runner.warm_model()
+
+    assert outcome == "ok" and seconds >= 0.0
+    script = calls[0][-1]
+    assert calls[0][:4] == ["docker", "exec", "proxy", "python3"]
+    assert "the-model" in script and "/v1/chat/completions" in script and "max_tokens" in script
+    assert resets == [("/__reset", "POST")], "the warm-up is not billed to the first episode"
+
+
+def test_warm_up_failure_is_reported_not_raised(tmp_path, monkeypatch) -> None:
+    runner = Runner(
+        argparse.Namespace(out=str(tmp_path), counter_container="proxy", warm_up=True,
+                           model="m", idle_wait_max=0.0),
+        tmp_path,
+    )
+
+    class Failed:
+        returncode = 1
+        stderr = "urllib.error.URLError: connection refused"
+
+    monkeypatch.setattr(run_suite, "run", lambda argv, timeout=0: Failed())
+    runner.counter_call = lambda path, method: {}  # type: ignore[assignment]
+
+    seconds, outcome = runner.warm_model()
+
+    assert outcome.startswith("failed: ") and "connection refused" in outcome

@@ -10,6 +10,7 @@ verifier reads the environment regardless of what we check here).
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -114,6 +115,50 @@ def test_a_verify_command_that_exits_zero_passes(tmp_path: Path) -> None:
 
     assert result.ok is True
     assert result.stage == "command"
+
+
+BASH = pytest.mark.skipif(not shutil.which("bash"), reason="the target image has bash; the rule needs it")
+
+
+@BASH
+@pytest.mark.parametrize(
+    "command",
+    [
+        "false | tail -5",
+        "cd . && sh -c 'exit 3' 2>&1 | tail -5",
+        "python3 -c 'raise SystemExit(1)' | head -1",
+    ],
+)
+def test_a_failing_stage_before_a_pipe_fails_the_check(tmp_path: Path, command: str) -> None:
+    # `pytest -q 2>&1 | tail -5` exited with tail's 0 while pytest failed: an oracle
+    # replay of fix-sqli-login stopped `verified` before the tests had been run for real.
+    target = tmp_path / "deliverable.txt"
+    target.write_text("OK", encoding="utf-8")
+
+    result = verify(make_state(tmp_path), deliverable=target, command=command)
+
+    assert result.ok is False
+    assert result.stage == "command"
+
+
+@BASH
+@pytest.mark.parametrize(
+    "command",
+    [
+        "true | tail -5",
+        "yes | head -1",
+        "grep -c OK deliverable.txt | tail -1",
+        "echo 'a|b' | grep -q b",
+        "false || true",
+    ],
+)
+def test_a_pipeline_whose_stages_succeed_or_are_cut_short_passes(tmp_path: Path, command: str) -> None:
+    target = tmp_path / "deliverable.txt"
+    target.write_text("OK", encoding="utf-8")
+
+    result = verify(make_state(tmp_path), deliverable=target, command=command)
+
+    assert result.ok is True, result.detail
 
 
 @POSIX_ONLY

@@ -479,3 +479,33 @@ def test_a_batch_does_not_blind_the_repeat_detectors(tmp_path: Path) -> None:
     assert all(record.tool == "read_range" for record in state.actions)
     assert len(state.actions) <= limits.ACTION_HISTORY
     assert tools_run(state).count("read_range") < 8 * 5, "refused copies do not run, nor do their extras"
+
+
+def test_a_repeat_whose_result_left_the_history_runs_again(tmp_path: Path) -> None:
+    # After a re-lay the model no longer sees the earlier read; skipping its request
+    # for the same file silently left it with neither the content nor a word about why.
+    files = [make_file(tmp_path, f"big_{index}.py", size=4000) for index in range(6)]
+    state = make_state(tmp_path)
+    state.budget.max_steps = 6
+    llm = StubLlm(
+        replies=[*(read(path) for path in files[:5]), batched(read(files[5]), read(files[0]))]
+    )
+
+    outcome = run(state, llm, FakeVerify())
+
+    assert "[earlier observations omitted]" in str(llm.calls[-1]), "the fixture forces a re-lay"
+    assert "big_0.py" not in str(llm.calls[-1]), "the first read is out of the model's view"
+    assert batch_notes(state) == ["executed 1 of 1 extra calls"]
+    assert "[step 6.2]" in batch_entry(outcome)
+
+
+def test_a_skipped_repeat_is_named_in_the_batch_entry(tmp_path: Path) -> None:
+    first = make_file(tmp_path, "a.py")
+    second = make_file(tmp_path, "b.py")
+    state = make_state(tmp_path)
+    state.budget.max_steps = 2
+    llm = StubLlm(replies=[read(first), batched(read(second), read(first))])
+
+    outcome = run(state, llm, FakeVerify())
+
+    assert "[step 2.2] read_range: same call as [step 1] above, not repeated" in outcome.observations[-1]

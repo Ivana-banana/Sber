@@ -129,6 +129,34 @@ back; four and not more because a re-lay that keeps most of the history spends i
 prefill again almost immediately.
 """
 
+FOCUS_RELAY_KEEP = 2
+"""How many observations travel in a *focused* request, after a reasoning runaway.
+
+Not a re-lay and not sticky: it applies to exactly one request, the one sent after a
+reply that was truncated at the raised output cap without emitting an action. The
+measured shape is a prompt of ~6.9k tokens that the model answers by reasoning until
+the 8192-token ceiling with empty content, four logical calls in a row (the 16.09
+treatment-5b call traces under `build/`, calls 4-7 of the third forensics run). Sending
+that same prompt again buys the same non-answer, so the one thing the next request can
+change cheaply is its size.
+
+Two and not one, which is the only place this departs from the plan it was written
+from. A runaway appends its own `endpoint error: reply truncated by length` line to the
+history before the focused request is built, so a window of one would relay that note
+and nothing else -- the model would be told its reply was cut, which the focus line
+already says, and nothing about what it was doing. Two carries the note and the thing
+that happened before it. Three would start rebuilding the history the focus is shrinking.
+
+It is a floor and not the whole rule. `prompt.focus_base` widens the window when the
+newest entries are all the loop talking to itself -- a checkpoint hint, a refusal, a
+batch entry, this error line -- so that a focused request always carries the newest tool
+result. Counting alone could not promise that, and a narrowed request with no observed
+fact in it asks the model to invent one.
+
+Read only by `agent.loop`. `agent.macro` asks one question with a hand-built message
+list and no history, so there is nothing there to narrow and nothing there to change.
+"""
+
 BATCH_READONLY_MAX = 4
 BATCH_OBSERVATION_MAX_CHARS = 4000
 """Total text one step's batch of read-only extras may add to the history.
@@ -521,6 +549,11 @@ safe direction: a service that legitimately restarted itself just after the edit
 left alone, at the price of not warning about a process started in the same second as
 the change.
 """
+
+VACUOUS_VERIFY_MAX_REFUSALS = 2
+"""Finishes refused for a verify command that only reads the deliverable. The refusal
+is a nudge towards a real check; a model that offers the reader a third time is let
+through rather than refused until the step cap with its deliverable already on disk."""
 
 SERVICE_SCAN_MAX_REFUSALS = 1
 SERVICE_RESTART_MIN_SPARE_S = 90.0

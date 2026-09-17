@@ -454,6 +454,163 @@ def test_an_unclosed_think_with_length_escalates_like_an_empty_content() -> None
     assert endpoint.bodies[1]["max_tokens"] == 8192
 
 
+# --- the runaway flag: a truncation the loop has to answer differently ---------
+
+
+def _truncated_call(arguments: str) -> bytes:
+    """A tool call cut off by length, with the endpoint's own reasoning field beside it."""
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "reasoning": "half a thought",
+                    "tool_calls": [{"function": {"name": "emit_action", "arguments": arguments}}],
+                },
+                "finish_reason": "length",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2048},
+    }
+    return json.dumps(payload).encode()
+
+
+def test_a_runaway_at_the_raised_cap_is_reported_as_one() -> None:
+    """The measured failure: the whole raised budget spent, nothing visible, no call.
+
+    The loop cannot see a finish reason, so the verdict has to travel as a typed field.
+    Without it the only way to tell this truncation from any other is the reason text,
+    and a reason text is not a contract.
+    """
+    # Each attempt spends exactly the ceiling it was given, which is what a server means
+    # by finish_reason=length: 2048 at the default, 8192 once the client raises it.
+    client, endpoint, _ = make_client(
+        [
+            (200, _reply("", finish="length", completion=2048)),
+            (200, _reply("", finish="length", completion=8192)),
+            (200, _reply("", finish="length", completion=8192)),
+        ]
+    )
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(result, LlmError)
+    assert result.truncated_reasoning is True
+    assert endpoint.bodies[-1]["max_tokens"] == 8192, "the reply that set it was already raised"
+
+
+def test_a_first_truncation_at_the_default_ceiling_is_not_yet_a_runaway() -> None:
+    # The cheap answer to a cutoff is more room, and the client tries it before anyone
+    # needs a verdict. Only a cutoff that survived the raise is a runaway.
+    message = {"content": ""}
+    assert llm._runaway_reasoning(message, "truncated with no visible answer", was_raised=False) is False
+    assert llm._runaway_reasoning(message, "truncated with no visible answer", was_raised=True) is True
+
+
+def test_a_length_cutoff_with_prose_is_not_a_runaway() -> None:
+    """`F4-7b-regression-4080` again, one flag further on.
+
+    A model that overran the ceiling while writing an answer was talking to us. Narrowing
+    its prompt is the wrong response -- it needs room, or it is looping -- so the flag
+    must stay off even though the call still fails as truncated.
+    """
+    truncated = _reply("partial answer, no json", finish="length", completion=2048)
+    client, _, _ = make_client([(200, truncated)] * 3)
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(result, LlmError)
+    assert "truncated by length" in result.reason
+    assert result.truncated_reasoning is False
+
+
+def test_a_truncated_tool_call_is_not_a_runaway_even_beside_a_reasoning_field() -> None:
+    # `content: null` plus a cut-off call is the OpenAI shape of a visible answer: a long
+    # write_file body overrunning the ceiling. The reasoning field says the endpoint
+    # thinks, which is true and irrelevant -- an action was emitted.
+    client, _, _ = make_client([(200, _truncated_call('{"tool": "write_file", "content": "aaa'))] * 3)
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(result, LlmError)
+    assert result.truncated_reasoning is False
+
+
+def test_a_reply_that_is_only_an_unclosed_think_block_is_a_runaway() -> None:
+    # The other shape of "nothing visible": the reasoning arrived in `content` instead of
+    # in a field of its own, and ran out of room before it said anything.
+    cut = "<think>reasoning that never closed and ran out"
+    client, _, _ = make_client(
+        [
+            (200, _reply(cut, finish="length", completion=2048)),
+            (200, _reply(cut, finish="length", completion=8192)),
+            (200, _reply(cut, finish="length", completion=8192)),
+        ]
+    )
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(result, LlmError)
+    assert result.truncated_reasoning is True
+
+
+def test_prose_beside_a_reasoning_field_is_still_not_a_runaway() -> None:
+    """The shape the visible-content check exists for, and the only one that reaches it.
+
+    An endpoint that puts its reasoning in a field of its own (ollama, some vLLM) makes
+    `_thinking_evidence` say "reasoning field" whatever the content is, so the short
+    circuit on evidence does not fire and the decision falls to what came back in
+    `content`. Truncated prose there is a model that was still answering: it wants room,
+    or it is looping, and neither is fixed by a smaller prompt.
+    """
+    message = {"content": "here is the beginning of a long ordinary answer", "reasoning": "hm"}
+
+    assert llm._runaway_reasoning(message, "reasoning field", was_raised=True) is False
+    # Same reply with the answer half of it removed: now there is nothing to act on.
+    assert llm._runaway_reasoning({"content": "", "reasoning": "hm"}, "reasoning field", was_raised=True) is True
+    # And a closed think block with an answer behind it is an answer, not a runaway.
+    thought = {"content": "<think>weighing it up</think>{\"tool\": \"list", "reasoning": "hm"}
+    assert llm._runaway_reasoning(thought, "reasoning field", was_raised=True) is False
+
+
+def test_a_ceiling_the_server_capped_back_down_is_still_a_runaway() -> None:
+    """A strict server rejects the raised budget, the cap halves, and the cut still counts.
+
+    `was_raised` is the sticky pair of flags and not a comparison against the ceiling
+    actually sent, so this reply is flagged although its request asked for the default
+    number again. That is the behaviour we want and the reason is in the 400 itself: the
+    server has just said the prompt leaves no room for the answer, which is exactly the
+    complaint a narrower next request answers.
+    """
+    client, endpoint, _ = make_client(
+        [
+            (200, _reply("", finish="length", completion=2048)),
+            (400, b"max_tokens is too large for the model's context length"),
+            (200, _reply("", finish="length", completion=4096)),
+            (200, _reply("", finish="length", completion=4096)),
+        ]
+    )
+
+    result = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(result, LlmError)
+    assert result.truncated_reasoning is True
+    assert endpoint.bodies[2]["max_tokens"] == 4096, "the ceiling came down and the verdict stayed"
+
+
+def test_failures_that_are_not_truncations_carry_no_runaway_flag() -> None:
+    # Default off, and it stays off on the failures that have nothing to do with length:
+    # narrowing the prompt is no answer to a refused connection or a rejected key.
+    client, _, _ = make_client([(401, b"invalid api key")])
+    rejected = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    broken, _, _ = make_client([(200, chat_reply("not json at all"))])
+    unparsed = broken.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(rejected, LlmError) and rejected.truncated_reasoning is False
+    assert isinstance(unparsed, LlmError) and unparsed.truncated_reasoning is False
+
+
 def test_a_generic_400_still_downgrades_the_protocol_rather_than_capping() -> None:
     # A 400 that is not about context (an unsupported response_format) must step the
     # ladder down, not be mistaken for a context overflow.
