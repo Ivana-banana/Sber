@@ -370,6 +370,19 @@ class AgentState:
     repair be checked, and a run that has already used it to touch the evaluator has
     shown the convenience is not free."""
 
+    service_restarts: list[tuple[int, tuple[str, ...], str]] = field(
+        default_factory=list, repr=False
+    )
+    """`(pid, argv, cwd)` of every stale service this run has offered a restart for.
+
+    The finish gate reads the process table, finds a service older than the edit and
+    hands the model a ready `nohup <argv> >/tmp/... 2>&1 &` line. The code-fix shell
+    policy accepts that background start only for an argv recorded here, so the
+    privilege reaches the one command the agent itself dictated and nothing else. Kept
+    after the process is gone on purpose: the model stops the service with its own
+    `kill` first, and the argv it must start again is the argv the scan read.
+    """
+
     audit: list[Event] = field(default_factory=list)
     """Append-only trace. Nothing removes entries; truncation happens at render time."""
 
