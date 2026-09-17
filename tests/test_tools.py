@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import stat
 import sys
 import time
@@ -212,6 +213,36 @@ def test_a_backgrounded_child_does_not_hold_the_call_past_its_timeout(tmp_path: 
     assert result.ok is False, "a reaped background job is not a success"
     time.sleep(9.0)
     assert not marker.exists(), "the backgrounded child was reaped, not left running"
+
+
+@POSIX_ONLY
+def test_a_relaunched_service_with_its_own_redirect_outlives_the_step(tmp_path: Path) -> None:
+    """The restart the stale-service hint dictates has to survive the command that ran it.
+
+    `nohup <argv> >/tmp/service-restart.log 2>&1 &` hands the job its own stdout, so
+    nothing of ours is left holding a pipe: the shell exits at once, the call returns far
+    inside its timeout, and the session reaper that frees a blocked pipe (the case above)
+    never runs -- which is why the service is still up on the next step.
+    """
+    marker = tmp_path / "service.marker"
+    log = tmp_path / "service-restart.log"
+    child = f"import time; time.sleep(1.5); open({str(marker)!r}, 'w').write('up')"
+    started = time.monotonic()
+
+    result = run_shell(
+        f"nohup {shlex.quote(sys.executable)} -c {shlex.quote(child)} >{log} 2>&1 &",
+        cwd=tmp_path,
+        timeout_s=8.0,
+    )
+
+    elapsed = time.monotonic() - started
+    assert result.ok is True, result.detail
+    assert elapsed < 3.0, "a backgrounded service must not hold the step"
+    assert not marker.exists(), "the child finished inside the step; this proves nothing"
+    deadline = time.monotonic() + 10.0
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert marker.exists(), "the relaunched service did not outlive the step that started it"
 
 
 # --- looking at files -------------------------------------------------------
