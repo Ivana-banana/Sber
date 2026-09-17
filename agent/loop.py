@@ -418,7 +418,26 @@ def run(
 
         blocks_in_a_row = 0
         act_started = state.start_phase("act")
-        result = _execute(tool, args, state, playbook=playbook)
+        try:
+            result = _execute(tool, args, state, playbook=playbook)
+        except MemoryError:
+            # Not an answer to the model: the process is out of memory and the next
+            # action would fail on the same allocation. `agent.main` turns it into the
+            # parseable `stop=crash` line and leaves whatever is already on disk.
+            # `KeyboardInterrupt` and `SystemExit` pass for the same reason -- they are
+            # `BaseException` and never reach the clause below.
+            raise
+        except Exception as error:  # noqa: BLE001 - a crash here costs the whole task
+            # `_execute` is documented never to raise, and the batch path guards it
+            # anyway; the primary path trusted the documentation. But the path comes
+            # from the model, and `Path.resolve` raises `ValueError` on a NUL byte and
+            # `UnicodeEncodeError` on a lone surrogate -- neither is the `OSError` that
+            # `agent.tools` and `_evaluator_path_refusal` catch. The episode died with
+            # the file already written and `finish` never sent. The type name only: the
+            # message may quote a path or file content.
+            result = tools.ToolResult(
+                name=tool, ok=False, detail=f"action failed: {type(error).__name__}"
+            )
         state.finish_phase("act", act_started)
         if os.environ.get(limits.TRACE_TOOLS_ENV_NAME):
             # Diagnostic only, off unless explicitly enabled: the loop otherwise prints
@@ -588,7 +607,10 @@ def _parse(text: str) -> tuple[dict[str, Any], str]:
     """
     try:
         parsed = json.loads(text)
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError, RecursionError):
+        # `RecursionError` because the scanner recurses once per bracket: a degenerate
+        # reply of tens of thousands of nested arrays exhausts the stack instead of
+        # failing to decode, and this function promises above that it never raises.
         return {}, "reply was not json: send one JSON object with a `tool` field and nothing else"
     if not isinstance(parsed, dict):
         return {}, "reply was not a json object: send one object with a `tool` field"
@@ -618,9 +640,22 @@ def _deliverable(act: dict[str, Any], state: AgentState) -> tuple[Path | None, s
     candidate = Path(raw)
     if not candidate.is_absolute():
         candidate = state.workspace / candidate
-    if not candidate.exists():
+    try:
+        exists = candidate.exists()
+        directory = exists and candidate.is_dir()
+    except (OSError, ValueError):
+        # The same class of defect as the guard around `_execute`, one branch earlier:
+        # `finish` returns before that call, so nothing else covers it. On the target
+        # 3.12 `Path.exists` re-raises everything but ENOENT/ENOTDIR/EBADF/ELOOP, so a
+        # name that is too long or a parent directory that is not searchable ends the
+        # episode here -- the audit's fuzzer hit it on all four playbooks. 3.13 swallows
+        # every OSError instead, which is why the failure is invisible on a newer
+        # interpreter than the one this ships on. A path the filesystem will not answer
+        # about is not a deliverable, and the refusal below is one the model can act on.
+        exists = directory = False
+    if not exists:
         return None, f"finish refused: {candidate} does not exist. Сначала создай файл."
-    if candidate.is_dir():
+    if directory:
         return None, (
             f"finish refused: {candidate} is a directory, not a file. "
             f"Назови файл с результатом."
