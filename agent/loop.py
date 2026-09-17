@@ -37,6 +37,10 @@ import stat
 import time
 
 from agent import detectors, limits, prompt, result_contract, result_progress, sources, tools
+# Aliased, and used for exactly one question: whether a refusal the client could not
+# work around was about the size of the request. The loop reaches a model only through
+# the injected `LlmPort`, and `llm` is that parameter's name in half the functions here.
+from agent import llm as _llm
 from agent.playbooks import Playbook
 from agent.ports import LlmError, LlmPort, LlmReply
 from agent.preflight import EnvironmentBrief
@@ -110,10 +114,13 @@ def run(
     # call that merely timed out is counted separately -- see `_llm_failure_kind`.
     llm_failures = 0
     # Whether the NEXT request is a focused one: a narrowed history plus one line asking
-    # for an action and no reasoning (`prompt.FOCUS_NOTICE`). Set only by a reply that
-    # reasoned past the raised output ceiling without emitting anything, and only when
-    # the call that did it was not itself focused.
+    # for an action and no reasoning (`prompt.FOCUS_NOTICE`). Set by a reply that reasoned
+    # past the raised output ceiling without emitting anything, or by a refusal the client
+    # could not shrink its way out of, and only when the call that did it was not itself
+    # focused. `focus_cause` is the half-sentence the audit note is built from: two causes
+    # need two sentences, or a trace names the wrong one.
     focus_next = False
+    focus_cause = ""
     # Index in `observations` of the newest entry that is a tool result rather than
     # something this loop said to itself. Only the narrowing of a focused request reads
     # it, and it reads it so that the narrowing cannot drop the last observed fact: the
@@ -206,7 +213,7 @@ def run(
             # Narrowed for this call only -- `history_base` keeps its anchor, so the next
             # ordinary request is the one that would have been sent anyway.
             base = prompt.focus_base(observations, history_base, last_evidence)
-            state.record("budget", "focus", "focused retry after a truncated reasoning reply")
+            state.record("budget", "focus", f"focused retry after {focus_cause}")
         reply = llm.complete_structured(
             prompt.build_messages(system, observations, base, focus=focused),
             schema=prompt.ACTION_SCHEMA,
@@ -240,10 +247,24 @@ def run(
                     stop_reason = "llm-unusable"
                     summary = f"endpoint unusable after {llm_failures} failed calls: {reply.reason}"
                     break
-                if reply.truncated_reasoning and not focused:
+                overflowed = bool(_llm._looks_like_context_overflow(reply.reason))
+                if (reply.truncated_reasoning or overflowed) and not focused:
                     # The model reasoned to the ceiling and emitted nothing. Repeating the
                     # request buys the same non-answer -- measured four times in a row on
                     # the 35B stand -- so the next one is narrowed instead.
+                    #
+                    # The second cause is the mirror image of the first and takes the same
+                    # answer. A strict server (vLLM) refuses `prompt + max_tokens > num_ctx`
+                    # with a 400 naming the context length; `agent.llm` answers it by
+                    # halving its output ceiling, which is right while there is ceiling to
+                    # give and useless once it sits on `LLM_MAX_OUTPUT_TOKENS` -- the
+                    # refusal is about the prompt by then, not the answer. Measured by the
+                    # loop audit (17.09) against a faithful strict endpoint: a read-heavy
+                    # `code-audit` episode ended `llm-unusable` on step 6 with nothing on
+                    # disk at a 8192-token window, and survived to the step cap at 16384.
+                    # The history is the only part of the request left to shrink. An
+                    # endpoint that never returns that 400 never reaches this branch, and
+                    # its requests stay byte-for-byte what they were.
                     #
                     # Counted as the hard failure it is, and only once: the focused call
                     # replaces the second of the three logical calls the counter allows,
@@ -261,6 +282,11 @@ def run(
                     # or the step cap can end the run in between, and a trace must not
                     # claim a retry nobody sent.
                     focus_next = True
+                    focus_cause = (
+                        "a truncated reasoning reply"
+                        if reply.truncated_reasoning
+                        else "a context-overflow refusal"
+                    )
             else:
                 # A call that ran out of wall clock with nothing delivered says the
                 # endpoint is slow, not broken, and the two must not end the run the same
