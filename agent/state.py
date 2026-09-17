@@ -314,8 +314,13 @@ class Budget:
         return self.input_tokens + self.output_tokens
 
 
-EDIT_TOOLS = frozenset({"write_file", "replace_text"})
-"""The two tools whose success is a change to the deliverable; see `shows_progress`."""
+EDIT_TOOLS = frozenset({"write_file", "write_json", "replace_text"})
+"""The tools whose success is a change to the deliverable; see `shows_progress`.
+
+`write_json` belongs here for the same reason the other two do -- it writes a file --
+and it is the tool the prompt offers for the JSON deliverables half the audit tasks
+ask for. Leaving it out meant an episode that wrote its report through it never showed
+progress and never earned the step extension (loop audit, 17.09)."""
 
 
 @dataclass
@@ -434,7 +439,7 @@ class AgentState:
         progress a step extension may feed.
 
         Read from the detector window alone, so nothing new is bookkept for it. Only a
-        successful `write_file` or `replace_text` counts. Not a novel read: thirty
+        successful edit -- `EDIT_TOOLS` -- counts. Not a novel read: thirty
         `read_range` calls over different windows of one file are each novel and are
         exactly the loop this exists to refuse. Not a state-changing shell either: a
         `pytest` re-run advances the epoch and prints a fresh timing every time, and a
