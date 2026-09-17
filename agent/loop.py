@@ -2982,8 +2982,13 @@ the argv or a redirect that is not `>/tmp/... 2>&1` simply fails to match.
 """
 
 
-def _service_relaunch(command: str, state: AgentState) -> bool:
-    """The background restart of a service this run's own finish gate named.
+def _relaunch_offer(
+    command: str, state: AgentState
+) -> tuple[tuple[int, tuple[str, ...], str], str] | None:
+    """The recorded offer this command relaunches and the log it redirects into.
+
+    `None` for anything else -- the background restart of a service this run's own
+    finish gate named is the only shape that gets through.
 
     The gate refuses a `finish` while a process older than the edit is serving the
     changed code, and hands the model the command to fix that: `kill <pid> 2>/dev/null;
@@ -3001,35 +3006,144 @@ def _service_relaunch(command: str, state: AgentState) -> bool:
     purpose: the model kills the service with a separate command first.
     """
     if not state.service_restarts:
-        return False
+        return None
     match = _SERVICE_RELAUNCH.match(command)
     if not match:
-        return False
+        return None
     log = PurePosixPath(posixpath.normpath(match["log"]))
     if not log.is_relative_to("/tmp") or log == PurePosixPath("/tmp"):
-        return False
+        return None
     if _is_evaluator_path(Path(log), state) or _is_repository_control_path(Path(log), state):
-        return False  # a workspace that itself lives under /tmp, as it does under pytest
+        return None  # a workspace that itself lives under /tmp, as it does under pytest
     try:
         argv = shlex.split(match["argv"])
     except ValueError:
-        return False
+        return None
     if not argv or PurePosixPath(argv[0]).name in _OPAQUE_COMMAND_RUNNERS | _SHELL_WRAPPERS:
-        return False
+        return None
     if any(
         _is_evaluator_path(Path(token), state) or _is_repository_control_path(Path(token), state)
         for token in argv
     ):
-        return False
-    for pid, offered, cwd in state.service_restarts:
+        return None
+    for offer in state.service_restarts:
+        pid, offered, cwd = offer
         if argv != list(offered):
             continue
         if match["pid"] is not None and int(match["pid"]) != pid:
             continue
         if match["dir"] is not None and not _relaunch_directory(match["dir"], cwd, state):
             continue
-        return True
-    return False
+        return offer, str(log)
+    return None
+
+
+def _service_relaunch(command: str, state: AgentState) -> bool:
+    """Whether this command is the recorded relaunch (see `_relaunch_offer`)."""
+    return _relaunch_offer(command, state) is not None
+
+
+def _relaunch_log_tail(path: str, secrets: Sequence[str]) -> str:
+    """The end of the file the restart redirected into, bounded and redacted.
+
+    The end, because that is where an interpreter writes the traceback it died on. Read
+    by seeking, so a service that has been logging for an hour costs one read of
+    `limits.SERVICE_RESTART_LOG_BYTES`.
+    """
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - limits.SERVICE_RESTART_LOG_BYTES))
+            data = handle.read(limits.SERVICE_RESTART_LOG_BYTES)
+    except OSError:
+        return ""
+    text = data.decode("utf-8", "replace").strip()
+    return redact(text, secrets)
+
+
+def _relaunch_observation(
+    command: str, state: AgentState, result: tools.ToolResult
+) -> tools.ToolResult:
+    """What the restart actually did, in place of the shell's silent success.
+
+    `nohup <argv> >/tmp/... 2>&1 &` exits 0 and prints nothing whatever happens next: the
+    service's own output went into the log file, so a service that died on an import
+    error or on `Address already in use` looked exactly like one that came up. And the
+    finish gate, which asks only whether a process *older than the edit* is running, then
+    opened -- because the old process was gone. End to end that finished a run `solved`
+    with a dead service in the container, and, when the old process was still holding the
+    port, with the old code answering it (critic, 17.09).
+
+    So the step waits a moment and looks: is the process it was told to stop gone, is a
+    process with that argv running now, and what does the log say. A restart whose
+    service is not there is a failed action and says so; a restart the old process is
+    still blocking says that, because the way out is to stop it and run the same command
+    again -- which is why a failed restart keeps its offer and only a successful one
+    spends it.
+    """
+    found = _relaunch_offer(command, state)
+    if found is None or not result.ok:
+        return result
+    (pid, argv, _), log = found
+
+    settle = max(0.0, min(limits.SERVICE_RESTART_SETTLE_S, state.budget.tool_timeout_s()))
+    if settle:
+        time.sleep(settle)
+
+    table = tools.process_table()
+    old_alive = any(info.pid == pid for info in table.processes)
+    started = [
+        info.pid
+        for info in table.processes
+        if info.pid != pid and tuple(info.argv) == tuple(argv)
+    ]
+    tail = _relaunch_log_tail(log, state.secrets)
+    quoted = f"\nХвост {log}:\n{tail}" if tail else ""
+
+    if old_alive:
+        return dataclasses.replace(
+            result,
+            ok=False,
+            detail=f"restart blocked: pid {pid} is still running",
+            output=(
+                f"перезапуск не удался: старый процесс {pid} ещё жив и держит порт, "
+                f"новый на его месте не поднимется. Останови только его (`kill {pid}`), "
+                f"дождись, пока он исчезнет, и повтори команду перезапуска.{quoted}"
+            ),
+        )
+    if started:
+        state.service_restarts[:] = [
+            offer for offer in state.service_restarts if offer != found[0]
+        ]
+        return dataclasses.replace(
+            result,
+            detail=f"restart ok: pid {started[0]}",
+            output=(
+                f"перезапуск выполнен: старого процесса {pid} больше нет, эту команду "
+                f"сейчас выполняет pid {started[0]}.{quoted}"
+            ),
+        )
+    if not table.complete:
+        return dataclasses.replace(
+            result,
+            detail="restart unverified: the process table could not be read",
+            output=(
+                "перезапуск запущен, но проверить его не удалось: таблицу процессов "
+                f"прочитать не вышло ({table.reason or 'причина неизвестна'}). "
+                f"Проверь сервис сам, прежде чем гонять тесты.{quoted}"
+            ),
+        )
+    return dataclasses.replace(
+        result,
+        ok=False,
+        detail="restart failed: no process is running that command",
+        output=(
+            f"перезапуск не удался: старого процесса {pid} больше нет, но и новый с этой "
+            "командой не работает — сервис сейчас не поднят. Почини причину и повтори "
+            f"команду перезапуска.{quoted}"
+        ),
+    )
 
 
 def _relaunch_directory(spelled: str, cwd: str, state: AgentState) -> bool:
@@ -3203,16 +3317,20 @@ def _execute(
         # filesystem tick still counts as touched (mtime >= since), never missed into a
         # false refusal.
         since = time.time() - 1.0
+        # The one command whose point is to leave a process running. Through the pipes
+        # it would hold the step until the timeout and then be reaped with the session,
+        # which is the opposite of a restart; and its exit code says nothing about the
+        # service, so the observation is rebuilt from the machine afterwards.
+        relaunch = playbook.name == "code-fix" and _service_relaunch(command, state)
         result = tools.run_shell(
             command,
             cwd=state.workspace,
             timeout_s=state.budget.tool_timeout_s(),
             secrets=secrets,
-            # The one command whose point is to leave a process running. Through the
-            # pipes it would hold the step until the timeout and then be reaped with the
-            # session, which is the opposite of a restart.
-            detached=playbook.name == "code-fix" and _service_relaunch(command, state),
+            detached=relaunch,
         )
+        if relaunch:
+            result = _relaunch_observation(command, state, result)
         if guarded is not None:
             changed = _restore_protected(guarded, state)
             if changed:
@@ -3682,8 +3800,8 @@ def _stale_service(
             where = f"cd {process.cwd} && " if process.cwd else ""
             relaunch = (
                 f" Готовая команда: `{where}nohup {process.command} "
-                ">/tmp/service-restart.log 2>&1 &` — после неё проверь, что порт снова "
-                "отвечает, прежде чем гонять тесты."
+                ">/tmp/service-restart.log 2>&1 &` — её наблюдение само скажет, поднялся "
+                "ли новый процесс, прежде чем гонять тесты."
             )
         hint = (
             f"[verify] сервис `{process.label}` (pid {process.pid}{listens}) запущен в "
