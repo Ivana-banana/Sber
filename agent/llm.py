@@ -1081,7 +1081,7 @@ class HttpLlm:
                     verdict == SHAPE
                     and self._thinking_off
                     and not thinking_dropped
-                    and not _looks_like_context_overflow(detail)
+                    and not reason_is_context_overflow(detail)
                 ):
                     # `chat_template_kwargs` is the one key in this body that no
                     # OpenAI-compatible server promises to accept, and a gateway
@@ -1101,6 +1101,15 @@ class HttpLlm:
                     # smaller ceiling above, and it still is not about the switch on the
                     # call where the cap has already reached the floor and that branch
                     # can no longer fire.
+                    #
+                    # The narrow reading, and not the wide one the ceiling branch uses:
+                    # that one is allowed to take a bare `max_tokens` for an overflow
+                    # because three gates have already been passed by the time it runs.
+                    # Here there are none, and a gateway refusing `chat_template_kwargs`
+                    # with `extra="forbid"` quotes the rejected body back -- `max_tokens`
+                    # and all -- so the wide reading would hand every such refusal to the
+                    # branch above, spend the ceiling on it, and leave the sticky key on
+                    # every later call of the run.
                     thinking_dropped = True
                     self._thinking_off = False
                     lowered = detail.lower()

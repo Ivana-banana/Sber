@@ -393,6 +393,55 @@ def test_a_shape_error_that_was_not_the_switch_does_not_cost_the_switch() -> Non
     )
 
 
+def test_a_validation_error_quoting_the_request_is_not_read_as_an_overflow() -> None:
+    """A gateway validating with `extra="forbid"` answers 422 and quotes the body back.
+
+    FastAPI's `extra_forbidden` detail carries the rejected input, so a refusal that is
+    entirely about `chat_template_kwargs` still contains the string `max_tokens` while
+    saying nothing about the prompt. The wide reading of an overflow exists for the
+    branch above this one, where a SHAPE status, a ceiling this client raised and room
+    left to halve it make a bare `max_tokens` unambiguous. Reused here it is not: the
+    ceiling is halved to the floor, the switch is never taken off, and every later call
+    of the run still carries the one key this gateway refuses -- three consecutive
+    failures and `llm-unusable`, with the cap stuck at the floor on the way.
+    """
+
+    def rule(n, body):
+        if n <= 1:
+            return _truncated(body)
+        if "chat_template_kwargs" in body:
+            refusal = {
+                "detail": [
+                    {
+                        "type": "extra_forbidden",
+                        "loc": ["body", "chat_template_kwargs"],
+                        "msg": "Extra inputs are not permitted",
+                        "input": {"max_tokens": body["max_tokens"], "temperature": 0},
+                    }
+                ]
+            }
+            return 422, json.dumps(refusal).encode()
+        return 200, tool_reply(ACTION)
+
+    client, endpoint, _ = _client(rule)
+
+    first = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(first, LlmReply)
+    assert client._thinking_unsupported is True, "the body named the key; that settles it"
+    assert client.style == llm.NATIVE_TOOLS, "a refused key is not a refused rung"
+    assert any(
+        body.get("max_tokens") == limits.LLM_THINKING_MAX_OUTPUT_TOKENS
+        and "chat_template_kwargs" in body
+        for body in endpoint.bodies
+    ), "the echo under test is the raised ceiling coming back in the refusal"
+
+    second = client.complete_structured([], schema=ACTION_LIKE, max_output_tokens=2048)
+
+    assert isinstance(second, LlmReply)
+    assert "chat_template_kwargs" not in endpoint.bodies[-1], "and never sent again"
+
+
 def test_a_context_length_400_is_never_read_as_a_verdict_on_the_switch() -> None:
     # The raised budget overran the context and the cap has already come down to the
     # floor, so the branch that lowers it cannot fire again and the 400 falls through
