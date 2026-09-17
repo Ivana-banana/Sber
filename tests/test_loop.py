@@ -7730,6 +7730,34 @@ def test_a_probe_mixed_with_other_commands_is_refused_with_the_way_out(tmp_path:
     assert state.python_probes_disabled is False
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -c \"open('te' + 'sts/zz.py', 'w').write('')\" | head -5",
+        "python3 -c \"open('te' + 'sts/zz.py', 'w').write('')\" 2>&1 | tail -20",
+        "cd {ws} && python3 -c \"open('te' + 'sts/zz.py', 'w').write('')\" | head",
+    ],
+)
+def test_a_probe_piped_into_a_filter_is_still_guarded(tmp_path: Path, command: str) -> None:
+    # The refusal text promises `| head` is fine; the guard has to follow.
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "conftest.py").write_text("x = 1\n", encoding="utf-8")
+    state = make_state(tmp_path)
+
+    result = _probe(command.format(ws=tmp_path), state)
+
+    assert result.ok is False and "zz.py" in result.detail and "as its own command" not in result.detail
+    assert not (tmp_path / "tests" / "zz.py").exists()
+    assert state.python_probes_disabled is True
+
+
+def test_a_harmless_probe_piped_into_a_filter_runs(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text("print('ok')\n", encoding="utf-8")
+    state = make_state(tmp_path)
+    result = _probe("python3 -c 'import m' 2>&1 | tail -20", state)
+    assert result.ok is True and "ok" in result.output
+
+
 @pytest.mark.parametrize("command", ["cd ~ && python3 -c 'print(1)'", "cd - && python3 -c 'print(1)'", "cd $HOME && python3 -c 'print(1)'", "cd {ws}/missing && python3 -c 'print(1)'"])
 def test_a_cd_that_is_not_a_workspace_directory_is_not_stripped(tmp_path: Path, command: str) -> None:
     assert loop._code_fix_shell_refusal(command.format(ws=tmp_path), make_state(tmp_path)) != ""
